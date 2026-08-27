@@ -1,6 +1,6 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
-import { NotFoundError, ValidationError } from "../errors.js";
+import { ConflictError, NotFoundError, ValidationError } from "../errors.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import type { TaskType } from "../domain/enums.js";
 
@@ -119,6 +119,35 @@ async function getTaskOr404(db: Queryable, id: string): Promise<TaskRow> {
   return row;
 }
 
+export interface UpdateTaskInput {
+  ownerId?: string;
+  type?: TaskType;
+  title?: string;
+  dueAt?: string;
+}
+
+export async function updateTask(db: Queryable, actor: Actor, id: string, patch: UpdateTaskInput) {
+  const current = await getTaskOr404(db, id);
+  if (current.status !== "open") throw new ConflictError("Only an open task can be edited.");
+  if (patch.title !== undefined && !patch.title.trim()) throw new ValidationError("Task title is required.");
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let i = 1;
+  const push = (column: string, value: unknown) => { sets.push(`${column} = $${i++}`); params.push(value); };
+  if (patch.ownerId !== undefined) push("owner_id", patch.ownerId);
+  if (patch.type !== undefined) push("task_type", patch.type);
+  if (patch.title !== undefined) push("title", patch.title.trim());
+  if (patch.dueAt !== undefined) push("due_at", patch.dueAt);
+  if (sets.length === 0) return taskToDto(current);
+
+  params.push(id);
+  const result = await db.query<TaskRow>(`update public.tasks set ${sets.join(", ")} where id = $${i} returning *`, params);
+  const task = result.rows[0]!;
+  await addTimelineEvent(db, { leadId: task.lead_id, kind: "task", title: "Task Updated", detail: task.title, ...actorEvent(actor), relatedTaskId: task.id });
+  return taskToDto(task);
+}
+
 export async function completeTask(db: Queryable, actor: Actor, id: string): Promise<TaskRow> {
   const existing = await getTaskOr404(db, id);
   if (existing.status !== "open") return existing;
@@ -178,7 +207,7 @@ export async function cancelOpenTasksForLead(
   reason: string,
   taskTypeFilter?: TaskType[],
 ): Promise<number> {
-  const filterClause = taskTypeFilter?.length ? `and task_type = any($4::text[])` : "";
+  const filterClause = taskTypeFilter?.length ? `and task_type = any($3::public.task_type[])` : "";
   const params: unknown[] = [leadId, reason];
   if (taskTypeFilter?.length) params.push(taskTypeFilter);
   const result = await db.query<TaskRow>(
@@ -239,7 +268,9 @@ export async function listTasks(db: Queryable, filters: ListTasksFilters) {
     clauses.push(`status = 'open' and due_at < now()`);
   }
   if (filters.dueTodayOnly) {
-    clauses.push(`status = 'open' and due_at >= date_trunc('day', now()) and due_at < date_trunc('day', now()) + interval '1 day'`);
+    clauses.push(`status = 'open'
+      and due_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
+      and due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`);
   }
 
   const where = clauses.length ? `where ${clauses.join(" and ")}` : "";

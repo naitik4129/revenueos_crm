@@ -12,7 +12,7 @@ import { reportError } from "@/lib/telemetry";
 import { AppShell } from "@/app/app-shell";
 import { StoreProvider } from "@/store";
 import { Toaster } from "@/components/ui/sonner";
-import { isSupabaseConfigured } from "@/lib/supabase-client";
+import { configurationError } from "@/lib/supabase-client";
 import { useSupabaseSession } from "@/lib/use-supabase-session";
 import { LoginPage } from "@/features/auth/login-page";
 
@@ -106,7 +106,7 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <HeadContent />
-      <AuthGate>
+      <AuthGate queryClient={queryClient}>
         <StoreProvider>
           <AppShell>
             {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
@@ -119,17 +119,28 @@ function RootComponent() {
   );
 }
 
-/**
- * Gates the whole app behind Supabase Auth — but only once a Supabase
- * project is actually configured (VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY).
- * Until then this renders `children` unconditionally, so the app keeps
- * working exactly as it did before real auth existed (pure mock data, no
- * login wall) — see lib/supabase-client.ts.
- */
-function AuthGate({ children }: { children: ReactNode }) {
+/** Gates the application behind required Supabase authentication. */
+function AuthGate({ children, queryClient }: { children: ReactNode; queryClient: QueryClient }) {
   const { loading, session } = useSupabaseSession();
 
-  if (!isSupabaseConfigured) return <>{children}</>;
+  useEffect(() => {
+    if (!loading && !session) queryClient.clear();
+  }, [loading, session, queryClient]);
+
+  if (configurationError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-4">
+        <div className="max-w-lg rounded-lg border bg-card p-6 text-center shadow-sm">
+          <h1 className="text-lg font-semibold">Northbeam CRM is not configured</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{configurationError}</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Add the browser-safe values documented in Frontend/.env.example and restart the
+            frontend.
+          </p>
+        </div>
+      </div>
+    );
+  }
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">

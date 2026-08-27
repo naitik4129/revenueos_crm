@@ -1,27 +1,38 @@
-export type TaskType =
-  | "Call"
-  | "Follow-up"
-  | "Send Information"
-  | "Schedule Meeting"
-  | "Proposal Follow-up"
-  | "General Task";
-
-export const TASK_TYPES: TaskType[] = [
-  "Call",
-  "Follow-up",
-  "Send Information",
-  "Schedule Meeting",
-  "Proposal Follow-up",
-  "General Task",
-];
-
+export const TASK_TYPES = [
+  "call",
+  "follow_up",
+  "send_information",
+  "send_case_study",
+  "send_email",
+  "send_whatsapp",
+  "schedule_meeting",
+  "confirm_meeting",
+  "reschedule",
+  "prepare_proposal",
+  "send_proposal",
+  "proposal_follow_up",
+  "nurture",
+  "re_engage",
+  "internal_review",
+  "general_task",
+] as const;
+export type TaskType = (typeof TASK_TYPES)[number];
+export type TaskStatus = "open" | "completed" | "cancelled";
 export interface Task {
   id: string;
   leadId: string;
-  ownerId: string;
+  ownerId?: string;
+  ownerName?: string;
   type: TaskType;
   title: string;
   dueAt: string;
+  status: TaskStatus;
   done: boolean;
-  origin: "Manual" | "Automation";
+  origin: "manual" | "automation";
+  sourceWorkflowRunId?: string;
+  completedAt?: string;
+  cancelledAt?: string;
+  cancelReason?: string;
+  createdAt: string;
+  updatedAt: string;
 }

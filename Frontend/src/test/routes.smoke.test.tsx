@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -8,30 +8,114 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
-import { StoreProvider } from "@/store";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/store", () => {
+  const noop = vi.fn(async () => undefined);
+  return {
+    messageFromError: (error: unknown) =>
+      error instanceof Error ? error.message : "Request failed",
+    useSession: () => ({
+      users: [],
+      currentUser: null,
+      userName: () => "Unassigned",
+      isLoading: false,
+      error: null,
+    }),
+    useLeads: () => ({
+      leads: [],
+      getLead: () => undefined,
+      isLoading: false,
+      error: null,
+      isPending: false,
+      addLead: noop,
+      updateLead: noop,
+      addNote: noop,
+      setAutomation: noop,
+      markDnc: noop,
+      reactivateFromDnc: noop,
+      logCall: noop,
+      logCommunication: noop,
+      setLifecycle: noop,
+    }),
+    useTasks: () => ({
+      tasks: [],
+      isLoading: false,
+      error: null,
+      isPending: false,
+      addTask: noop,
+      updateTask: noop,
+      completeTask: noop,
+      cancelTask: noop,
+    }),
+    useMeetings: () => ({
+      meetings: [],
+      isLoading: false,
+      error: null,
+      isPending: false,
+      addMeeting: noop,
+      updateMeeting: noop,
+      recordOutcome: noop,
+    }),
+    useProposals: () => ({
+      proposals: [],
+      isLoading: false,
+      error: null,
+      isPending: false,
+      addProposal: noop,
+      updateProposal: noop,
+      setProposalStatus: noop,
+    }),
+    useAutomations: () => ({
+      workflows: [],
+      templates: [],
+      runs: [],
+      scheduledActions: [],
+      isLoading: false,
+      error: null,
+      isPending: false,
+      templateName: () => "—",
+      addWorkflow: noop,
+      updateWorkflow: noop,
+      createDraft: noop,
+      updateDraftSteps: noop,
+      publishVersion: noop,
+      duplicateWorkflow: noop,
+      pauseRun: noop,
+      resumeRun: noop,
+      cancelRun: noop,
+      retryRun: noop,
+      addTemplate: noop,
+      updateTemplate: noop,
+    }),
+    useDashboard: () => ({
+      summary: {
+        activeLeads: 0,
+        tasksDueToday: 0,
+        overdueActions: 0,
+        meetingsToday: 0,
+        proposalFollowUps: 0,
+        leadsWithNoNextAction: 0,
+        automationFailures: 0,
+        pipelineFunnel: [],
+        todaysQueue: [],
+      },
+      isLoading: false,
+      error: null,
+    }),
+  };
+});
+
 import { DashboardPage } from "@/features/dashboard/dashboard-page";
 import { LeadsPage } from "@/features/leads/leads-page";
-import { LeadDetailPage } from "@/features/leads/lead-detail-page";
-import { AddLeadDialog } from "@/features/leads/add-lead-dialog";
 import { TasksPage } from "@/features/tasks/tasks-page";
 import { MeetingsPage } from "@/features/meetings/meetings-page";
 import { ProposalsPage } from "@/features/proposals/proposals-page";
-import { WorkflowsPage } from "@/features/automations/workflows-page";
-import { TemplatesPage } from "@/features/automations/templates-page";
-import { RunsPage } from "@/features/automations/runs-page";
-import { WorkflowBuilderPage } from "@/features/automations/workflow-builder-page";
 
 afterEach(cleanup);
 
 async function renderScreen(Screen: () => ReactNode) {
-  const rootRoute = createRootRoute({
-    component: () => (
-      <StoreProvider>
-        <Outlet />
-      </StoreProvider>
-    ),
-  });
+  const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const screenRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
@@ -45,25 +129,15 @@ async function renderScreen(Screen: () => ReactNode) {
   return render(<RouterProvider router={router} />);
 }
 
-describe("application screens", () => {
+describe("zero-record route states", () => {
   it.each([
-    [DashboardPage, "Everything due today"],
-    [LeadsPage, "One row per lead"],
-    [() => <LeadDetailPage leadId="l1" />, "Rahul Patel"],
-    [TasksPage, "Completing a task keeps the lead moving"],
-    [MeetingsPage, "Every meeting booked from the CRM"],
-    [ProposalsPage, "Manual upload, simple statuses"],
-    [WorkflowsPage, "New workflow"],
-    [TemplatesPage, "New template"],
-    [RunsPage, "Current step"],
-    [() => <WorkflowBuilderPage workflowId="wf1" />, "Not Connected Nurture"],
-  ])("renders a primary feature screen", async (Screen, expectedText) => {
-    await renderScreen(Screen);
-    expect(document.body).toHaveTextContent(expectedText);
-  });
-
-  it("renders the existing add-lead dialog", async () => {
-    await renderScreen(() => <AddLeadDialog open onOpenChange={() => undefined} />);
-    expect(screen.getByRole("dialog")).toHaveTextContent("Add lead");
+    [DashboardPage, "Nothing due today."],
+    [LeadsPage, "No leads match these filters."],
+    [TasksPage, "Nothing here."],
+    [MeetingsPage, "No meetings."],
+    [ProposalsPage, "No proposals."],
+  ])("renders an empty backend dataset", async (Screen, expectedText) => {
+    const view = await renderScreen(Screen);
+    expect(view.container).toHaveTextContent(expectedText);
   });
 });

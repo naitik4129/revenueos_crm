@@ -160,7 +160,7 @@ export async function createWorkflow(db: Queryable, actor: Actor, input: CreateW
   return getWorkflow(db, id);
 }
 
-export async function updateWorkflow(db: Queryable, id: string, patch: { name?: string; description?: string; status?: WorkflowStatus; ownerId?: string }) {
+export async function updateWorkflow(db: Queryable, id: string, patch: { name?: string; description?: string; status?: WorkflowStatus; ownerId?: string; trigger?: WorkflowTrigger }) {
   await getWorkflowRowOr404(db, id);
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -180,6 +180,10 @@ export async function updateWorkflow(db: Queryable, id: string, patch: { name?: 
   if (patch.ownerId !== undefined) {
     sets.push(`owner_id = $${i++}`);
     params.push(patch.ownerId);
+  }
+  if (patch.trigger !== undefined) {
+    sets.push(`trigger = $${i++}`);
+    params.push(patch.trigger);
   }
   if (sets.length) {
     params.push(id);

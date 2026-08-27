@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { ArrowDown, ArrowLeft, ArrowUp, Plus, Trash2, Zap } from "lucide-react";
@@ -24,35 +24,36 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
+import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { relDay } from "@/lib/format";
-import { useAutomations, useSession } from "@/store";
+import { label } from "@/lib/labels";
+import { messageFromError, useAutomations, useSession } from "@/store";
 import {
   PIPELINE_STAGES,
   STEP_ACTIONS,
   WORKFLOW_TRIGGERS,
   type StepAction,
+  type Workflow,
   type WorkflowStep,
   type WorkflowTrigger,
 } from "@/types";
 
 export function WorkflowBuilderPage({ workflowId }: { workflowId: string }) {
-  const {
-    workflows,
-    templates,
-    updateWorkflow,
-    updateDraftSteps,
-    createDraft,
-    publishVersion,
-    templateName,
-  } = useAutomations();
-  const { userName } = useSession();
-
-  const wf = workflows.find((w) => w.id === workflowId);
-  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
-  const [publishOpen, setPublishOpen] = useState(false);
-  const [enrollmentMode, setEnrollmentMode] = useState("continue");
-
-  if (!wf) {
+  const store = useAutomations();
+  if (store.isLoading)
+    return (
+      <div className="p-6">
+        <LoadingBlock label="Loading workflow…" />
+      </div>
+    );
+  if (store.error)
+    return (
+      <div className="p-6">
+        <ErrorBlock error={store.error} />
+      </div>
+    );
+  const workflow = store.workflows.find((item) => item.id === workflowId);
+  if (!workflow)
     return (
       <div className="p-10 text-center text-sm text-muted-foreground">
         Workflow not found.{" "}
@@ -61,46 +62,108 @@ export function WorkflowBuilderPage({ workflowId }: { workflowId: string }) {
         </Link>
       </div>
     );
-  }
+  return <Builder workflow={workflow} />;
+}
 
+function Builder({ workflow }: { workflow: Workflow }) {
+  const store = useAutomations();
+  const { userName } = useSession();
+  const [selectedVersion, setSelectedVersion] = useState<number>(
+    workflow.currentVersion || workflow.versions.at(-1)?.version || 1,
+  );
+  const [publishOpen, setPublishOpen] = useState(false);
   const version =
-    wf.versions.find((v) => v.version === (selectedVersion ?? wf.currentVersion)) ??
-    wf.versions[0]!;
-  const editable = version.status === "Draft";
-  const steps = version.steps;
+    workflow.versions.find((item) => item.version === selectedVersion) ?? workflow.versions.at(-1)!;
+  const editable = version.status === "draft";
+  const bufferKey = `${workflow.id}:${version.version}`;
+  const [buffer, setBuffer] = useState<{ key: string; steps: WorkflowStep[]; dirty: boolean }>({
+    key: bufferKey,
+    steps: version.steps,
+    dirty: false,
+  });
+  const steps = buffer.key === bufferKey ? buffer.steps : version.steps;
 
-  const setSteps = (next: WorkflowStep[]) => updateDraftSteps(wf.id, version.version, next);
+  useEffect(() => {
+    if (buffer.key !== bufferKey) setBuffer({ key: bufferKey, steps: version.steps, dirty: false });
+  }, [buffer.key, bufferKey, version.steps]);
+  useEffect(() => {
+    if (!editable || buffer.key !== bufferKey || !buffer.dirty) return;
+    const timer = window.setTimeout(() => {
+      void store
+        .updateDraftSteps(workflow.id, version.version, buffer.steps)
+        .then(() =>
+          setBuffer((current) =>
+            current.key === bufferKey ? { ...current, dirty: false } : current,
+          ),
+        )
+        .catch((error) => toast.error(messageFromError(error)));
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [editable, buffer, bufferKey, store, version.version, workflow.id]);
 
-  const updateStep = (id: string, patch: Partial<WorkflowStep>) =>
-    setSteps(steps.map((s) => (s.id === id ? { ...s, ...patch } : s)));
-
-  const move = (index: number, dir: -1 | 1) => {
-    const target = index + dir;
+  const setSteps = (next: WorkflowStep[], immediate = false) => {
+    const normalized = next.map((step, order) => ({ ...step, order }));
+    setBuffer({ key: bufferKey, steps: normalized, dirty: !immediate });
+    if (immediate) {
+      void store
+        .updateDraftSteps(workflow.id, version.version, normalized)
+        .catch((error) => toast.error(messageFromError(error)));
+    }
+  };
+  const updateStep = (id: string, patch: Partial<WorkflowStep>, immediate = false) =>
+    setSteps(
+      steps.map((step) => (step.id === id ? { ...step, ...patch } : step)),
+      immediate,
+    );
+  const move = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
     if (target < 0 || target >= steps.length) return;
     const next = steps.slice();
-    const a = next[index]!;
-    next[index] = next[target]!;
-    next[target] = a;
-    setSteps(next);
+    [next[index], next[target]] = [next[target]!, next[index]!];
+    setSteps(next, true);
   };
-
   const addStep = () =>
-    setSteps([
-      ...steps,
-      {
-        id: `s${Date.now()}`,
-        delayDays: 2,
-        action: "Send Email",
-        templateId: templates[0]?.id,
-        enabled: true,
-      },
-    ]);
+    setSteps(
+      [
+        ...steps,
+        {
+          id: crypto.randomUUID(),
+          order: steps.length,
+          delayDays: 2,
+          action: "send_email",
+          templateId: store.templates.find(
+            (template) => template.type === "email" && template.active,
+          )?.id,
+          enabled: true,
+        },
+      ],
+      true,
+    );
+  const mutate = async (work: () => Promise<unknown>, success: string) => {
+    try {
+      await work();
+      toast.success(success);
+    } catch (error) {
+      toast.error(messageFromError(error));
+    }
+  };
+  const createDraft = () =>
+    void mutate(async () => {
+      const number = await store.createDraft(workflow.id);
+      setSelectedVersion(number);
+    }, "Draft ready to edit");
+  const publish = () =>
+    void mutate(async () => {
+      await store.updateDraftSteps(workflow.id, version.version, steps);
+      await store.publishVersion(workflow.id, version.version);
+      setPublishOpen(false);
+    }, `V${version.version} published`);
 
   return (
     <div className="pb-10">
       <PageHeader
-        title={wf.name}
-        description={wf.description}
+        title={workflow.name}
+        description={workflow.description}
         actions={
           <>
             <Button asChild size="sm" variant="ghost">
@@ -108,27 +171,18 @@ export function WorkflowBuilderPage({ workflowId }: { workflowId: string }) {
                 <ArrowLeft className="mr-1 size-4" /> Automations
               </Link>
             </Button>
-            {!editable ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  const v = createDraft(wf.id);
-                  setSelectedVersion(v);
-                  toast.success(`Draft V${v} ready to edit`);
-                }}
-              >
-                Edit as new draft
-              </Button>
-            ) : (
+            {editable ? (
               <Button size="sm" onClick={() => setPublishOpen(true)}>
                 Publish V{version.version}
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" onClick={createDraft}>
+                Edit as new draft
               </Button>
             )}
           </>
         }
       />
-
       <div className="grid gap-4 p-6 lg:grid-cols-[1fr_300px]">
         <div className="min-w-0 space-y-3">
           <Card>
@@ -140,63 +194,63 @@ export function WorkflowBuilderPage({ workflowId }: { workflowId: string }) {
                 <Zap className="size-4" />
               </div>
               <Select
-                value={wf.trigger}
-                onValueChange={(v) => {
-                  updateWorkflow(wf.id, { trigger: v as WorkflowTrigger });
-                  toast.success("Trigger updated");
-                }}
+                value={workflow.trigger}
+                disabled={store.isPending}
+                onValueChange={(value) =>
+                  void mutate(
+                    () => store.updateWorkflow(workflow.id, { trigger: value as WorkflowTrigger }),
+                    "Trigger updated",
+                  )
+                }
               >
                 <SelectTrigger className="w-72">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {WORKFLOW_TRIGGERS.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
+                  {WORKFLOW_TRIGGERS.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {label(value)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <span className="text-xs text-muted-foreground">
-                Leads enter the workflow when this happens.
+                Future matching leads enter this workflow.
               </span>
             </CardContent>
           </Card>
-
-          {steps.map((s, i) => (
-            <Card key={s.id} className={s.enabled ? "" : "opacity-60"}>
+          {steps.map((step, index) => (
+            <Card key={step.id} className={step.enabled ? "" : "opacity-60"}>
               <CardContent className="space-y-3 py-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <span className="num grid size-6 place-items-center rounded-full bg-secondary text-xs font-semibold">
-                      {i + 1}
+                      {index + 1}
                     </span>
-                    <span className="text-sm font-medium">{s.action}</span>
-                    {(s.action === "Send Email" || s.action === "Send WhatsApp") && (
-                      <StatusBadge value={templateName(s.templateId)} tone="muted" />
+                    <span className="text-sm font-medium">{label(step.action)}</span>
+                    {["send_email", "send_whatsapp"].includes(step.action) && (
+                      <StatusBadge value={store.templateName(step.templateId)} tone="muted" />
                     )}
                   </div>
                   <div className="flex items-center gap-1">
                     <Switch
-                      checked={s.enabled}
+                      checked={step.enabled}
                       disabled={!editable}
-                      onCheckedChange={(v) => updateStep(s.id, { enabled: v })}
+                      onCheckedChange={(value) => updateStep(step.id, { enabled: value }, true)}
                     />
                     <Button
                       size="icon"
                       variant="ghost"
-                      disabled={!editable || i === 0}
-                      onClick={() => move(i, -1)}
-                      aria-label="Move step up"
+                      disabled={!editable || index === 0}
+                      onClick={() => move(index, -1)}
                     >
                       <ArrowUp className="size-4" />
                     </Button>
                     <Button
                       size="icon"
                       variant="ghost"
-                      disabled={!editable || i === steps.length - 1}
-                      onClick={() => move(i, 1)}
-                      aria-label="Move step down"
+                      disabled={!editable || index === steps.length - 1}
+                      onClick={() => move(index, 1)}
                     >
                       <ArrowDown className="size-4" />
                     </Button>
@@ -204,14 +258,17 @@ export function WorkflowBuilderPage({ workflowId }: { workflowId: string }) {
                       size="icon"
                       variant="ghost"
                       disabled={!editable}
-                      onClick={() => setSteps(steps.filter((x) => x.id !== s.id))}
-                      aria-label="Delete step"
+                      onClick={() =>
+                        setSteps(
+                          steps.filter((item) => item.id !== step.id),
+                          true,
+                        )
+                      }
                     >
                       <Trash2 className="size-4 text-destructive" />
                     </Button>
                   </div>
                 </div>
-
                 <div className="grid gap-3 md:grid-cols-3">
                   <div>
                     <Label className="mb-1.5 block text-xs">Wait (days)</Label>
@@ -219,103 +276,53 @@ export function WorkflowBuilderPage({ workflowId }: { workflowId: string }) {
                       type="number"
                       min={0}
                       disabled={!editable}
-                      value={s.delayDays}
-                      onChange={(e) => updateStep(s.id, { delayDays: Number(e.target.value) })}
+                      value={step.delayDays}
+                      onChange={(event) =>
+                        updateStep(step.id, { delayDays: Math.max(0, Number(event.target.value)) })
+                      }
                     />
                   </div>
                   <div>
                     <Label className="mb-1.5 block text-xs">Action</Label>
                     <Select
-                      value={s.action}
+                      value={step.action}
                       disabled={!editable}
-                      onValueChange={(v) => updateStep(s.id, { action: v as StepAction })}
+                      onValueChange={(value) => {
+                        const action = value as StepAction;
+                        const template =
+                          action === "send_email"
+                            ? store.templates.find((item) => item.type === "email" && item.active)
+                                ?.id
+                            : action === "send_whatsapp"
+                              ? store.templates.find(
+                                  (item) => item.type === "whatsapp" && item.active,
+                                )?.id
+                              : undefined;
+                        updateStep(step.id, { action, templateId: template }, true);
+                      }}
                     >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {STEP_ACTIONS.map((a) => (
-                          <SelectItem key={a} value={a}>
-                            {a}
+                        {STEP_ACTIONS.map((value) => (
+                          <SelectItem key={value} value={value}>
+                            {label(value)}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
-                  <div>
-                    {s.action === "Send Email" || s.action === "Send WhatsApp" ? (
-                      <>
-                        <Label className="mb-1.5 block text-xs">Template</Label>
-                        <Select
-                          value={s.templateId ?? ""}
-                          disabled={!editable}
-                          onValueChange={(v) => updateStep(s.id, { templateId: v })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Choose template" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {templates
-                              .filter((t) =>
-                                s.action === "Send Email"
-                                  ? t.type === "Email"
-                                  : t.type === "WhatsApp",
-                              )
-                              .map((t) => (
-                                <SelectItem key={t.id} value={t.id}>
-                                  {t.name}
-                                </SelectItem>
-                              ))}
-                          </SelectContent>
-                        </Select>
-                      </>
-                    ) : s.action === "Change Lead Stage" ? (
-                      <>
-                        <Label className="mb-1.5 block text-xs">Target stage</Label>
-                        <Select
-                          value={s.config ?? ""}
-                          disabled={!editable}
-                          onValueChange={(v) => updateStep(s.id, { config: v })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Choose stage" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {PIPELINE_STAGES.map((st) => (
-                              <SelectItem key={st} value={st}>
-                                {st}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </>
-                    ) : s.action === "Stop Workflow" ? (
-                      <>
-                        <Label className="mb-1.5 block text-xs">Note</Label>
-                        <Input
-                          disabled={!editable}
-                          value={s.config ?? ""}
-                          onChange={(e) => updateStep(s.id, { config: e.target.value })}
-                          placeholder="End of sequence"
-                        />
-                      </>
-                    ) : (
-                      <>
-                        <Label className="mb-1.5 block text-xs">Task title</Label>
-                        <Input
-                          disabled={!editable}
-                          value={s.config ?? ""}
-                          onChange={(e) => updateStep(s.id, { config: e.target.value })}
-                          placeholder="Call the lead again"
-                        />
-                      </>
-                    )}
-                  </div>
+                  <StepConfig
+                    step={step}
+                    editable={editable}
+                    templates={store.templates}
+                    onChange={(patch, immediate) => updateStep(step.id, patch, immediate)}
+                  />
                 </div>
               </CardContent>
             </Card>
           ))}
-
           {editable ? (
             <Button variant="outline" className="w-full border-dashed" onClick={addStep}>
               <Plus className="mr-1 size-4" /> Add step
@@ -326,94 +333,76 @@ export function WorkflowBuilderPage({ workflowId }: { workflowId: string }) {
             </p>
           )}
         </div>
-
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Versions</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              {wf.versions
+              {workflow.versions
                 .slice()
                 .sort((a, b) => b.version - a.version)
-                .map((v) => (
+                .map((item) => (
                   <button
-                    key={v.version}
-                    onClick={() => setSelectedVersion(v.version)}
-                    className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm hover:bg-accent/40 ${
-                      v.version === version.version ? "border-primary bg-primary/5" : ""
-                    }`}
+                    key={item.version}
+                    onClick={() => setSelectedVersion(item.version)}
+                    className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm hover:bg-accent/40 ${item.version === version.version ? "border-primary bg-primary/5" : ""}`}
                   >
                     <span>
-                      V{v.version}
+                      V{item.version}
                       <span className="block text-xs text-muted-foreground">
-                        {v.createdBy} · {relDay(v.createdAt)}
+                        {item.createdBy} · {relDay(item.createdAt)}
                       </span>
                     </span>
-                    <StatusBadge value={v.status} />
+                    <StatusBadge value={item.status} />
                   </button>
                 ))}
             </CardContent>
           </Card>
-
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Workflow</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <Row label="Status" value={wf.status} />
-              <Row label="Owner" value={userName(wf.ownerId)} />
-              <Row label="Active leads" value={String(wf.activeLeads)} />
+            <CardContent className="space-y-2">
+              <Row label="Status" value={label(workflow.status)} />
+              <Row label="Owner" value={userName(workflow.ownerId)} />
+              <Row label="Active leads" value={String(workflow.activeLeads)} />
               <Row label="Steps" value={String(steps.length)} />
-              <Row label="Updated" value={relDay(wf.updatedAt)} />
+              <Row label="Updated" value={relDay(workflow.updatedAt)} />
             </CardContent>
           </Card>
-
           <Card>
             <CardContent className="py-4 text-xs text-muted-foreground">
-              Publishing writes the new sequence to Supabase; n8n reads it on the next scheduled
-              run.
+              Draft edits are saved to the backend. Publishing never migrates existing runs.
             </CardContent>
           </Card>
         </div>
       </div>
-
       <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Publish V{version.version}</DialogTitle>
             <DialogDescription>
-              Choose what happens to the {wf.activeLeads} leads currently in this workflow.
+              Existing runs keep their current version; new enrollments use this version.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            {[
-              ["continue", "Let them finish on the current version"],
-              ["migrate", "Move them to the same step on the new version"],
-              ["restart", "Restart them from step 1"],
-            ].map(([v, label]) => (
-              <button
-                key={v}
-                onClick={() => setEnrollmentMode(v!)}
-                className={`w-full rounded-md border px-3 py-2 text-left text-sm hover:bg-accent/40 ${
-                  enrollmentMode === v ? "border-primary bg-primary/5" : ""
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="rounded-md border px-3 py-2 text-sm">
+            Let current runs finish on the version they started with.
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setPublishOpen(false)}>
               Cancel
             </Button>
             <Button
-              onClick={() => {
-                publishVersion(wf.id, version.version);
-                setPublishOpen(false);
-                setSelectedVersion(version.version);
-                toast.success(`V${version.version} published`);
-              }}
+              disabled={
+                store.isPending ||
+                steps.length === 0 ||
+                steps.some(
+                  (step) =>
+                    ["send_email", "send_whatsapp"].includes(step.action) && !step.templateId,
+                )
+              }
+              onClick={publish}
             >
               Publish
             </Button>
@@ -424,10 +413,83 @@ export function WorkflowBuilderPage({ workflowId }: { workflowId: string }) {
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function StepConfig({
+  step,
+  editable,
+  templates,
+  onChange,
+}: {
+  step: WorkflowStep;
+  editable: boolean;
+  templates: ReturnType<typeof useAutomations>["templates"];
+  onChange: (patch: Partial<WorkflowStep>, immediate?: boolean) => void;
+}) {
+  if (step.action === "send_email" || step.action === "send_whatsapp")
+    return (
+      <div>
+        <Label className="mb-1.5 block text-xs">Template</Label>
+        <Select
+          value={step.templateId ?? ""}
+          disabled={!editable}
+          onValueChange={(value) => onChange({ templateId: value }, true)}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Choose template" />
+          </SelectTrigger>
+          <SelectContent>
+            {templates
+              .filter(
+                (template) =>
+                  template.type === (step.action === "send_email" ? "email" : "whatsapp"),
+              )
+              .map((template) => (
+                <SelectItem key={template.id} value={template.id}>
+                  {template.name}
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+      </div>
+    );
+  if (step.action === "change_lead_stage")
+    return (
+      <div>
+        <Label className="mb-1.5 block text-xs">Target stage</Label>
+        <Select
+          value={step.config ?? ""}
+          disabled={!editable}
+          onValueChange={(value) => onChange({ config: value }, true)}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Choose stage" />
+          </SelectTrigger>
+          <SelectContent>
+            {PIPELINE_STAGES.map((value) => (
+              <SelectItem key={value} value={value}>
+                {label(value)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    );
+  return (
+    <div>
+      <Label className="mb-1.5 block text-xs">
+        {step.action === "stop_workflow" ? "Note" : "Task title"}
+      </Label>
+      <Input
+        disabled={!editable}
+        value={step.config ?? ""}
+        onChange={(event) => onChange({ config: event.target.value })}
+      />
+    </div>
+  );
+}
+function Row({ label: name, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-xs text-muted-foreground">{name}</span>
       <span className="text-sm">{value}</span>
     </div>
   );

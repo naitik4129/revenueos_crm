@@ -1,67 +1,87 @@
 import type { TaskType } from "./task";
 
-export type PipelineStage =
-  | "New"
-  | "Ready for Call"
-  | "Not Connected Nurture"
-  | "Maybe Nurture"
-  | "Negative Nurture"
-  | "Meeting Scheduling"
-  | "Meeting Scheduled"
-  | "Proposal Preparation"
-  | "Proposal Pending"
-  | "Long-Term Nurture"
-  | "Won"
-  | "Lost"
-  | "Discarded";
-
-export const PIPELINE_STAGES: PipelineStage[] = [
-  "New",
-  "Ready for Call",
-  "Not Connected Nurture",
-  "Maybe Nurture",
-  "Negative Nurture",
-  "Meeting Scheduling",
-  "Meeting Scheduled",
-  "Proposal Preparation",
-  "Proposal Pending",
-  "Long-Term Nurture",
-  "Won",
-  "Lost",
-  "Discarded",
+export const PIPELINE_STAGES = [
+  "new",
+  "ready_for_first_call",
+  "contact_attempted",
+  "not_connected_nurture",
+  "maybe_nurture",
+  "negative_nurture",
+  "meeting_scheduling",
+  "meeting_scheduled",
+  "meeting_follow_up",
+  "proposal_preparation",
+  "proposal_sent",
+  "proposal_decision_pending",
+] as const;
+export type PipelineStage = (typeof PIPELINE_STAGES)[number];
+export const LIFECYCLE_STATES = [
+  "active",
+  "long_term_nurture",
+  "won",
+  "lost",
+  "discarded",
+  "do_not_contact",
+  "merged",
+] as const;
+export type LifecycleState = (typeof LIFECYCLE_STATES)[number];
+export const TERMINAL_LIFECYCLE_STATES: LifecycleState[] = [
+  "won",
+  "lost",
+  "discarded",
+  "do_not_contact",
+  "merged",
 ];
+export const AUTOMATION_MODES = ["active", "paused", "manual", "stopped"] as const;
+export type AutomationMode = (typeof AUTOMATION_MODES)[number];
+export const RESPONSE_STATES = [
+  "no_response",
+  "responded",
+  "conversation_active",
+  "waiting_on_customer",
+  "waiting_on_us",
+] as const;
+export type ResponseState = (typeof RESPONSE_STATES)[number];
+export const LEAD_SOURCES = [
+  "linkedin",
+  "email",
+  "website",
+  "cold_call",
+  "referral",
+  "event",
+  "inbound_form",
+  "other",
+] as const;
+export type LeadSource = (typeof LEAD_SOURCES)[number];
+export const CONTACT_CHANNELS = ["phone", "email", "whatsapp"] as const;
+export type ContactChannel = (typeof CONTACT_CHANNELS)[number];
 
-export const CLOSED_STAGES: PipelineStage[] = ["Won", "Lost", "Discarded"];
-
-export type AutomationMode = "Active" | "Paused" | "Manual" | "Stopped";
-
-export type LeadSource =
-  "LinkedIn" | "Website" | "Email" | "Cold Call" | "Referral" | "Event" | "Inbound Form";
-
-export const LEAD_SOURCES: LeadSource[] = [
-  "LinkedIn",
-  "Website",
-  "Email",
-  "Cold Call",
-  "Referral",
-  "Event",
-  "Inbound Form",
-];
-
+export type PhoneContactabilityStatus =
+  "valid" | "reachable" | "temporarily_unreachable" | "invalid" | "wrong_number" | "do_not_contact";
+export type EmailContactabilityStatus =
+  "valid" | "delivered" | "temporary_bounce" | "permanent_bounce" | "unsubscribed" | "invalid";
+export type WhatsAppContactabilityStatus =
+  "valid" | "reachable" | "temporarily_unreachable" | "invalid" | "opted_out" | "do_not_contact";
+type ContactabilityBase = { reason?: string; updatedAt: string };
+export type Contactability =
+  | (ContactabilityBase & { channel: "phone"; status: PhoneContactabilityStatus })
+  | (ContactabilityBase & { channel: "email"; status: EmailContactabilityStatus })
+  | (ContactabilityBase & { channel: "whatsapp"; status: WhatsAppContactabilityStatus });
 export interface NextAction {
+  taskId: string;
   type: TaskType;
   title: string;
   dueAt: string;
-  ownerId: string;
+  ownerId?: string;
+  ownerName?: string;
+  origin: "manual" | "automation";
 }
-
 export interface LeadNote {
   id: string;
   author: string;
   at: string;
   body: string;
 }
-
 export interface Lead {
   id: string;
   firstName: string;
@@ -73,34 +93,56 @@ export interface Lead {
   email: string;
   source: LeadSource;
   serviceInterest: string;
-  ownerId: string;
-  stage: PipelineStage;
-  automation: AutomationMode;
+  ownerId?: string;
+  ownerName?: string;
+  pipelineStage: PipelineStage;
+  lifecycleState: LifecycleState;
+  automationMode: AutomationMode;
+  responseState: ResponseState;
   doNotContact: boolean;
-  dncReason?: string | undefined;
-  dncBy?: string | undefined;
-  dncAt?: string | undefined;
-  lastActivity: string;
+  dncReason?: string;
+  dncBy?: string;
+  dncAt?: string;
+  mergedIntoLeadId?: string;
+  lastActivityAt: string;
   nextAction: NextAction | null;
+  createdBy?: string;
   createdAt: string;
-  notes: LeadNote[];
+  updatedAt: string;
 }
 
-export type CallOutcome =
-  "Positive" | "Maybe" | "Negative" | "Callback Requested" | "Do Not Contact";
-
-export const CALL_OUTCOMES: CallOutcome[] = [
-  "Positive",
-  "Maybe",
-  "Negative",
-  "Callback Requested",
-  "Do Not Contact",
-];
-
-export const NOT_CONNECTED_REASONS = [
-  "No Answer",
-  "Busy",
-  "Switched Off / Unreachable",
-  "Wrong Number / Invalid Number",
-  "Other",
+export const CALL_NOT_CONNECTED_REASONS = [
+  "no_answer",
+  "busy",
+  "call_rejected",
+  "switched_off",
+  "temporarily_unreachable",
+  "voicemail",
+  "network_failure",
+  "invalid_number",
+  "wrong_number",
+  "other",
 ] as const;
+export type CallNotConnectedReason = (typeof CALL_NOT_CONNECTED_REASONS)[number];
+export const CALL_CONNECTED_OUTCOMES = [
+  "positive",
+  "maybe",
+  "negative",
+  "callback_requested",
+  "information_requested",
+  "wrong_person",
+  "do_not_contact",
+] as const;
+export type CallConnectedOutcome = (typeof CALL_CONNECTED_OUTCOMES)[number];
+export interface Call {
+  id: string;
+  leadId: string;
+  salespersonId?: string;
+  salespersonName: string;
+  connected: boolean;
+  notConnectedReason?: CallNotConnectedReason;
+  connectedOutcome?: CallConnectedOutcome;
+  notes?: string;
+  callbackDueAt?: string;
+  createdAt: string;
+}

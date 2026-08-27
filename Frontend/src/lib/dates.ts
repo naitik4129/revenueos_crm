@@ -1,20 +1,23 @@
-import { TODAY } from "@/mocks/seed";
+export const APP_TIME_ZONE = "Asia/Kolkata";
+const IST_OFFSET = "+05:30";
 
-/**
- * Timestamp written to records the user changes during a session.
- *
- * Pinned to midday on the prototype's fixed clock so edits sort correctly
- * against the seeded history instead of jumping to the real current date.
- * Becomes `new Date().toISOString()` once the backend owns timestamps.
- */
-export const NOW = `${TODAY}T12:00:00`;
-
-/**
- * ISO timestamp `days` from the prototype's fixed clock, used when scheduling
- * a follow-up.
- */
+export function nowIso() {
+  return new Date().toISOString();
+}
+export function toIsoFromIst(date: string, time = "10:00:00") {
+  return new Date(`${date}T${time}${IST_OFFSET}`).toISOString();
+}
+export function dateInputValue(daysFromToday = 0) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(Date.now() + daysFromToday * 86_400_000));
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
 export function addDays(days: number, time = "10:00:00") {
-  const d = new Date(`${TODAY}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return `${d.toISOString().slice(0, 10)}T${time}`;
+  return toIsoFromIst(dateInputValue(days), time);
 }

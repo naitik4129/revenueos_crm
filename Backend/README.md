@@ -114,6 +114,7 @@ Key endpoints (see `src/routes/*.ts` for the complete list):
 GET/POST   /leads                          list / create
 GET/PATCH  /leads/:id                       detail / edit descriptive fields
 POST       /leads/:id/notes
+POST       /leads/:id/communications        persist manual email/WhatsApp activity
 POST       /leads/:id/automation            {mode, reason?}
 POST       /leads/:id/dnc                   {reason}
 POST       /leads/:id/dnc/reactivate        {reason}
@@ -123,7 +124,7 @@ GET/POST   /leads/:id/contactability
 GET/POST   /leads/:id/calls                  logging a call IS outcome processing
 GET        /leads/:id/timeline | /meetings | /proposals | /runs
 
-GET/POST   /tasks                            POST /tasks/:id/complete | /cancel
+GET/POST   /tasks                            PATCH /tasks/:id, POST /tasks/:id/complete | /cancel
 GET/POST   /meetings                          PATCH /meetings/:id, POST /meetings/:id/outcome
 GET/POST   /proposals                          PATCH /proposals/:id, POST /proposals/:id/status
 
@@ -177,7 +178,7 @@ business workflow's steps, delays, or templates itself. See
 `n8n/README.md` for the full architecture and how each of the 10 n8n
 workflows uses this API.
 
-**The reverse direction** — this backend calling *out* to n8n — is a single,
+**The reverse direction** — this backend calling _out_ to n8n — is a single,
 optional, fire-and-forget nudge: `src/services/n8nWake.ts`'s
 `wakeAutomationExecutor()`, called from `runs.service.ts` whenever a
 scheduled action becomes due immediately, `POST`s to n8n's `Wake Webhook`
@@ -190,7 +191,7 @@ costs latency, never correctness (see `n8n/README.md` §6.2).
 
 - Talk to any email/WhatsApp provider directly, or run a scheduler loop —
   that's n8n's job (`n8n/01-due-action-worker.json` polls
-  `/automation/due-actions/claim`). This backend only decides *what* should
-  happen and *when*, and records what n8n reports back.
+  `/automation/due-actions/claim`). This backend only decides _what_ should
+  happen and _when_, and records what n8n reports back.
 - Manager/Admin roles or RBAC — one user type, Salesperson, per the product
   brief.

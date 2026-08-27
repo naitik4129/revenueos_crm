@@ -69,6 +69,9 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
   if (input.connectedOutcome === "callback_requested" && !input.callbackDueAt) {
     throw new ValidationError("callbackDueAt is required for a Callback Requested outcome.");
   }
+  if (input.callbackDueAt && Date.parse(input.callbackDueAt) <= Date.now()) {
+    throw new ValidationError("callbackDueAt must be in the future.");
+  }
 
   const callResult = await db.query<CallRow>(
     `insert into public.calls

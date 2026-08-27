@@ -17,9 +17,11 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { isOverdue, relDay } from "@/lib/format";
 import { useLeads, useSession } from "@/store";
 import { PIPELINE_STAGES } from "@/types";
+import { label } from "@/lib/labels";
+import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 
 export function LeadsPage() {
-  const { leads } = useLeads();
+  const { leads, isLoading, error } = useLeads();
   const { users, userName } = useSession();
   const addLead = useAddLead();
   const [q, setQ] = useState("");
@@ -31,8 +33,8 @@ export function LeadsPage() {
     () =>
       leads.filter((l) => {
         if (owner !== "all" && l.ownerId !== owner) return false;
-        if (stage !== "all" && l.stage !== stage) return false;
-        if (auto !== "all" && l.automation !== auto) return false;
+        if (stage !== "all" && l.pipelineStage !== stage) return false;
+        if (auto !== "all" && l.automationMode !== auto) return false;
         if (
           q &&
           !`${l.firstName} ${l.lastName} ${l.company}`.toLowerCase().includes(q.toLowerCase())
@@ -43,7 +45,7 @@ export function LeadsPage() {
     [leads, owner, stage, auto, q],
   );
 
-  const missing = filtered.filter((l) => !l.nextAction && !l.doNotContact).length;
+  const missing = filtered.filter((l) => l.lifecycleState === "active" && !l.nextAction).length;
 
   return (
     <div className="pb-10">
@@ -83,7 +85,7 @@ export function LeadsPage() {
             placeholder="Stage"
             options={[
               ["all", "All stages"],
-              ...PIPELINE_STAGES.map((s) => [s, s] as [string, string]),
+              ...PIPELINE_STAGES.map((s) => [s, label(s)] as [string, string]),
             ]}
           />
           <Filter
@@ -92,10 +94,10 @@ export function LeadsPage() {
             placeholder="Automation"
             options={[
               ["all", "All automation"],
-              ["Active", "Active"],
-              ["Paused", "Paused"],
-              ["Manual", "Manual"],
-              ["Stopped", "Stopped"],
+              ["active", "Active"],
+              ["paused", "Paused"],
+              ["manual", "Manual"],
+              ["stopped", "Stopped"],
             ]}
           />
           <div className="ml-auto text-xs text-muted-foreground">
@@ -110,93 +112,103 @@ export function LeadsPage() {
           </div>
         )}
 
-        <Card className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1000px] text-sm">
-              <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
-                <tr>
-                  {[
-                    "Lead / Company",
-                    "Source",
-                    "Owner",
-                    "Stage",
-                    "Next action",
-                    "Due",
-                    "Automation",
-                    "Last activity",
-                  ].map((h) => (
-                    <th key={h} className="px-3 py-2 font-medium">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((l) => (
-                  <tr key={l.id} className="border-t hover:bg-accent/40">
-                    <td className="px-3 py-2">
-                      <Link
-                        to="/leads/$leadId"
-                        params={{ leadId: l.id }}
-                        className="block hover:underline"
-                      >
-                        <span className="font-medium">
-                          {l.firstName} {l.lastName}
-                        </span>
-                        <span className="block text-xs text-muted-foreground">{l.company}</span>
-                      </Link>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">{l.source}</td>
-                    <td className="px-3 py-2 text-xs">{userName(l.ownerId)}</td>
-                    <td className="px-3 py-2">
-                      {l.doNotContact ? (
-                        <StatusBadge value="Do Not Contact" />
-                      ) : (
-                        <StatusBadge value={l.stage} />
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-xs">
-                      {l.nextAction ? (
-                        l.nextAction.title
-                      ) : l.doNotContact ? (
-                        <span className="text-muted-foreground">Suppressed</span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-warning-foreground">
-                          <AlertTriangle className="size-3.5" /> No next action
-                        </span>
-                      )}
-                    </td>
-                    <td
-                      className={`whitespace-nowrap px-3 py-2 text-xs ${
-                        l.nextAction && isOverdue(l.nextAction.dueAt)
-                          ? "text-destructive"
-                          : "text-muted-foreground"
-                      }`}
-                    >
-                      {l.nextAction ? relDay(l.nextAction.dueAt) : "—"}
-                    </td>
-                    <td className="px-3 py-2">
-                      <StatusBadge value={l.automation} dot />
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
-                      {relDay(l.lastActivity)}
-                    </td>
-                  </tr>
-                ))}
-                {filtered.length === 0 && (
+        {isLoading ? (
+          <LoadingBlock label="Loading leads…" />
+        ) : error ? (
+          <ErrorBlock error={error} />
+        ) : (
+          <Card className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1000px] text-sm">
+                <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
                   <tr>
-                    <td
-                      colSpan={8}
-                      className="px-3 py-10 text-center text-sm text-muted-foreground"
-                    >
-                      No leads match these filters.
-                    </td>
+                    {[
+                      "Lead / Company",
+                      "Source",
+                      "Owner",
+                      "Stage",
+                      "Next action",
+                      "Due",
+                      "Automation",
+                      "Last activity",
+                    ].map((h) => (
+                      <th key={h} className="px-3 py-2 font-medium">
+                        {h}
+                      </th>
+                    ))}
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+                </thead>
+                <tbody>
+                  {filtered.map((l) => (
+                    <tr key={l.id} className="border-t hover:bg-accent/40">
+                      <td className="px-3 py-2">
+                        <Link
+                          to="/leads/$leadId"
+                          params={{ leadId: l.id }}
+                          className="block hover:underline"
+                        >
+                          <span className="font-medium">
+                            {l.firstName} {l.lastName}
+                          </span>
+                          <span className="block text-xs text-muted-foreground">{l.company}</span>
+                        </Link>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{l.source}</td>
+                      <td className="px-3 py-2 text-xs">{userName(l.ownerId)}</td>
+                      <td className="px-3 py-2">
+                        {l.doNotContact ? (
+                          <StatusBadge value="Do Not Contact" />
+                        ) : (
+                          <StatusBadge
+                            value={
+                              l.lifecycleState === "active" ? l.pipelineStage : l.lifecycleState
+                            }
+                          />
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {l.nextAction ? (
+                          l.nextAction.title
+                        ) : l.doNotContact ? (
+                          <span className="text-muted-foreground">Suppressed</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-warning-foreground">
+                            <AlertTriangle className="size-3.5" /> No next action
+                          </span>
+                        )}
+                      </td>
+                      <td
+                        className={`whitespace-nowrap px-3 py-2 text-xs ${
+                          l.nextAction && isOverdue(l.nextAction.dueAt)
+                            ? "text-destructive"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {l.nextAction ? relDay(l.nextAction.dueAt) : "—"}
+                      </td>
+                      <td className="px-3 py-2">
+                        <StatusBadge value={l.automationMode} dot />
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
+                        {relDay(l.lastActivityAt)}
+                      </td>
+                    </tr>
+                  ))}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="px-3 py-10 text-center text-sm text-muted-foreground"
+                      >
+                        No leads match these filters.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
       </div>
     </div>
   );

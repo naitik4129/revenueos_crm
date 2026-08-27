@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Bot, Copy, Plus } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
@@ -9,10 +10,40 @@ import { Switch } from "@/components/ui/switch";
 import { StatusBadge } from "@/components/common/status-badge";
 import { relDay } from "@/lib/format";
 import { useAutomations, useSession } from "@/store";
+import { messageFromError } from "@/store";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
+import { label } from "@/lib/labels";
+import { WORKFLOW_TRIGGERS, type WorkflowTrigger } from "@/types";
 
 export function WorkflowsPage() {
-  const { workflows, updateWorkflow, duplicateWorkflow } = useAutomations();
+  const { workflows, updateWorkflow, duplicateWorkflow, addWorkflow, isLoading, error, isPending } =
+    useAutomations();
   const { userName } = useSession();
+  const [createOpen, setCreateOpen] = useState(false);
+  const mutate = async (work: () => Promise<unknown>, success: string) => {
+    try {
+      await work();
+      toast.success(success);
+    } catch (failure) {
+      toast.error(messageFromError(failure));
+    }
+  };
 
   return (
     <div className="pb-10">
@@ -21,89 +52,175 @@ export function WorkflowsPage() {
         description="Workflows are defined here and executed by n8n. Publishing a version changes live behaviour."
         tabs={<AutomationTabs />}
         actions={
-          <Button size="sm" onClick={() => toast.success("New workflow draft created")}>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="mr-1 size-4" /> New workflow
           </Button>
         }
       />
 
       <div className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-3">
-        {workflows.map((w) => {
-          const draft = w.versions.find((v) => v.status === "Draft");
-          const published = w.versions.find((v) => v.version === w.currentVersion);
-          return (
-            <Card key={w.id} className="flex flex-col">
-              <CardHeader className="pb-2">
-                <div className="flex items-start justify-between gap-2">
-                  <CardTitle className="text-sm">{w.name}</CardTitle>
-                  <Switch
-                    checked={w.status === "Active"}
-                    onCheckedChange={(v) => {
-                      updateWorkflow(w.id, { status: v ? "Active" : "Paused" });
-                      toast.success(v ? "Workflow activated" : "Workflow paused");
-                    }}
-                  />
-                </div>
-                <p className="pt-1 text-xs text-muted-foreground">{w.description}</p>
-              </CardHeader>
-              <CardContent className="flex flex-1 flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <StatusBadge value={w.status} dot />
-                  <StatusBadge value={`V${w.currentVersion} published`} tone="info" />
-                  {draft && <StatusBadge value={`V${draft.version} draft`} tone="warning" />}
-                </div>
+        {isLoading ? (
+          <LoadingBlock label="Loading workflows…" />
+        ) : error ? (
+          <ErrorBlock error={error} />
+        ) : (
+          <>
+            {workflows.map((w) => {
+              const draft = w.versions.find((v) => v.status === "draft");
+              const published = w.versions.find((v) => v.version === w.currentVersion);
+              return (
+                <Card key={w.id} className="flex flex-col">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <CardTitle className="text-sm">{w.name}</CardTitle>
+                      <Switch
+                        checked={w.status === "active"}
+                        disabled={isPending}
+                        onCheckedChange={(v) => {
+                          void mutate(
+                            () => updateWorkflow(w.id, { status: v ? "active" : "paused" }),
+                            v ? "Workflow activated" : "Workflow paused",
+                          );
+                        }}
+                      />
+                    </div>
+                    <p className="pt-1 text-xs text-muted-foreground">{w.description}</p>
+                  </CardHeader>
+                  <CardContent className="flex flex-1 flex-col gap-3">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusBadge value={w.status} dot />
+                      <StatusBadge value={`V${w.currentVersion} published`} tone="info" />
+                      {draft && <StatusBadge value={`V${draft.version} draft`} tone="warning" />}
+                    </div>
 
-                <div className="rounded-md border px-3 py-2 text-xs">
-                  <div className="text-muted-foreground">Trigger</div>
-                  <div className="pt-0.5 font-medium">{w.trigger}</div>
-                </div>
+                    <div className="rounded-md border px-3 py-2 text-xs">
+                      <div className="text-muted-foreground">Trigger</div>
+                      <div className="pt-0.5 font-medium">{label(w.trigger)}</div>
+                    </div>
 
-                <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                  <Metric label="Steps" value={String(published?.steps.length ?? 0)} />
-                  <Metric label="Active leads" value={String(w.activeLeads)} />
-                  <Metric label="Failures" value={String(w.failures)} />
-                </div>
+                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                      <Metric label="Steps" value={String(published?.steps.length ?? 0)} />
+                      <Metric label="Active leads" value={String(w.activeLeads)} />
+                      <Metric label="Failures" value={String(w.failures)} />
+                    </div>
 
-                <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-                  <span className="text-[11px] text-muted-foreground">
-                    {userName(w.ownerId)} · {relDay(w.updatedAt)}
-                  </span>
-                  <div className="flex gap-1">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        duplicateWorkflow(w.id);
-                        toast.success("Workflow duplicated");
-                      }}
-                      aria-label="Duplicate workflow"
-                    >
-                      <Copy className="size-4" />
-                    </Button>
-                    <Button asChild size="sm" variant="outline">
-                      <Link to="/automations/workflows/$workflowId" params={{ workflowId: w.id }}>
-                        Edit steps
-                      </Link>
-                    </Button>
-                  </div>
-                </div>
+                    <div className="mt-auto flex items-center justify-between gap-2 pt-1">
+                      <span className="text-[11px] text-muted-foreground">
+                        {userName(w.ownerId)} · {relDay(w.updatedAt)}
+                      </span>
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            void mutate(() => duplicateWorkflow(w.id), "Workflow duplicated");
+                          }}
+                          aria-label="Duplicate workflow"
+                        >
+                          <Copy className="size-4" />
+                        </Button>
+                        <Button asChild size="sm" variant="outline">
+                          <Link
+                            to="/automations/workflows/$workflowId"
+                            params={{ workflowId: w.id }}
+                          >
+                            Edit steps
+                          </Link>
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+
+            <Card className="border-dashed">
+              <CardContent className="flex h-full flex-col justify-center gap-2 py-8 text-center">
+                <Bot className="mx-auto size-5 text-muted-foreground" />
+                <p className="text-sm font-medium">Managers own the automation</p>
+                <p className="text-xs text-muted-foreground">
+                  Add or reorder steps, change delays and swap templates here — no developer needs
+                  to touch n8n.
+                </p>
               </CardContent>
             </Card>
-          );
-        })}
-
-        <Card className="border-dashed">
-          <CardContent className="flex h-full flex-col justify-center gap-2 py-8 text-center">
-            <Bot className="mx-auto size-5 text-muted-foreground" />
-            <p className="text-sm font-medium">Managers own the automation</p>
-            <p className="text-xs text-muted-foreground">
-              Add or reorder steps, change delays and swap templates here — no developer needs to
-              touch n8n.
-            </p>
-          </CardContent>
-        </Card>
+          </>
+        )}
       </div>
+      <NewWorkflowDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onSave={(input) => void mutate(() => addWorkflow(input), "Workflow draft created")}
+      />
     </div>
+  );
+}
+
+function NewWorkflowDialog({
+  open,
+  onOpenChange,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (value: boolean) => void;
+  onSave: (input: {
+    name: string;
+    description?: string | undefined;
+    trigger: WorkflowTrigger;
+  }) => void;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [trigger, setTrigger] = useState<WorkflowTrigger>("manual_enrollment");
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>New workflow</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="mb-1.5 block text-xs">Name</Label>
+            <Input value={name} onChange={(event) => setName(event.target.value)} />
+          </div>
+          <div>
+            <Label className="mb-1.5 block text-xs">Description</Label>
+            <Input value={description} onChange={(event) => setDescription(event.target.value)} />
+          </div>
+          <div>
+            <Label className="mb-1.5 block text-xs">Trigger</Label>
+            <Select value={trigger} onValueChange={(value) => setTrigger(value as WorkflowTrigger)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {WORKFLOW_TRIGGERS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {label(value)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            disabled={!name.trim()}
+            onClick={() => {
+              onSave({ name: name.trim(), description: description.trim() || undefined, trigger });
+              onOpenChange(false);
+              setName("");
+              setDescription("");
+            }}
+          >
+            Create draft
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

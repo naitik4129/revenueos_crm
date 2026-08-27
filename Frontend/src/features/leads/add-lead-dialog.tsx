@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -20,8 +20,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useLeads, useSession } from "@/store";
+import { messageFromError, useLeads, useSession } from "@/store";
 import { LEAD_SOURCES, type LeadSource } from "@/types";
+import { label } from "@/lib/labels";
 
 const INDUSTRIES = [
   "Healthcare",
@@ -46,7 +47,7 @@ export function AddLeadDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) {
-  const { addLead, addNote } = useLeads();
+  const { addLead, addNote, isPending } = useLeads();
   const { users, currentUser } = useSession();
   const navigate = useNavigate();
   const [form, setForm] = useState({
@@ -55,44 +56,51 @@ export function AddLeadDialog({
     company: "",
     phone: "",
     email: "",
-    source: "Website" as LeadSource,
+    source: "website" as LeadSource,
     industry: "SaaS",
     serviceInterest: "Sales Automation",
-    ownerId: currentUser.id,
+    ownerId: currentUser?.id ?? "",
     notes: "",
   });
+
+  useEffect(() => {
+    if (currentUser?.id && !form.ownerId)
+      setForm((value) => ({ ...value, ownerId: currentUser.id }));
+  }, [currentUser?.id, form.ownerId]);
 
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
   const valid =
     form.firstName.trim() && form.company.trim() && (form.email.trim() || form.phone.trim());
 
-  const submit = () => {
-    const id = addLead({
-      firstName: form.firstName.trim(),
-      lastName: form.lastName.trim(),
-      company: form.company.trim(),
-      phone: form.phone.trim(),
-      email: form.email.trim(),
-      source: form.source,
-      industry: form.industry,
-      serviceInterest: form.serviceInterest,
-      ownerId: form.ownerId,
-      stage: "New",
-      automation: "Manual",
-    });
-    if (form.notes.trim()) addNote(id, form.notes.trim());
-    toast.success("Lead created");
-    onOpenChange(false);
-    setForm((f) => ({
-      ...f,
-      firstName: "",
-      lastName: "",
-      company: "",
-      phone: "",
-      email: "",
-      notes: "",
-    }));
-    void navigate({ to: "/leads/$leadId", params: { leadId: id } });
+  const submit = async () => {
+    try {
+      const lead = await addLead({
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim(),
+        company: form.company.trim(),
+        phone: form.phone.trim(),
+        email: form.email.trim(),
+        source: form.source,
+        industry: form.industry,
+        serviceInterest: form.serviceInterest,
+        ownerId: form.ownerId,
+      });
+      if (form.notes.trim()) await addNote(lead.id, form.notes.trim());
+      toast.success("Lead created");
+      onOpenChange(false);
+      setForm((f) => ({
+        ...f,
+        firstName: "",
+        lastName: "",
+        company: "",
+        phone: "",
+        email: "",
+        notes: "",
+      }));
+      void navigate({ to: "/leads/$leadId", params: { leadId: lead.id } });
+    } catch (error) {
+      toast.error(messageFromError(error));
+    }
   };
 
   return (
@@ -133,7 +141,7 @@ export function AddLeadDialog({
               <SelectContent>
                 {LEAD_SOURCES.map((s) => (
                   <SelectItem key={s} value={s}>
-                    {s}
+                    {label(s)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -190,8 +198,8 @@ export function AddLeadDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={!valid} onClick={submit}>
-            Create lead
+          <Button disabled={!valid || isPending} onClick={() => void submit()}>
+            {isPending ? "Creating…" : "Create lead"}
           </Button>
         </DialogFooter>
       </DialogContent>

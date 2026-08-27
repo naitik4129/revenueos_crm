@@ -1,69 +1,60 @@
-import { TODAY } from "@/mocks/seed";
+import { APP_TIME_ZONE, dateInputValue } from "./dates";
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-export function parse(iso: string) {
-  const parts = iso.split("T");
-  const date = parts[0] ?? "1970-01-01";
-  const time = parts[1] ?? "00:00:00";
-  const [y = 1970, m = 1, dd = 1] = date.split("-").map(Number);
-  const [hh = 0, mm = 0] = time.split(":").map(Number);
-  return { y, m, dd, hh, mm };
-}
-
+const dateFormatter = new Intl.DateTimeFormat("en-IN", {
+  timeZone: APP_TIME_ZONE,
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
+const timeFormatter = new Intl.DateTimeFormat("en-IN", {
+  timeZone: APP_TIME_ZONE,
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
 export function fmtDate(iso?: string) {
-  if (!iso) return "—";
-  const { m, dd, y } = parse(iso);
-  return `${dd} ${MONTHS[m - 1] ?? ""} ${y}`;
+  return iso ? dateFormatter.format(new Date(iso)) : "—";
 }
-
 export function fmtTime(iso?: string) {
-  if (!iso) return "";
-  const { hh, mm } = parse(iso);
-  const ampm = hh >= 12 ? "PM" : "AM";
-  const h12 = hh % 12 === 0 ? 12 : hh % 12;
-  return `${h12}:${String(mm).padStart(2, "0")} ${ampm}`;
+  return iso ? timeFormatter.format(new Date(iso)) : "";
 }
-
 export function fmtDateTime(iso?: string) {
-  if (!iso) return "—";
-  return `${fmtDate(iso)}, ${fmtTime(iso)}`;
+  return iso ? `${fmtDate(iso)}, ${fmtTime(iso)}` : "—";
 }
-
 export function dayOf(iso: string) {
-  return iso.split("T")[0] ?? iso;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(iso));
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
-
-/** Friendly relative label against the fixed prototype clock. */
 export function relDay(iso?: string) {
   if (!iso) return "—";
-  const diff = dayDiff(dayOf(iso), TODAY);
+  const diff = dayDiff(dayOf(iso), dateInputValue());
   if (diff === 0) return `Today, ${fmtTime(iso)}`;
   if (diff === 1) return `Tomorrow, ${fmtTime(iso)}`;
   if (diff === -1) return `Yesterday, ${fmtTime(iso)}`;
   if (diff < 0) return `${fmtDate(iso)} (${Math.abs(diff)}d ago)`;
   return fmtDate(iso);
 }
-
 export function dayDiff(a: string, b: string) {
-  return Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000);
+  return Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86_400_000);
 }
-
 export function isOverdue(iso?: string | null) {
-  if (!iso) return false;
-  return Date.parse(`${iso}Z`) < Date.parse(`${TODAY}T12:00:00Z`);
+  return Boolean(iso && Date.parse(iso) < Date.now());
 }
-
 export function isToday(iso?: string | null) {
-  return !!iso && dayOf(iso) === TODAY;
+  return Boolean(iso && dayOf(iso) === dateInputValue());
 }
-
 export function money(n: number) {
-  if (n >= 10000000) return `₹${(n / 10000000).toFixed(2)} Cr`;
-  if (n >= 100000) return `₹${(n / 100000).toFixed(1)} L`;
+  if (n >= 10_000_000) return `₹${(n / 10_000_000).toFixed(2)} Cr`;
+  if (n >= 100_000) return `₹${(n / 100_000).toFixed(1)} L`;
   return `₹${n.toLocaleString("en-IN")}`;
 }
-
 export function initials(name: string) {
   return name
     .split(" ")

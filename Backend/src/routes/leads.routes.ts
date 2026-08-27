@@ -85,7 +85,7 @@ const updateLeadSchema = z.object({
   company: z.string().min(1).optional(),
   jobTitle: z.string().optional(),
   industry: z.string().optional(),
-  email: z.string().optional(),
+  email: z.string().email().optional().or(z.literal("")),
   phone: z.string().optional(),
   source: z.enum(LEAD_SOURCES).optional(),
   serviceInterest: z.string().optional(),
@@ -236,7 +236,7 @@ const logCallSchema = z.object({
     .optional(),
   connectedOutcome: z.enum(["positive", "maybe", "negative", "callback_requested", "information_requested", "wrong_person", "do_not_contact"]).optional(),
   notes: z.string().optional(),
-  callbackDueAt: z.string().optional(),
+  callbackDueAt: z.string().datetime({ offset: true }).optional(),
 });
 
 leadsRouter.get(
@@ -252,6 +252,19 @@ leadsRouter.post(
     const input = parseBody(logCallSchema, req.body);
     const result = await withTransaction((client) => logCall(client, req.actor!, req.params.id!, input));
     res.status(201).json({ call: result.call, lead: await withNextAction(result.lead) });
+  }),
+);
+
+const communicationSchema = z.object({
+  channel: z.enum(["email", "whatsapp"]),
+  detail: z.string().optional(),
+});
+
+leadsRouter.post(
+  "/:id/communications",
+  asyncHandler(async (req, res) => {
+    const input = parseBody(communicationSchema, req.body);
+    res.status(201).json(await withTransaction((client) => leadsService.logManualCommunication(client, req.actor!, req.params.id!, input)));
   }),
 );
 

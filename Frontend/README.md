@@ -1,44 +1,32 @@
 # Northbeam CRM Frontend
 
-Production-structured frontend for the Northbeam lead management and sales automation CRM. The application currently runs against deterministic in-memory mock data so the complete product flow can be demonstrated without backend services.
+React 19 frontend for Northbeam's lead-management and sales-automation CRM. Production CRM data is loaded and mutated exclusively through the authenticated `Backend/` API. Supabase JS is used only for browser authentication and session management.
 
-## Current scope
+## Architecture
 
-- React 19 and TypeScript
-- TanStack Router file-based routing (client-side SPA, no SSR)
-- Tailwind CSS and Radix UI primitives
-- Domain-focused in-memory stores backed by mock fixtures
-- Static `dist/` build served by Nginx in production
-- Unit and screen smoke tests with Vitest and React Testing Library
-- Multi-stage Docker image running as a non-root user
+- TanStack Router provides the client-side routes.
+- TanStack Query owns all backend server state, cache keys, mutation state, and invalidation.
+- `src/lib/backend-client.ts` is the typed HTTP boundary and attaches the current Supabase access token.
+- `src/store/server-hooks.ts` exposes domain hooks consumed by the existing screens.
+- `src/types` contains backend-authoritative lowercase domain contracts.
+- `src/lib/labels.ts` and the date helpers keep presentation labels and Asia/Kolkata display concerns out of the API contracts.
+- Missing configuration and backend failures render explicit error states; there is no demo-data fallback.
 
-The current implementation does not connect to Supabase, n8n, authentication, or any external communication provider. Mock state resets when the application reloads.
+## Required configuration
 
-## Project structure
+Copy `.env.example` to `.env.local` and set all three browser-safe values:
 
 ```text
-src/
-  app/                 Application shell and global UI contexts
-  components/
-    common/            Shared product components
-    ui/                Reusable UI primitives
-  features/            Product screens grouped by business domain
-  lib/                 Formatting, dates, telemetry and runtime helpers
-  mocks/seed/          Deterministic mock records, split by domain
-  routes/              Thin TanStack route definitions and metadata
-  store/               Stable domain hooks and in-memory implementations
-  types/               Backend-independent CRM domain contracts
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
+VITE_API_BASE_URL=http://localhost:8787
 ```
 
-The screens consume focused hooks exported from `src/store`. Future backend work should preserve those hook contracts and replace the mock-backed implementations with query and mutation adapters. Supabase-generated row types should be mapped into the domain contracts in `src/types` instead of being imported directly by UI components.
+Never place the Supabase service-role key or backend service credentials in the frontend environment.
 
-## Requirements
+## Development
 
-- Node.js 22 or newer
-- npm 10 or newer
-- Docker with Docker Compose for containerized operation
-
-## Local development
+Node.js 22 and npm 10 or newer are required.
 
 ```bash
 npm ci
@@ -50,12 +38,6 @@ The development server listens on `http://localhost:8080`.
 ## Quality checks
 
 ```bash
-npm run check
-```
-
-The combined check runs formatting validation, linting, strict TypeScript checks, the test suite, and a production build. Individual commands are also available:
-
-```bash
 npm run format:check
 npm run lint
 npm run typecheck
@@ -63,41 +45,8 @@ npm run test:run
 npm run build
 ```
 
-## Production runtime
+The test suite uses an explicit fetch harness for API operations, presentation-helper tests, query-invalidation coverage, and route smoke tests for zero-record states. A real authenticated persistence flow requires configured Supabase and backend environments.
 
-Build the static bundle and preview it locally:
+## Production
 
-```bash
-npm run build
-npm run preview
-```
-
-`npm run build` produces a `dist/` directory of static assets — no Node server is required to run the built app.
-
-## Docker
-
-```bash
-docker build -t northbeam-crm-frontend .
-docker run --rm -p 8080:8080 northbeam-crm-frontend
-```
-
-The application is available at `http://localhost:8080`.
-
-The image is a multi-stage build: a Node.js 22 stage runs `npm ci && npm run build`, and the runtime stage copies only the built `dist/` output into a non-root Nginx image (`nginxinc/nginx-unprivileged`), which serves it as static files with SPA fallback routing (`nginx.conf`) and an HTTP health check.
-
-## Routes
-
-| URL                                  | Screen              |
-| ------------------------------------ | ------------------- |
-| `/`                                  | Dashboard           |
-| `/leads`                             | Lead list           |
-| `/leads/:leadId`                     | Lead detail         |
-| `/tasks`                             | Tasks               |
-| `/meetings`                          | Meetings            |
-| `/proposals`                         | Proposals           |
-| `/automations`                       | Workflows           |
-| `/automations/templates`             | Message templates   |
-| `/automations/runs`                  | Workflow executions |
-| `/automations/workflows/:workflowId` | Workflow builder    |
-
-TanStack generates `src/routeTree.gen.ts`; do not edit that file manually.
+`npm run build` writes the static SPA to `dist/`. The backend URL and Supabase public configuration are injected at build time.

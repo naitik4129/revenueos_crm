@@ -28,7 +28,7 @@ const createSchema = z.object({
   leadId: z.string().uuid(),
   ownerId: z.string().uuid().optional(),
   title: z.string().min(1),
-  at: z.string().min(1),
+  at: z.string().datetime({ offset: true }),
   durationMin: z.number().int().positive().optional(),
   url: z.string().optional(),
 });
@@ -44,7 +44,7 @@ meetingsRouter.post(
 
 const updateSchema = z.object({
   title: z.string().min(1).optional(),
-  at: z.string().optional(),
+  at: z.string().datetime({ offset: true }).optional(),
   durationMin: z.number().int().positive().optional(),
   url: z.string().optional(),
   status: z.enum(MEETING_STATUSES).optional(),

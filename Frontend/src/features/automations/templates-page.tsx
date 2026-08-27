@@ -24,11 +24,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
-import { useAutomations } from "@/store";
+import { messageFromError, useAutomations } from "@/store";
 import type { Template, TemplateType } from "@/types";
+import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 
 export function TemplatesPage() {
-  const { templates, addTemplate, updateTemplate } = useAutomations();
+  const { templates, addTemplate, updateTemplate, isLoading, error, isPending } = useAutomations();
   const [editing, setEditing] = useState<Template | null>(null);
   const [creating, setCreating] = useState(false);
 
@@ -46,39 +47,49 @@ export function TemplatesPage() {
       />
 
       <div className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-3">
-        {templates.map((t) => (
-          <Card key={t.id} className="flex flex-col">
-            <CardHeader className="pb-2">
-              <div className="flex items-start justify-between gap-2">
-                <CardTitle className="text-sm">{t.name}</CardTitle>
-                <StatusBadge value={t.type} tone={t.type === "Email" ? "info" : "success"} />
-              </div>
-            </CardHeader>
-            <CardContent className="flex flex-1 flex-col gap-3">
-              {t.subject && <div className="text-xs font-medium">{t.subject}</div>}
-              <p className="line-clamp-4 whitespace-pre-line text-xs text-muted-foreground">
-                {t.body}
-              </p>
-              <div className="mt-auto flex items-center justify-between pt-1">
-                <div className="flex items-center gap-2">
-                  <Switch
-                    checked={t.active}
-                    onCheckedChange={(v) => {
-                      updateTemplate(t.id, { active: v });
-                      toast.success(v ? "Template active" : "Template disabled");
-                    }}
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    {t.active ? "Active" : "Disabled"}
-                  </span>
-                </div>
-                <Button size="sm" variant="outline" onClick={() => setEditing(t)}>
-                  Edit
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+        {isLoading ? (
+          <LoadingBlock label="Loading templates…" />
+        ) : error ? (
+          <ErrorBlock error={error} />
+        ) : (
+          <>
+            {templates.map((t) => (
+              <Card key={t.id} className="flex flex-col">
+                <CardHeader className="pb-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <CardTitle className="text-sm">{t.name}</CardTitle>
+                    <StatusBadge value={t.type} tone={t.type === "email" ? "info" : "success"} />
+                  </div>
+                </CardHeader>
+                <CardContent className="flex flex-1 flex-col gap-3">
+                  {t.subject && <div className="text-xs font-medium">{t.subject}</div>}
+                  <p className="line-clamp-4 whitespace-pre-line text-xs text-muted-foreground">
+                    {t.body}
+                  </p>
+                  <div className="mt-auto flex items-center justify-between pt-1">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={t.active}
+                        disabled={isPending}
+                        onCheckedChange={(v) => {
+                          void updateTemplate(t.id, { active: v })
+                            .then(() => toast.success(v ? "Template active" : "Template disabled"))
+                            .catch((failure) => toast.error(messageFromError(failure)));
+                        }}
+                      />
+                      <span className="text-xs text-muted-foreground">
+                        {t.active ? "Active" : "Disabled"}
+                      </span>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => setEditing(t)}>
+                      Edit
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </>
+        )}
       </div>
 
       <TemplateDialog
@@ -92,11 +103,13 @@ export function TemplatesPage() {
         }}
         onSave={(vals) => {
           if (editing) {
-            updateTemplate(editing.id, vals);
-            toast.success("Template updated");
+            void updateTemplate(editing.id, vals)
+              .then(() => toast.success("Template updated"))
+              .catch((failure) => toast.error(messageFromError(failure)));
           } else {
-            addTemplate({ ...vals, active: true });
-            toast.success("Template created");
+            void addTemplate(vals)
+              .then(() => toast.success("Template created"))
+              .catch((failure) => toast.error(messageFromError(failure)));
           }
         }}
       />
@@ -116,7 +129,7 @@ function TemplateDialog({
   onSave: (v: { name: string; type: TemplateType; subject: string; body: string }) => void;
 }) {
   const [name, setName] = useState("");
-  const [type, setType] = useState<TemplateType>("Email");
+  const [type, setType] = useState<TemplateType>("email");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
@@ -125,7 +138,7 @@ function TemplateDialog({
   if (open && loadedFor !== key) {
     setLoadedFor(key);
     setName(template?.name ?? "");
-    setType(template?.type ?? "Email");
+    setType(template?.type ?? "email");
     setSubject(template?.subject ?? "");
     setBody(template?.body ?? "");
   }
@@ -150,13 +163,13 @@ function TemplateDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Email">Email</SelectItem>
-                  <SelectItem value="WhatsApp">WhatsApp</SelectItem>
+                  <SelectItem value="email">Email</SelectItem>
+                  <SelectItem value="whatsapp">WhatsApp</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
-          {type === "Email" && (
+          {type === "email" && (
             <div>
               <Label className="mb-1.5 block text-xs">Subject</Label>
               <Input value={subject} onChange={(e) => setSubject(e.target.value)} />

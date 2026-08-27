@@ -22,86 +22,146 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
+import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { fmtDateTime, isToday, relDay } from "@/lib/format";
-import { addDays } from "@/lib/dates";
-import { useLeads, useMeetings, useSession } from "@/store";
-import { MEETING_OUTCOMES, type MeetingOutcome } from "@/types";
+import { dateInputValue, toIsoFromIst } from "@/lib/dates";
+import { label } from "@/lib/labels";
+import { messageFromError, useLeads, useMeetings, useSession } from "@/store";
+import { MEETING_OUTCOMES, type Meeting, type MeetingOutcome, type MeetingStatus } from "@/types";
 
 export function MeetingsPage() {
-  const { meetings, addMeeting, updateMeeting } = useMeetings();
-  const { leads, updateLead } = useLeads();
-  const { userName, currentUser } = useSession();
+  const store = useMeetings();
+  const { leads } = useLeads();
+  const { userName } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<Meeting | null>(null);
   const [outcomeFor, setOutcomeFor] = useState<string | null>(null);
-
-  const sorted = meetings.slice().sort((a, b) => (a.at < b.at ? -1 : 1));
-  const today = sorted.filter((m) => isToday(m.at));
+  const sorted = store.meetings.slice().sort((a, b) => a.at.localeCompare(b.at));
+  const today = sorted.filter((meeting) => isToday(meeting.at));
+  const mutate = async (work: () => Promise<unknown>, success: string) => {
+    try {
+      await work();
+      toast.success(success);
+    } catch (error) {
+      toast.error(messageFromError(error));
+    }
+  };
+  const setStatus = (meeting: Meeting, status: MeetingStatus) =>
+    void mutate(() => store.updateMeeting(meeting.id, { status }), `Meeting ${label(status)}`);
 
   return (
     <div className="pb-10">
       <PageHeader
         title="Meetings"
-        description="Every meeting booked from the CRM, with the outcome that drives the next stage."
+        description="Every meeting booked from the CRM, with backend-owned outcome routing."
         actions={
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             Schedule meeting
           </Button>
         }
       />
-
       <div className="grid gap-4 p-6 lg:grid-cols-[1fr_300px]">
-        <Card className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-sm">
-              <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
-                <tr>
-                  {["Meeting", "Lead", "When", "Owner", "Status", "Outcome", ""].map((h, i) => (
-                    <th key={i} className="px-3 py-2 font-medium">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((m) => {
-                  const lead = leads.find((l) => l.id === m.leadId);
-                  return (
-                    <tr key={m.id} className="border-t hover:bg-accent/40">
-                      <td className="px-3 py-2">{m.title}</td>
-                      <td className="px-3 py-2 text-xs">
-                        {lead && (
-                          <Link
-                            to="/leads/$leadId"
-                            params={{ leadId: lead.id }}
-                            className="hover:underline"
+        {store.isLoading ? (
+          <LoadingBlock label="Loading meetings…" />
+        ) : store.error ? (
+          <ErrorBlock error={store.error} />
+        ) : (
+          <Card className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[980px] text-sm">
+                <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
+                  <tr>
+                    {["Meeting", "Lead", "When", "Owner", "Status", "Outcome", ""].map(
+                      (heading) => (
+                        <th key={heading} className="px-3 py-2 font-medium">
+                          {heading}
+                        </th>
+                      ),
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map((meeting) => {
+                    const lead = leads.find((item) => item.id === meeting.leadId);
+                    return (
+                      <tr key={meeting.id} className="border-t hover:bg-accent/40">
+                        <td className="px-3 py-2">{meeting.title}</td>
+                        <td className="px-3 py-2 text-xs">
+                          {lead && (
+                            <Link
+                              to="/leads/$leadId"
+                              params={{ leadId: lead.id }}
+                              className="hover:underline"
+                            >
+                              {lead.firstName} {lead.lastName} · {lead.company}
+                            </Link>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
+                          {fmtDateTime(meeting.at)}
+                        </td>
+                        <td className="px-3 py-2 text-xs">
+                          {meeting.ownerName ?? userName(meeting.ownerId)}
+                        </td>
+                        <td className="px-3 py-2">
+                          <Select
+                            value={meeting.status}
+                            disabled={meeting.status === "completed" || store.isPending}
+                            onValueChange={(value) => setStatus(meeting, value as MeetingStatus)}
                           >
-                            {lead.firstName} {lead.lastName} · {lead.company}
-                          </Link>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
-                        {fmtDateTime(m.at)}
-                      </td>
-                      <td className="px-3 py-2 text-xs">{userName(m.ownerId)}</td>
-                      <td className="px-3 py-2">
-                        <StatusBadge value={m.status} />
-                      </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">
-                        {m.outcome ?? "—"}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <Button size="sm" variant="ghost" onClick={() => setOutcomeFor(m.id)}>
-                          Record outcome
-                        </Button>
+                            <SelectTrigger className="h-8 w-36">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {["scheduled", "confirmed", "cancelled", "no_show"].map((value) => (
+                                <SelectItem key={value} value={value}>
+                                  {label(value)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                          {label(meeting.outcome)}
+                        </td>
+                        <td className="space-x-1 px-3 py-2 text-right">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={meeting.status === "completed"}
+                            onClick={() => setEditing(meeting)}
+                          >
+                            Reschedule
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={
+                              meeting.status === "completed" || meeting.status === "cancelled"
+                            }
+                            onClick={() => setOutcomeFor(meeting.id)}
+                          >
+                            Record outcome
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {sorted.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={7}
+                        className="px-3 py-10 text-center text-sm text-muted-foreground"
+                      >
+                        No meetings.
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Today</CardTitle>
@@ -110,129 +170,120 @@ export function MeetingsPage() {
             {today.length === 0 && (
               <p className="text-sm text-muted-foreground">No meetings today.</p>
             )}
-            {today.map((m) => (
-              <div key={m.id} className="rounded-md border px-3 py-2">
-                <div className="text-sm font-medium">{m.title}</div>
-                <div className="text-xs text-muted-foreground">{relDay(m.at)}</div>
+            {today.map((meeting) => (
+              <div key={meeting.id} className="rounded-md border px-3 py-2">
+                <div className="text-sm font-medium">{meeting.title}</div>
+                <div className="text-xs text-muted-foreground">{relDay(meeting.at)}</div>
+                <StatusBadge value={meeting.status} />
               </div>
             ))}
           </CardContent>
         </Card>
       </div>
-
-      <ScheduleDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        onSave={(v) => {
-          addMeeting({
-            leadId: v.leadId,
-            ownerId: currentUser.id,
-            title: v.title,
-            at: `${v.date}T${v.time}:00`,
-            durationMin: Number(v.duration),
-            url: "https://meet.northbeam.io/room",
-            status: "Scheduled",
-          });
-          updateLead(v.leadId, {
-            stage: "Meeting Scheduled",
-            nextAction: {
-              type: "Follow-up",
-              title: "Prepare for the meeting",
-              dueAt: `${v.date}T09:00:00`,
-              ownerId: currentUser.id,
-            },
-          });
-          toast.success("Meeting scheduled");
+      <MeetingDialog
+        open={createOpen || Boolean(editing)}
+        meeting={editing}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCreateOpen(false);
+            setEditing(null);
+          }
         }}
+        onSave={(value) =>
+          void mutate(
+            () =>
+              editing
+                ? store.updateMeeting(editing.id, { ...value, status: "rescheduled" })
+                : store.addMeeting(value),
+            editing ? "Meeting rescheduled" : "Meeting scheduled",
+          )
+        }
       />
-
       <OutcomeDialog
-        open={!!outcomeFor}
-        onOpenChange={(v) => !v && setOutcomeFor(null)}
+        open={Boolean(outcomeFor)}
+        onOpenChange={(open) => {
+          if (!open) setOutcomeFor(null);
+        }}
         onSave={(outcome, notes) => {
-          const m = meetings.find((x) => x.id === outcomeFor);
-          if (!m) return;
-          updateMeeting(m.id, { status: "Completed", outcome, notes });
-          if (outcome === "Proposal Required")
-            updateLead(m.leadId, {
-              stage: "Proposal Preparation",
-              nextAction: {
-                type: "Follow-up",
-                title: "Prepare and upload proposal",
-                dueAt: addDays(2),
-                ownerId: m.ownerId,
-              },
-            });
-          if (outcome === "Not Interested")
-            updateLead(m.leadId, {
-              stage: "Long-Term Nurture",
-              nextAction: {
-                type: "Follow-up",
-                title: "Long-term re-engagement",
-                dueAt: addDays(45),
-                ownerId: m.ownerId,
-              },
-            });
-          if (outcome === "Follow-up Required" || outcome === "Second Meeting")
-            updateLead(m.leadId, {
-              stage: "Meeting Scheduling",
-              nextAction: {
-                type: "Schedule Meeting",
-                title:
-                  outcome === "Second Meeting"
-                    ? "Book the second meeting"
-                    : "Follow up after meeting",
-                dueAt: addDays(3),
-                ownerId: m.ownerId,
-              },
-            });
-          setOutcomeFor(null);
-          toast.success("Outcome recorded");
+          if (!outcomeFor) return;
+          void mutate(async () => {
+            await store.recordOutcome(outcomeFor, outcome, notes);
+            setOutcomeFor(null);
+          }, "Outcome recorded");
         }}
       />
     </div>
   );
 }
 
-function ScheduleDialog({
+function MeetingDialog({
   open,
+  meeting,
   onOpenChange,
   onSave,
 }: {
   open: boolean;
-  onOpenChange: (v: boolean) => void;
-  onSave: (v: {
+  meeting: Meeting | null;
+  onOpenChange: (value: boolean) => void;
+  onSave: (value: {
     leadId: string;
+    ownerId?: string | undefined;
     title: string;
-    date: string;
-    time: string;
-    duration: string;
+    at: string;
+    durationMin: number;
+    url?: string | undefined;
   }) => void;
 }) {
   const { leads } = useLeads();
-  const [leadId, setLeadId] = useState(leads[0]?.id ?? "");
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const [leadId, setLeadId] = useState("");
   const [title, setTitle] = useState("Discovery call");
-  const [date, setDate] = useState(addDays(1).slice(0, 10));
+  const [date, setDate] = useState(dateInputValue(1));
   const [time, setTime] = useState("11:00");
   const [duration, setDuration] = useState("30");
-
+  const [url, setUrl] = useState("");
+  const key = meeting?.id ?? "new";
+  if (open && loadedFor !== key) {
+    setLoadedFor(key);
+    setLeadId(meeting?.leadId ?? leads[0]?.id ?? "");
+    setTitle(meeting?.title ?? "Discovery call");
+    const at = meeting ? new Date(meeting.at) : null;
+    setDate(
+      at
+        ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(at)
+        : dateInputValue(1),
+    );
+    setTime(
+      at
+        ? new Intl.DateTimeFormat("en-GB", {
+            timeZone: "Asia/Kolkata",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          }).format(at)
+        : "11:00",
+    );
+    setDuration(String(meeting?.durationMin ?? 30));
+    setUrl(meeting?.url ?? "");
+  }
+  if (!open && loadedFor !== null) setLoadedFor(null);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Schedule meeting</DialogTitle>
+          <DialogTitle>{meeting ? "Reschedule meeting" : "Schedule meeting"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <div>
             <Label className="mb-1.5 block text-xs">Lead</Label>
-            <Select value={leadId} onValueChange={setLeadId}>
+            <Select value={leadId} disabled={Boolean(meeting)} onValueChange={setLeadId}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {leads.map((l) => (
-                  <SelectItem key={l.id} value={l.id}>
-                    {l.firstName} {l.lastName} · {l.company}
+                {leads.map((lead) => (
+                  <SelectItem key={lead.id} value={lead.id}>
+                    {lead.firstName} {lead.lastName} · {lead.company}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -240,21 +291,30 @@ function ScheduleDialog({
           </div>
           <div>
             <Label className="mb-1.5 block text-xs">Title</Label>
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+            <Input value={title} onChange={(event) => setTitle(event.target.value)} />
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div>
               <Label className="mb-1.5 block text-xs">Date</Label>
-              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
             </div>
             <div>
               <Label className="mb-1.5 block text-xs">Time</Label>
-              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+              <Input type="time" value={time} onChange={(event) => setTime(event.target.value)} />
             </div>
             <div>
               <Label className="mb-1.5 block text-xs">Minutes</Label>
-              <Input value={duration} onChange={(e) => setDuration(e.target.value)} />
+              <Input
+                type="number"
+                min={1}
+                value={duration}
+                onChange={(event) => setDuration(event.target.value)}
+              />
             </div>
+          </div>
+          <div>
+            <Label className="mb-1.5 block text-xs">Meeting URL</Label>
+            <Input value={url} onChange={(event) => setUrl(event.target.value)} />
           </div>
         </div>
         <DialogFooter>
@@ -264,11 +324,17 @@ function ScheduleDialog({
           <Button
             disabled={!leadId || !title.trim()}
             onClick={() => {
-              onSave({ leadId, title: title.trim(), date, time, duration });
+              onSave({
+                leadId,
+                title: title.trim(),
+                at: toIsoFromIst(date, `${time}:00`),
+                durationMin: Number(duration),
+                url: url || undefined,
+              });
               onOpenChange(false);
             }}
           >
-            Schedule
+            {meeting ? "Reschedule" : "Schedule"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -282,10 +348,10 @@ function OutcomeDialog({
   onSave,
 }: {
   open: boolean;
-  onOpenChange: (v: boolean) => void;
+  onOpenChange: (value: boolean) => void;
   onSave: (outcome: MeetingOutcome, notes: string) => void;
 }) {
-  const [outcome, setOutcome] = useState<MeetingOutcome>("Proposal Required");
+  const [outcome, setOutcome] = useState<MeetingOutcome>("proposal_required");
   const [notes, setNotes] = useState("");
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -296,14 +362,14 @@ function OutcomeDialog({
         <div className="space-y-3">
           <div>
             <Label className="mb-1.5 block text-xs">Outcome</Label>
-            <Select value={outcome} onValueChange={(v) => setOutcome(v as MeetingOutcome)}>
+            <Select value={outcome} onValueChange={(value) => setOutcome(value as MeetingOutcome)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {MEETING_OUTCOMES.map((o) => (
-                  <SelectItem key={o} value={o}>
-                    {o}
+                {MEETING_OUTCOMES.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {label(value)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -311,7 +377,7 @@ function OutcomeDialog({
           </div>
           <div>
             <Label className="mb-1.5 block text-xs">Notes</Label>
-            <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <Textarea rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} />
           </div>
         </div>
         <DialogFooter>

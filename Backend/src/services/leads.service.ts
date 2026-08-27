@@ -574,3 +574,25 @@ export async function listContactability(db: Queryable, leadId: string) {
   );
   return result.rows.map((r) => ({ channel: r.channel, status: r.status, reason: r.reason ?? undefined, updatedAt: r.updated_at.toISOString() }));
 }
+
+export async function logManualCommunication(
+  db: Queryable,
+  actor: Actor,
+  leadId: string,
+  input: { channel: "email" | "whatsapp"; detail?: string },
+) {
+  const lead = await getLeadRowOr404(db, leadId);
+  if (lead.lifecycle_state === "do_not_contact") {
+    throw new ConflictError("This lead is Do Not Contact.");
+  }
+  const title = input.channel === "email" ? "Email Sent" : "WhatsApp Sent";
+  await addTimelineEvent(db, {
+    leadId,
+    kind: input.channel,
+    title,
+    detail: input.detail?.trim() || `Manual ${input.channel} from lead record`,
+    ...actorEvent(actor),
+  });
+  await db.query(`update public.leads set last_activity_at = now() where id = $1`, [leadId]);
+  return { channel: input.channel, title };
+}

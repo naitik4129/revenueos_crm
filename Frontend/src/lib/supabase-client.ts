@@ -1,16 +1,20 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-// Supabase auth is an additive, opt-in layer on top of the existing mock
-// app: until VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY are configured, the
-// app behaves exactly as it did before (no login wall, pure mock data) —
-// see routes/__root.tsx's AuthGate. This lets the migration land without
-// breaking the out-of-the-box mock experience for anyone who hasn't set up
-// a Supabase project yet.
 const url = import.meta.env["VITE_SUPABASE_URL"] as string | undefined;
 const anonKey = import.meta.env["VITE_SUPABASE_ANON_KEY"] as string | undefined;
+const apiBaseUrl = import.meta.env["VITE_API_BASE_URL"] as string | undefined;
 
-export const isSupabaseConfigured = Boolean(url && anonKey);
+const missing = [
+  !url && "VITE_SUPABASE_URL",
+  !anonKey && "VITE_SUPABASE_ANON_KEY",
+  !apiBaseUrl && "VITE_API_BASE_URL",
+].filter(Boolean) as string[];
 
-export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(url!, anonKey!, { auth: { persistSession: true, autoRefreshToken: true } })
+export const configurationError = missing.length
+  ? `Missing frontend configuration: ${missing.join(", ")}.`
   : null;
+export const backendBaseUrl = apiBaseUrl?.replace(/\/$/, "") ?? null;
+export const supabase: SupabaseClient | null =
+  url && anonKey
+    ? createClient(url, anonKey, { auth: { persistSession: true, autoRefreshToken: true } })
+    : null;

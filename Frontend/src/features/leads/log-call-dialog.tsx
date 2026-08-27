@@ -20,45 +20,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { addDays, NOW } from "@/lib/dates";
-import { useLeads, useSession, useTasks, useTimeline } from "@/store";
+import { dateInputValue, toIsoFromIst } from "@/lib/dates";
+import { label } from "@/lib/labels";
+import { messageFromError, useLeads } from "@/store";
 import {
-  CALL_OUTCOMES,
-  NOT_CONNECTED_REASONS,
-  type CallOutcome,
-  type PipelineStage,
-  type TaskType,
+  CALL_CONNECTED_OUTCOMES,
+  CALL_NOT_CONNECTED_REASONS,
+  type CallConnectedOutcome,
+  type CallNotConnectedReason,
 } from "@/types";
-
-const OUTCOME_ROUTING: Record<
-  CallOutcome,
-  {
-    stage?: PipelineStage;
-    automation?: "Active" | "Manual";
-    task?: { type: TaskType; title: string; days: number };
-  }
-> = {
-  Positive: {
-    stage: "Meeting Scheduling",
-    automation: "Manual",
-    task: { type: "Schedule Meeting", title: "Schedule discovery meeting", days: 1 },
-  },
-  Maybe: {
-    stage: "Maybe Nurture",
-    automation: "Active",
-    task: { type: "Follow-up", title: "Follow up after nurture email", days: 7 },
-  },
-  Negative: {
-    stage: "Negative Nurture",
-    automation: "Active",
-    task: { type: "Follow-up", title: "Long-term re-engagement check", days: 30 },
-  },
-  "Callback Requested": {
-    automation: "Manual",
-    task: { type: "Call", title: "Callback requested by lead", days: 1 },
-  },
-  "Do Not Contact": {},
-};
 
 export function LogCallDialog({
   leadId,
@@ -69,113 +39,54 @@ export function LogCallDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) {
-  const { getLead, updateLead, setAutomation, markDnc } = useLeads();
-  const { addTask } = useTasks();
-  const { addTimeline } = useTimeline();
-  const { currentUser } = useSession();
+  const { getLead, logCall, isPending } = useLeads();
   const lead = getLead(leadId);
-
   const [connected, setConnected] = useState<boolean | null>(null);
-  const [reason, setReason] = useState<string>(NOT_CONNECTED_REASONS[0]);
-  const [outcome, setOutcome] = useState<CallOutcome | null>(null);
+  const [reason, setReason] = useState<CallNotConnectedReason>("no_answer");
+  const [outcome, setOutcome] = useState<CallConnectedOutcome | null>(null);
   const [notes, setNotes] = useState("");
-  const [callbackAt, setCallbackAt] = useState(addDays(1).slice(0, 10));
-
+  const [callbackAt, setCallbackAt] = useState(dateInputValue(1));
   const reset = () => {
     setConnected(null);
     setOutcome(null);
     setNotes("");
+    setReason("no_answer");
+    setCallbackAt(dateInputValue(1));
   };
-
   if (!lead) return null;
+  const canSave =
+    connected === false ||
+    (connected === true &&
+      outcome !== null &&
+      (outcome !== "callback_requested" || Boolean(callbackAt)));
 
-  const canSave = connected === false || (connected === true && outcome !== null);
-
-  const save = () => {
-    const now = NOW;
-
-    if (connected === false) {
-      addTimeline({
-        leadId,
-        at: now,
-        kind: "call",
-        title: "Call Not Connected",
-        actor: currentUser.name,
-        source: "Manual",
-        detail: `${reason}${notes ? ` — ${notes}` : ""}`,
+  const save = async () => {
+    if (connected === null) return;
+    try {
+      await logCall(leadId, {
+        connected,
+        ...(connected
+          ? { connectedOutcome: outcome ?? undefined }
+          : { notConnectedReason: reason }),
+        notes: notes.trim() || undefined,
+        ...(connected && outcome === "callback_requested"
+          ? { callbackDueAt: toIsoFromIst(callbackAt) }
+          : {}),
       });
-      updateLead(leadId, {
-        stage: "Not Connected Nurture",
-        nextAction: {
-          type: "Call",
-          title: "Retry call after nurture touch",
-          dueAt: addDays(2),
-          ownerId: lead.ownerId,
-        },
-      });
-      setAutomation(leadId, "Active", "Enrolled in Not Connected Nurture");
-      toast.success("Call logged — lead enrolled in Not Connected Nurture");
+      toast.success(connected ? `Call logged — ${label(outcome)}` : "Call logged — Not Connected");
       onOpenChange(false);
       reset();
-      return;
+    } catch (error) {
+      toast.error(messageFromError(error));
     }
-
-    const o = outcome!;
-    addTimeline({
-      leadId,
-      at: now,
-      kind: "call",
-      title: `Call Connected — ${o}`,
-      actor: currentUser.name,
-      source: "Manual",
-      detail: notes || undefined,
-    });
-
-    if (o === "Do Not Contact") {
-      markDnc(leadId, notes || "Requested on call");
-      toast.success("Lead marked Do Not Contact — automation stopped");
-      onOpenChange(false);
-      reset();
-      return;
-    }
-
-    const routing = OUTCOME_ROUTING[o];
-    const dueAt =
-      o === "Callback Requested" ? `${callbackAt}T10:00:00` : addDays(routing.task?.days ?? 1);
-
-    if (routing.task) {
-      addTask({
-        leadId,
-        ownerId: lead.ownerId,
-        type: routing.task.type,
-        title: routing.task.title,
-        dueAt,
-        done: false,
-        origin: "Manual",
-      });
-      updateLead(leadId, {
-        ...(routing.stage ? { stage: routing.stage } : {}),
-        nextAction: {
-          type: routing.task.type,
-          title: routing.task.title,
-          dueAt,
-          ownerId: lead.ownerId,
-        },
-      });
-    }
-    if (routing.automation) setAutomation(leadId, routing.automation, `Call outcome: ${o}`);
-
-    toast.success(`Call logged — ${o}`);
-    onOpenChange(false);
-    reset();
   };
 
   return (
     <Dialog
       open={open}
-      onOpenChange={(v) => {
-        onOpenChange(v);
-        if (!v) reset();
+      onOpenChange={(value) => {
+        onOpenChange(value);
+        if (!value) reset();
       }}
     >
       <DialogContent className="sm:max-w-lg">
@@ -184,10 +95,10 @@ export function LogCallDialog({
             Log call — {lead.firstName} {lead.lastName}
           </DialogTitle>
           <DialogDescription>
-            The outcome decides the next stage, the next action and which nurture workflow runs.
+            The backend records the call and applies the resulting lead, task, and automation
+            changes atomically.
           </DialogDescription>
         </DialogHeader>
-
         <div className="space-y-4">
           <div>
             <Label className="mb-2 block text-xs">Did the call connect?</Label>
@@ -207,63 +118,66 @@ export function LogCallDialog({
               />
             </div>
           </div>
-
           {connected === false && (
             <div>
               <Label className="mb-1.5 block text-xs">Reason</Label>
-              <Select value={reason} onValueChange={setReason}>
+              <Select
+                value={reason}
+                onValueChange={(value) => setReason(value as CallNotConnectedReason)}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {NOT_CONNECTED_REASONS.map((r) => (
-                    <SelectItem key={r} value={r}>
-                      {r}
+                  {CALL_NOT_CONNECTED_REASONS.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {label(value)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <p className="mt-2 text-xs text-muted-foreground">
-                The lead moves to Not Connected Nurture and automation takes over the follow-up
-                touches.
+                The backend decides contactability, nurture enrollment, and the next action.
               </p>
             </div>
           )}
-
           {connected === true && (
             <div>
               <Label className="mb-2 block text-xs">Outcome</Label>
               <div className="flex flex-wrap gap-2">
-                {CALL_OUTCOMES.map((o) => (
-                  <Choice key={o} active={outcome === o} onClick={() => setOutcome(o)} label={o} />
+                {CALL_CONNECTED_OUTCOMES.map((value) => (
+                  <Choice
+                    key={value}
+                    active={outcome === value}
+                    onClick={() => setOutcome(value)}
+                    label={label(value)}
+                  />
                 ))}
               </div>
             </div>
           )}
-
-          {outcome === "Callback Requested" && (
+          {outcome === "callback_requested" && (
             <div>
               <Label className="mb-1.5 block text-xs">Callback date</Label>
               <Input
                 type="date"
+                min={dateInputValue()}
                 value={callbackAt}
-                onChange={(e) => setCallbackAt(e.target.value)}
+                onChange={(event) => setCallbackAt(event.target.value)}
               />
             </div>
           )}
-
           <div>
             <Label className="mb-1.5 block text-xs">Notes</Label>
-            <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <Textarea rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} />
           </div>
         </div>
-
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={!canSave} onClick={save}>
-            Save call
+          <Button disabled={!canSave || isPending} onClick={() => void save()}>
+            {isPending ? "Saving…" : "Save call"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -272,7 +186,7 @@ export function LogCallDialog({
 }
 
 function Choice({
-  label,
+  label: text,
   active,
   onClick,
 }: {
@@ -289,7 +203,7 @@ function Choice({
         active && "border-primary bg-primary/10 font-medium text-primary",
       )}
     >
-      {label}
+      {text}
     </button>
   );
 }

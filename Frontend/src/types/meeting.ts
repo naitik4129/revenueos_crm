@@ -1,37 +1,34 @@
-export type MeetingStatus = "Scheduled" | "Completed" | "Rescheduled" | "Cancelled" | "No-show";
-
-export const MEETING_STATUSES: MeetingStatus[] = [
-  "Scheduled",
-  "Completed",
-  "Rescheduled",
-  "Cancelled",
-  "No-show",
-];
-
-export type MeetingOutcome =
-  | "Proposal Required"
-  | "Follow-up Required"
-  | "Second Meeting"
-  | "Not Interested"
-  | "No Proposal Required";
-
-export const MEETING_OUTCOMES: MeetingOutcome[] = [
-  "Proposal Required",
-  "Follow-up Required",
-  "Second Meeting",
-  "Not Interested",
-  "No Proposal Required",
-];
-
+export const MEETING_STATUSES = [
+  "tentative",
+  "scheduled",
+  "confirmed",
+  "rescheduled",
+  "completed",
+  "cancelled",
+  "no_show",
+  "failed",
+] as const;
+export type MeetingStatus = (typeof MEETING_STATUSES)[number];
+export const MEETING_OUTCOMES = [
+  "proposal_required",
+  "follow_up_required",
+  "second_meeting",
+  "not_interested",
+  "no_proposal_required",
+] as const;
+export type MeetingOutcome = (typeof MEETING_OUTCOMES)[number];
 export interface Meeting {
   id: string;
   leadId: string;
-  ownerId: string;
+  ownerId?: string;
+  ownerName?: string;
   title: string;
   at: string;
   durationMin: number;
-  url: string;
+  url?: string;
   status: MeetingStatus;
-  outcome?: MeetingOutcome | undefined;
-  notes?: string | undefined;
+  outcome?: MeetingOutcome;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
 }

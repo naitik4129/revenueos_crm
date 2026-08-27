@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { label } from "@/lib/labels";
 
 type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "primary" | "muted";
 
@@ -13,49 +14,54 @@ const toneClass: Record<Tone, string> = {
 };
 
 const MAP: Record<string, Tone> = {
-  // pipeline
-  New: "info",
-  "Ready for Call": "info",
-  "Not Connected Nurture": "warning",
-  "Maybe Nurture": "warning",
-  "Negative Nurture": "muted",
-  "Meeting Scheduling": "primary",
-  "Meeting Scheduled": "primary",
-  "Proposal Preparation": "primary",
-  "Proposal Pending": "warning",
-  "Long-Term Nurture": "muted",
-  Won: "success",
-  Lost: "danger",
-  Discarded: "muted",
-  "Do Not Contact": "danger",
-  // automation
-  Active: "success",
-  Paused: "warning",
-  Manual: "info",
-  Stopped: "muted",
-  Inactive: "muted",
-  // runs
-  Running: "primary",
-  Waiting: "info",
-  Completed: "success",
-  Failed: "danger",
-  Cancelled: "muted",
-  // meetings
-  Scheduled: "primary",
-  Rescheduled: "warning",
-  "No-show": "danger",
-  // proposals
-  Draft: "muted",
-  Sent: "primary",
-  Pending: "warning",
-  Accepted: "success",
-  Rejected: "danger",
-  // versions / integrations
-  Published: "success",
-  Previous: "info",
-  Connected: "success",
-  "Not Connected": "muted",
-  Planned: "info",
+  new: "info",
+  ready_for_first_call: "info",
+  contact_attempted: "info",
+  not_connected_nurture: "warning",
+  maybe_nurture: "warning",
+  negative_nurture: "muted",
+  meeting_scheduling: "primary",
+  meeting_scheduled: "primary",
+  meeting_follow_up: "primary",
+  proposal_preparation: "primary",
+  proposal_sent: "primary",
+  proposal_decision_pending: "warning",
+  active: "success",
+  long_term_nurture: "muted",
+  won: "success",
+  lost: "danger",
+  discarded: "muted",
+  do_not_contact: "danger",
+  merged: "muted",
+  paused: "warning",
+  manual: "info",
+  stopped: "muted",
+  running: "primary",
+  waiting: "info",
+  completed: "success",
+  failed: "danger",
+  cancelled: "muted",
+  scheduled: "primary",
+  confirmed: "success",
+  tentative: "warning",
+  rescheduled: "warning",
+  no_show: "danger",
+  draft: "muted",
+  uploaded: "info",
+  ready_to_send: "info",
+  sent: "primary",
+  revision_requested: "warning",
+  revised: "info",
+  accepted: "success",
+  rejected: "danger",
+  withdrawn: "muted",
+  expired: "danger",
+  published: "success",
+  previous: "info",
+  pending: "warning",
+  due: "warning",
+  executing: "primary",
+  skipped: "muted",
 };
 
 export function StatusBadge({
@@ -79,7 +85,7 @@ export function StatusBadge({
       )}
     >
       {dot && <span className="size-1.5 rounded-full bg-current" />}
-      {value}
+      {label(value)}
     </span>
   );
 }

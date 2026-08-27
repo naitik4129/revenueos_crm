@@ -5,7 +5,7 @@ import { requireAuth } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
 import { parseBody, parseQuery } from "../validation/parse.js";
 import { TASK_STATUSES, TASK_TYPES } from "../domain/enums.js";
-import { cancelTask, completeTask, createTask, listTasks, taskToDto } from "../services/tasks.service.js";
+import { cancelTask, completeTask, createTask, listTasks, taskToDto, updateTask } from "../services/tasks.service.js";
 
 export const tasksRouter = Router();
 tasksRouter.use(requireAuth);
@@ -32,7 +32,7 @@ const createSchema = z.object({
   ownerId: z.string().uuid().optional(),
   type: z.enum(TASK_TYPES),
   title: z.string().min(1),
-  dueAt: z.string().min(1),
+  dueAt: z.string().datetime({ offset: true }),
 });
 
 tasksRouter.post(
@@ -41,6 +41,21 @@ tasksRouter.post(
     const input = parseBody(createSchema, req.body);
     const task = await withTransaction((client) => createTask(client, req.actor!, { ...input, origin: "manual" }));
     res.status(201).json(taskToDto(task));
+  }),
+);
+
+const updateSchema = z.object({
+  ownerId: z.string().uuid().optional(),
+  type: z.enum(TASK_TYPES).optional(),
+  title: z.string().min(1).optional(),
+  dueAt: z.string().datetime({ offset: true }).optional(),
+});
+
+tasksRouter.patch(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const patch = parseBody(updateSchema, req.body);
+    res.json(await withTransaction((client) => updateTask(client, req.actor!, req.params.id!, patch)));
   }),
 );
 

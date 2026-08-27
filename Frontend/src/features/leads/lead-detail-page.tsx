@@ -33,11 +33,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
-import { LogCallDialog } from "@/features/leads/log-call-dialog";
-import { addDays, NOW } from "@/lib/dates";
+import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
+import { LogCallDialog } from "./log-call-dialog";
+import { dateInputValue, toIsoFromIst } from "@/lib/dates";
 import { fmtDateTime, isOverdue, money, relDay } from "@/lib/format";
+import { label } from "@/lib/labels";
 import {
+  messageFromError,
   useAutomations,
+  useLead,
   useLeads,
   useMeetings,
   useProposals,
@@ -45,34 +49,51 @@ import {
   useTasks,
   useTimeline,
 } from "@/store";
-import { PIPELINE_STAGES, TASK_TYPES, type PipelineStage, type TaskType } from "@/types";
+import {
+  AUTOMATION_MODES,
+  PIPELINE_STAGES,
+  RESPONSE_STATES,
+  TASK_TYPES,
+  type AutomationMode,
+  type PipelineStage,
+  type ResponseState,
+  type TaskType,
+} from "@/types";
 
 export function LeadDetailPage({ leadId }: { leadId: string }) {
-  const { getLead, updateLead, setAutomation, markDnc, addNote } = useLeads();
-  const { addTask, tasks, toggleTask } = useTasks();
-  const { addTimeline, timeline } = useTimeline();
-  const { userName, users, currentUser } = useSession();
-  const { meetings } = useMeetings();
-  const { proposals } = useProposals();
-  const { workflows, runs } = useAutomations();
-
-  const lead = getLead(leadId);
+  const detail = useLead(leadId);
+  const leadActions = useLeads();
+  const taskStore = useTasks();
+  const { userName, users } = useSession();
+  const meetingStore = useMeetings();
+  const proposalStore = useProposals();
+  const automationStore = useAutomations();
+  const timelineStore = useTimeline(leadId);
+  const lead = detail.lead;
   const [callOpen, setCallOpen] = useState(false);
   const [dncOpen, setDncOpen] = useState(false);
-  const [dncReason, setDncReason] = useState("");
+  const [reactivateOpen, setReactivateOpen] = useState(false);
+  const [reason, setReason] = useState("");
   const [nextOpen, setNextOpen] = useState(false);
   const [note, setNote] = useState("");
 
   const activity = useMemo(
-    () =>
-      timeline
-        .filter((e) => e.leadId === leadId)
-        .slice()
-        .sort((a, b) => (a.at < b.at ? 1 : -1)),
-    [timeline, leadId],
+    () => timelineStore.timeline.slice().sort((a, b) => b.at.localeCompare(a.at)),
+    [timelineStore.timeline],
   );
-
-  if (!lead) {
+  if (detail.isLoading)
+    return (
+      <div className="p-6">
+        <LoadingBlock label="Loading lead…" />
+      </div>
+    );
+  if (detail.error)
+    return (
+      <div className="p-6">
+        <ErrorBlock error={detail.error} />
+      </div>
+    );
+  if (!lead)
     return (
       <div className="p-10 text-center text-sm text-muted-foreground">
         Lead not found.{" "}
@@ -81,34 +102,30 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
         </Link>
       </div>
     );
-  }
 
-  const leadMeetings = meetings.filter((m) => m.leadId === leadId);
-  const leadProposals = proposals.filter((p) => p.leadId === leadId);
-  const leadTasks = tasks.filter((t) => t.leadId === leadId && !t.done);
-  const leadRuns = runs.filter((r) => r.leadId === leadId);
-
-  const completeNextAction = () => {
-    if (!lead.nextAction) return;
-    addTimeline({
-      leadId,
-      at: NOW,
-      kind: "task",
-      title: "Next Action Completed",
-      actor: currentUser.name,
-      source: "Manual",
-      detail: lead.nextAction.title,
-    });
-    updateLead(leadId, { nextAction: null });
-    toast.success("Next action completed — set the following one");
-    setNextOpen(true);
+  const leadMeetings = meetingStore.meetings.filter((item) => item.leadId === leadId);
+  const leadProposals = proposalStore.proposals.filter((item) => item.leadId === leadId);
+  const leadTasks = taskStore.tasks.filter(
+    (item) => item.leadId === leadId && item.status === "open",
+  );
+  const leadRuns = automationStore.runs.filter((item) => item.leadId === leadId);
+  const leadActionsScheduled = automationStore.scheduledActions.filter(
+    (item) => item.leadId === leadId,
+  );
+  const mutate = async (work: () => Promise<unknown>, success: string) => {
+    try {
+      await work();
+      toast.success(success);
+    } catch (error) {
+      toast.error(messageFromError(error));
+    }
   };
 
   return (
     <div className="pb-10">
       <PageHeader
         title={`${lead.firstName} ${lead.lastName}`}
-        description={`${lead.jobTitle || "—"} · ${lead.company} · ${lead.industry}`}
+        description={`${lead.jobTitle || "—"} · ${lead.company} · ${lead.industry || "—"}`}
         actions={
           <>
             <Button asChild size="sm" variant="ghost">
@@ -123,18 +140,12 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
               size="sm"
               variant="outline"
               disabled={lead.doNotContact}
-              onClick={() => {
-                addTimeline({
-                  leadId,
-                  at: NOW,
-                  kind: "email",
-                  title: "Email Sent",
-                  actor: currentUser.name,
-                  source: "Manual",
-                  detail: "Manual email from lead record",
-                });
-                toast.success("Email logged");
-              }}
+              onClick={() =>
+                void mutate(
+                  () => leadActions.logCommunication(leadId, "email"),
+                  "Email activity recorded",
+                )
+              }
             >
               <Mail className="mr-1 size-4" /> Email
             </Button>
@@ -142,18 +153,12 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
               size="sm"
               variant="outline"
               disabled={lead.doNotContact}
-              onClick={() => {
-                addTimeline({
-                  leadId,
-                  at: NOW,
-                  kind: "whatsapp",
-                  title: "WhatsApp Sent",
-                  actor: currentUser.name,
-                  source: "Manual",
-                  detail: "Manual WhatsApp message",
-                });
-                toast.success("WhatsApp message logged");
-              }}
+              onClick={() =>
+                void mutate(
+                  () => leadActions.logCommunication(leadId, "whatsapp"),
+                  "WhatsApp activity recorded",
+                )
+              }
             >
               <MessageSquare className="mr-1 size-4" /> WhatsApp
             </Button>
@@ -181,11 +186,11 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                   <>
                     <div className="text-base font-semibold">{lead.nextAction.title}</div>
                     <div className="text-xs text-muted-foreground">
-                      {lead.nextAction.type} · due{" "}
+                      {label(lead.nextAction.type)} · due{" "}
                       <span className={isOverdue(lead.nextAction.dueAt) ? "text-destructive" : ""}>
                         {relDay(lead.nextAction.dueAt)}
                       </span>{" "}
-                      · {userName(lead.nextAction.ownerId)}
+                      · {lead.nextAction.ownerName ?? userName(lead.nextAction.ownerId)}
                     </div>
                   </>
                 ) : (
@@ -198,7 +203,16 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
               </div>
               <div className="flex gap-2">
                 {lead.nextAction && (
-                  <Button size="sm" variant="outline" onClick={completeNextAction}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      void mutate(
+                        () => taskStore.completeTask(lead.nextAction!.taskId),
+                        "Next action completed",
+                      )
+                    }
+                  >
                     <Check className="mr-1 size-4" /> Complete
                   </Button>
                 )}
@@ -218,7 +232,6 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
               <TabsTrigger value="automation">Automation</TabsTrigger>
               <TabsTrigger value="notes">Notes</TabsTrigger>
             </TabsList>
-
             <TabsContent value="overview" className="mt-4 grid gap-4 md:grid-cols-2">
               <Card>
                 <CardHeader className="pb-2">
@@ -228,8 +241,15 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                   <Row label="Phone" value={lead.phone || "—"} />
                   <Row label="Email" value={lead.email || "—"} />
                   <Row label="Company" value={lead.company} />
-                  <Row label="Industry" value={lead.industry} />
-                  <Row label="Interest" value={lead.serviceInterest} />
+                  <Row label="Industry" value={lead.industry || "—"} />
+                  <Row label="Interest" value={lead.serviceInterest || "—"} />
+                  {detail.contactability.map((item) => (
+                    <Row
+                      key={item.channel}
+                      label={`${label(item.channel)} status`}
+                      value={label(item.status)}
+                    />
+                  ))}
                 </CardContent>
               </Card>
               <Card>
@@ -237,53 +257,44 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                   <CardTitle className="text-sm">Pipeline</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
-                  <div>
-                    <Label className="mb-1.5 block text-xs">Stage</Label>
-                    <Select
-                      value={lead.stage}
-                      onValueChange={(v) => {
-                        updateLead(leadId, { stage: v as PipelineStage });
-                        addTimeline({
-                          leadId,
-                          at: NOW,
-                          kind: "stage",
-                          title: `Stage changed to ${v}`,
-                          actor: currentUser.name,
-                          source: "Manual",
-                        });
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {PIPELINE_STAGES.map((s) => (
-                          <SelectItem key={s} value={s}>
-                            {s}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label className="mb-1.5 block text-xs">Owner</Label>
-                    <Select
-                      value={lead.ownerId}
-                      onValueChange={(v) => updateLead(leadId, { ownerId: v })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {users.map((u) => (
-                          <SelectItem key={u.id} value={u.id}>
-                            {u.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Row label="Source" value={lead.source} />
+                  <SelectField
+                    label="Stage"
+                    value={lead.pipelineStage}
+                    disabled={lead.lifecycleState !== "active"}
+                    options={PIPELINE_STAGES}
+                    onChange={(value) =>
+                      void mutate(
+                        () =>
+                          leadActions.updateLead(leadId, { pipelineStage: value as PipelineStage }),
+                        "Stage updated",
+                      )
+                    }
+                  />
+                  <SelectField
+                    label="Response"
+                    value={lead.responseState}
+                    options={RESPONSE_STATES}
+                    onChange={(value) =>
+                      void mutate(
+                        () =>
+                          leadActions.updateLead(leadId, { responseState: value as ResponseState }),
+                        "Response state updated",
+                      )
+                    }
+                  />
+                  <SelectField
+                    label="Owner"
+                    value={lead.ownerId ?? ""}
+                    options={users.map((user) => user.id)}
+                    optionLabel={(id) => userName(id)}
+                    onChange={(value) =>
+                      void mutate(
+                        () => leadActions.updateLead(leadId, { ownerId: value }),
+                        "Owner updated",
+                      )
+                    }
+                  />
+                  <Row label="Source" value={label(lead.source)} />
                   <Row label="Created" value={fmtDateTime(lead.createdAt)} />
                 </CardContent>
               </Card>
@@ -295,18 +306,24 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                   {leadTasks.length === 0 && (
                     <p className="text-sm text-muted-foreground">No open tasks.</p>
                   )}
-                  {leadTasks.map((t) => (
+                  {leadTasks.map((task) => (
                     <div
-                      key={t.id}
+                      key={task.id}
                       className="flex items-center justify-between rounded-md border px-3 py-2"
                     >
                       <div>
-                        <div className="text-sm">{t.title}</div>
+                        <div className="text-sm">{task.title}</div>
                         <div className="text-xs text-muted-foreground">
-                          {t.type} · {relDay(t.dueAt)} · {t.origin}
+                          {label(task.type)} · {relDay(task.dueAt)} · {label(task.origin)}
                         </div>
                       </div>
-                      <Button size="sm" variant="ghost" onClick={() => toggleTask(t.id)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          void mutate(() => taskStore.completeTask(task.id), "Task completed")
+                        }
+                      >
                         Complete
                       </Button>
                     </div>
@@ -320,24 +337,24 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm">Activity timeline</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-0">
-                  {activity.map((e) => (
-                    <div key={e.id} className="flex gap-3 border-b py-3 last:border-0">
+                <CardContent>
+                  {activity.map((event) => (
+                    <div key={event.id} className="flex gap-3 border-b py-3 last:border-0">
                       <div className="w-32 shrink-0 text-xs text-muted-foreground">
-                        {relDay(e.at)}
+                        {relDay(event.at)}
                       </div>
-                      <div className="min-w-0">
+                      <div>
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-medium">{e.title}</span>
+                          <span className="text-sm font-medium">{event.title}</span>
                           <StatusBadge
-                            value={e.source}
-                            tone={e.source === "Automation" ? "primary" : "muted"}
+                            value={event.source}
+                            tone={event.source === "automation" ? "primary" : "muted"}
                           />
                         </div>
-                        {e.detail && (
-                          <p className="pt-0.5 text-sm text-muted-foreground">{e.detail}</p>
+                        {event.detail && (
+                          <p className="pt-0.5 text-sm text-muted-foreground">{event.detail}</p>
                         )}
-                        <div className="pt-0.5 text-xs text-muted-foreground">{e.actor}</div>
+                        <div className="pt-0.5 text-xs text-muted-foreground">{event.actor}</div>
                       </div>
                     </div>
                   ))}
@@ -349,23 +366,23 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                 </CardContent>
               </Card>
             </TabsContent>
-
             <TabsContent value="meetings" className="mt-4 space-y-3">
-              {leadMeetings.map((m) => (
-                <Card key={m.id}>
-                  <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+              {leadMeetings.map((meeting) => (
+                <Card key={meeting.id}>
+                  <CardContent className="flex items-center justify-between py-4">
                     <div>
-                      <div className="text-sm font-medium">{m.title}</div>
+                      <div className="text-sm font-medium">{meeting.title}</div>
                       <div className="text-xs text-muted-foreground">
-                        {fmtDateTime(m.at)} · {m.durationMin} min · {userName(m.ownerId)}
+                        {fmtDateTime(meeting.at)} · {meeting.durationMin} min ·{" "}
+                        {meeting.ownerName ?? userName(meeting.ownerId)}
                       </div>
-                      {m.outcome && (
+                      {meeting.outcome && (
                         <div className="pt-1 text-xs text-muted-foreground">
-                          Outcome: {m.outcome}
+                          Outcome: {label(meeting.outcome)}
                         </div>
                       )}
                     </div>
-                    <StatusBadge value={m.status} />
+                    <StatusBadge value={meeting.status} />
                   </CardContent>
                 </Card>
               ))}
@@ -382,34 +399,30 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                 </Card>
               )}
             </TabsContent>
-
             <TabsContent value="proposals" className="mt-4 space-y-3">
-              {leadProposals.map((p) => (
-                <Card key={p.id}>
-                  <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+              {leadProposals.map((proposal) => (
+                <Card key={proposal.id}>
+                  <CardContent className="flex items-center justify-between py-4">
                     <div>
-                      <div className="text-sm font-medium">{p.title}</div>
+                      <div className="text-sm font-medium">{proposal.title}</div>
                       <div className="text-xs text-muted-foreground">
-                        {p.fileName} · {p.amount ? money(p.amount) : "No value"} · updated{" "}
-                        {relDay(p.updatedAt)}
+                        {proposal.fileName || "No document"} ·{" "}
+                        {proposal.amount ? money(proposal.amount) : "No value"} · updated{" "}
+                        {relDay(proposal.updatedAt)}
                       </div>
                     </div>
-                    <StatusBadge value={p.status} />
+                    <StatusBadge value={proposal.status} />
                   </CardContent>
                 </Card>
               ))}
               {leadProposals.length === 0 && (
                 <Card>
-                  <CardContent className="flex items-center justify-between py-6">
-                    <p className="text-sm text-muted-foreground">No proposals uploaded.</p>
-                    <Button asChild size="sm" variant="outline">
-                      <Link to="/proposals">Upload proposal</Link>
-                    </Button>
+                  <CardContent className="py-6 text-sm text-muted-foreground">
+                    No proposals uploaded.
                   </CardContent>
                 </Card>
               )}
             </TabsContent>
-
             <TabsContent value="automation" className="mt-4 space-y-4">
               <Card>
                 <CardHeader className="pb-2">
@@ -417,51 +430,70 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="flex items-center gap-2">
-                    <StatusBadge value={lead.automation} dot />
+                    <StatusBadge value={lead.automationMode} dot />
                     <span className="text-xs text-muted-foreground">
-                      Automation runs in n8n and is controlled from here.
+                      Backend-owned automation state.
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {(["Active", "Paused", "Manual", "Stopped"] as const).map((m) => (
+                    {AUTOMATION_MODES.map((mode) => (
                       <Button
-                        key={m}
+                        key={mode}
                         size="sm"
-                        variant={lead.automation === m ? "default" : "outline"}
+                        variant={lead.automationMode === mode ? "default" : "outline"}
                         disabled={lead.doNotContact}
-                        onClick={() => {
-                          setAutomation(leadId, m, "Changed from lead record");
-                          toast.success(`Automation set to ${m}`);
-                        }}
+                        onClick={() =>
+                          void mutate(
+                            () =>
+                              leadActions.setAutomation(
+                                leadId,
+                                mode as AutomationMode,
+                                "Changed from lead record",
+                              ),
+                            `Automation set to ${label(mode)}`,
+                          )
+                        }
                       >
-                        {m}
+                        {label(mode)}
                       </Button>
                     ))}
                   </div>
                 </CardContent>
               </Card>
-
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm">Workflow runs</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
-                  {leadRuns.map((r) => {
-                    const wf = workflows.find((w) => w.id === r.workflowId);
+                  {leadRuns.map((run) => {
+                    const workflow = automationStore.workflows.find(
+                      (item) => item.id === run.workflowId,
+                    );
                     return (
-                      <div key={r.id} className="rounded-md border px-3 py-2">
-                        <div className="flex items-center justify-between gap-2">
+                      <div key={run.id} className="rounded-md border px-3 py-2">
+                        <div className="flex justify-between">
                           <div className="text-sm font-medium">
-                            {wf?.name ?? r.workflowId} · V{r.version}
+                            {workflow?.name ?? run.workflowId} · V{run.version}
                           </div>
-                          <StatusBadge value={r.status} />
+                          <StatusBadge value={run.status} />
                         </div>
                         <div className="pt-0.5 text-xs text-muted-foreground">
-                          Current step: {r.currentStep}
-                          {r.nextRunAt ? ` · next ${relDay(r.nextRunAt)}` : ""}
+                          Current step:{" "}
+                          {run.currentStep
+                            ? workflow?.versions
+                                .find((version) => version.version === run.version)
+                                ?.steps.find((step) => step.id === run.currentStep)?.action
+                              ? label(
+                                  workflow.versions
+                                    .find((version) => version.version === run.version)
+                                    ?.steps.find((step) => step.id === run.currentStep)?.action,
+                                )
+                              : run.currentStep
+                            : "—"}
+                          {run.nextRunAt ? ` · next ${relDay(run.nextRunAt)}` : ""}
                         </div>
-                        {r.lastError && (
-                          <div className="pt-0.5 text-xs text-destructive">{r.lastError}</div>
+                        {run.lastError && (
+                          <div className="text-xs text-destructive">{run.lastError}</div>
                         )}
                       </div>
                     );
@@ -473,43 +505,65 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                   )}
                 </CardContent>
               </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Scheduled actions</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {leadActionsScheduled.map((action) => (
+                    <div
+                      key={action.id}
+                      className="flex items-center justify-between rounded-md border px-3 py-2"
+                    >
+                      <div>
+                        <div className="text-sm">{label(action.actionType)}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {relDay(action.scheduledFor)}
+                          {action.lastError ? ` · ${action.lastError}` : ""}
+                        </div>
+                      </div>
+                      <StatusBadge value={action.status} />
+                    </div>
+                  ))}
+                  {leadActionsScheduled.length === 0 && (
+                    <p className="text-sm text-muted-foreground">No scheduled actions.</p>
+                  )}
+                </CardContent>
+              </Card>
             </TabsContent>
-
             <TabsContent value="notes" className="mt-4 space-y-3">
               <Card>
                 <CardContent className="space-y-2 py-4">
                   <Textarea
                     rows={3}
                     value={note}
-                    onChange={(e) => setNote(e.target.value)}
+                    onChange={(event) => setNote(event.target.value)}
                     placeholder="Add a note…"
                   />
                   <Button
                     size="sm"
-                    disabled={!note.trim()}
-                    onClick={() => {
-                      addNote(leadId, note.trim());
-                      setNote("");
-                      toast.success("Note added");
-                    }}
+                    disabled={!note.trim() || leadActions.isPending}
+                    onClick={() =>
+                      void mutate(async () => {
+                        await leadActions.addNote(leadId, note.trim());
+                        setNote("");
+                      }, "Note added")
+                    }
                   >
                     Add note
                   </Button>
                 </CardContent>
               </Card>
-              {lead.notes
-                .slice()
-                .reverse()
-                .map((n) => (
-                  <Card key={n.id}>
-                    <CardContent className="py-3">
-                      <div className="text-sm">{n.body}</div>
-                      <div className="pt-1 text-xs text-muted-foreground">
-                        {n.author} · {relDay(n.at)}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+              {detail.notes.map((item) => (
+                <Card key={item.id}>
+                  <CardContent className="py-3">
+                    <div className="text-sm">{item.body}</div>
+                    <div className="pt-1 text-xs text-muted-foreground">
+                      {item.author} · {relDay(item.at)}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </TabsContent>
           </Tabs>
         </div>
@@ -519,14 +573,14 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Status</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <Row label="Stage" value={lead.doNotContact ? "Do Not Contact" : lead.stage} badge />
-              <Row label="Automation" value={lead.automation} badge />
-              <Row label="Owner" value={userName(lead.ownerId)} />
-              <Row label="Last activity" value={relDay(lead.lastActivity)} />
+            <CardContent className="space-y-2">
+              <Row label="Lifecycle" value={lead.lifecycleState} badge />
+              <Row label="Stage" value={lead.pipelineStage} badge />
+              <Row label="Automation" value={lead.automationMode} badge />
+              <Row label="Owner" value={lead.ownerName ?? userName(lead.ownerId)} />
+              <Row label="Last activity" value={relDay(lead.lastActivityAt)} />
             </CardContent>
           </Card>
-
           {lead.doNotContact && (
             <Card className="border-destructive/40 bg-destructive/5">
               <CardContent className="py-4 text-sm">
@@ -538,26 +592,78 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                   size="sm"
                   variant="outline"
                   className="mt-3"
-                  onClick={() => {
-                    updateLead(leadId, { doNotContact: false, automation: "Manual" });
-                    toast.success("Suppression removed");
-                  }}
+                  onClick={() => setReactivateOpen(true)}
                 >
                   Remove suppression
                 </Button>
               </CardContent>
             </Card>
           )}
-
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">How this lead flows</CardTitle>
+              <CardTitle className="text-sm">Lifecycle</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-1.5 text-xs text-muted-foreground">
-              <p>UI changes are stored in Supabase and picked up by n8n.</p>
-              <p className="flex items-center gap-1.5">
-                <Bot className="size-3.5" /> Workflow behaviour is edited in Automations, not in
-                n8n.
+            <CardContent className="flex flex-wrap gap-2">
+              {lead.lifecycleState === "active" ? (
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      void mutate(() => leadActions.setLifecycle(leadId, "won"), "Lead marked Won")
+                    }
+                  >
+                    Won
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      void mutate(
+                        () => leadActions.setLifecycle(leadId, "lost"),
+                        "Lead marked Lost",
+                      )
+                    }
+                  >
+                    Lost
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      void mutate(
+                        () => leadActions.setLifecycle(leadId, "discard"),
+                        "Lead discarded",
+                      )
+                    }
+                  >
+                    Discard
+                  </Button>
+                </>
+              ) : (
+                !lead.doNotContact &&
+                lead.lifecycleState !== "merged" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      void mutate(
+                        () => leadActions.setLifecycle(leadId, "reactivate"),
+                        "Lead reactivated",
+                      )
+                    }
+                  >
+                    Reactivate
+                  </Button>
+                )
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="py-4 text-xs text-muted-foreground">
+              <p>CRM data is persisted through the backend.</p>
+              <p className="mt-1 flex items-center gap-1.5">
+                <Bot className="size-3.5" /> Workflow execution remains in n8n.
               </p>
             </CardContent>
           </Card>
@@ -565,67 +671,147 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
       </div>
 
       <LogCallDialog leadId={leadId} open={callOpen} onOpenChange={setCallOpen} />
-
-      <Dialog open={dncOpen} onOpenChange={setDncOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Mark Do Not Contact</DialogTitle>
-          </DialogHeader>
-          <div>
-            <Label className="mb-1.5 block text-xs">Reason</Label>
-            <Textarea rows={3} value={dncReason} onChange={(e) => setDncReason(e.target.value)} />
-            <p className="pt-2 text-xs text-muted-foreground">
-              This stops all automation and clears the next action.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setDncOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={!dncReason.trim()}
-              onClick={() => {
-                markDnc(leadId, dncReason.trim());
-                setDncOpen(false);
-                setDncReason("");
-                toast.success("Lead suppressed");
-              }}
-            >
-              Confirm
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
+      <ReasonDialog
+        open={dncOpen}
+        title="Mark Do Not Contact"
+        action="This stops automation and cancels inappropriate actions."
+        value={reason}
+        onValue={setReason}
+        onOpenChange={setDncOpen}
+        onConfirm={() =>
+          void mutate(async () => {
+            await leadActions.markDnc(leadId, reason.trim());
+            setDncOpen(false);
+            setReason("");
+          }, "Lead suppressed")
+        }
+      />
+      <ReasonDialog
+        open={reactivateOpen}
+        title="Remove Do Not Contact"
+        action="A reason is required and suppression history remains preserved."
+        value={reason}
+        onValue={setReason}
+        onOpenChange={setReactivateOpen}
+        onConfirm={() =>
+          void mutate(async () => {
+            await leadActions.reactivateFromDnc(leadId, reason.trim());
+            setReactivateOpen(false);
+            setReason("");
+          }, "Lead reactivated")
+        }
+      />
       <NextActionDialog
         open={nextOpen}
         onOpenChange={setNextOpen}
-        defaultOwner={lead.ownerId}
-        onSave={(next) => {
-          updateLead(leadId, { nextAction: next });
-          addTask({
-            leadId,
-            ownerId: next.ownerId,
-            type: next.type,
-            title: next.title,
-            dueAt: next.dueAt,
-            done: false,
-            origin: "Manual",
-          });
-          toast.success("Next action set");
-        }}
+        defaultOwner={lead.ownerId ?? ""}
+        {...(lead.nextAction
+          ? {
+              initial: {
+                type: lead.nextAction.type,
+                title: lead.nextAction.title,
+                dueAt: lead.nextAction.dueAt,
+                ownerId: lead.nextAction.ownerId ?? lead.ownerId ?? "",
+              },
+            }
+          : {})}
+        onSave={(value) =>
+          void mutate(
+            () =>
+              lead.nextAction
+                ? taskStore.updateTask(lead.nextAction.taskId, value)
+                : taskStore.addTask({ leadId, ...value }),
+            "Next action saved",
+          )
+        }
       />
     </div>
   );
 }
 
-function Row({ label, value, badge }: { label: string; value: string; badge?: boolean }) {
+function Row({ label: name, value, badge }: { label: string; value: string; badge?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-xs text-muted-foreground">{name}</span>
       {badge ? <StatusBadge value={value} /> : <span className="truncate text-sm">{value}</span>}
     </div>
+  );
+}
+function SelectField({
+  label: name,
+  value,
+  options,
+  onChange,
+  optionLabel = label,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  options: readonly string[];
+  onChange: (value: string) => void;
+  optionLabel?: (value: string) => string;
+  disabled?: boolean;
+}) {
+  return (
+    <div>
+      <Label className="mb-1.5 block text-xs">{name}</Label>
+      <Select
+        value={value}
+        onValueChange={onChange}
+        {...(disabled !== undefined ? { disabled } : {})}
+      >
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option} value={option}>
+              {optionLabel(option)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+function ReasonDialog({
+  open,
+  title,
+  action,
+  value,
+  onValue,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  title: string;
+  action: string;
+  value: string;
+  onValue: (value: string) => void;
+  onOpenChange: (value: boolean) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <div>
+          <Label className="mb-1.5 block text-xs">Reason</Label>
+          <Textarea rows={3} value={value} onChange={(event) => onValue(event.target.value)} />
+          <p className="pt-2 text-xs text-muted-foreground">{action}</p>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" disabled={!value.trim()} onClick={onConfirm}>
+            Confirm
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -633,19 +819,26 @@ function NextActionDialog({
   open,
   onOpenChange,
   defaultOwner,
+  initial,
   onSave,
 }: {
   open: boolean;
-  onOpenChange: (v: boolean) => void;
+  onOpenChange: (value: boolean) => void;
   defaultOwner: string;
-  onSave: (n: { type: TaskType; title: string; dueAt: string; ownerId: string }) => void;
+  initial?: { type: TaskType; title: string; dueAt: string; ownerId: string };
+  onSave: (value: { type: TaskType; title: string; dueAt: string; ownerId: string }) => void;
 }) {
   const { users } = useSession();
-  const [type, setType] = useState<TaskType>("Call");
-  const [title, setTitle] = useState("");
-  const [due, setDue] = useState(addDays(1).slice(0, 10));
-  const [owner, setOwner] = useState(defaultOwner);
-
+  const [type, setType] = useState<TaskType>(initial?.type ?? "call");
+  const [title, setTitle] = useState(initial?.title ?? "");
+  const [due, setDue] = useState(
+    initial
+      ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(
+          new Date(initial.dueAt),
+        )
+      : dateInputValue(1),
+  );
+  const [owner, setOwner] = useState(initial?.ownerId ?? defaultOwner);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -653,58 +846,36 @@ function NextActionDialog({
           <DialogTitle>Set next action</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <div>
-            <Label className="mb-1.5 block text-xs">Type</Label>
-            <Select value={type} onValueChange={(v) => setType(v as TaskType)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {TASK_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <SelectField
+            label="Type"
+            value={type}
+            options={TASK_TYPES}
+            onChange={(value) => setType(value as TaskType)}
+          />
           <div>
             <Label className="mb-1.5 block text-xs">Title</Label>
-            <Input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Call to confirm interest"
-            />
+            <Input value={title} onChange={(event) => setTitle(event.target.value)} />
           </div>
           <div>
             <Label className="mb-1.5 block text-xs">Due date</Label>
-            <Input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+            <Input type="date" value={due} onChange={(event) => setDue(event.target.value)} />
           </div>
-          <div>
-            <Label className="mb-1.5 block text-xs">Owner</Label>
-            <Select value={owner} onValueChange={setOwner}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {users.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>
-                    {u.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <SelectField
+            label="Owner"
+            value={owner}
+            options={users.map((user) => user.id)}
+            optionLabel={(id) => users.find((user) => user.id === id)?.name ?? "Unassigned"}
+            onChange={setOwner}
+          />
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
-            disabled={!title.trim()}
+            disabled={!title.trim() || !owner}
             onClick={() => {
-              onSave({ type, title: title.trim(), dueAt: `${due}T10:00:00`, ownerId: owner });
-              setTitle("");
+              onSave({ type, title: title.trim(), dueAt: toIsoFromIst(due), ownerId: owner });
               onOpenChange(false);
             }}
           >

@@ -8,16 +8,24 @@ import type { Queryable } from "../dto.js";
  * overdue_tasks, tasks_due_today) rather than re-deriving that logic here.
  */
 export async function getDashboardSummary(db: Queryable) {
-  const [activeLeads, dueToday, overdue, meetingsToday, proposalFollowUps, missingNextAction, funnel] = await Promise.all([
+  const [activeLeads, dueToday, overdue, meetingsToday, proposalFollowUps, missingNextAction, automationFailures, funnel] = await Promise.all([
     db.query<{ count: string }>(`select count(*)::text as count from public.leads where lifecycle_state = 'active'`),
-    db.query<{ count: string }>(`select count(*)::text as count from public.tasks_due_today`),
+    db.query<{ count: string }>(
+      `select count(*)::text as count from public.tasks
+        where status = 'open'
+          and due_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
+          and due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`,
+    ),
     db.query<{ count: string }>(`select count(*)::text as count from public.overdue_tasks`),
     db.query<{ count: string }>(
       `select count(*)::text as count from public.meetings
-        where status not in ('cancelled') and scheduled_at >= date_trunc('day', now()) and scheduled_at < date_trunc('day', now()) + interval '1 day'`,
+        where status not in ('cancelled')
+          and scheduled_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
+          and scheduled_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`,
     ),
     db.query<{ count: string }>(`select count(*)::text as count from public.proposals where status in ('sent', 'revision_requested', 'revised')`),
     db.query<{ count: string }>(`select count(*)::text as count from public.active_leads_missing_next_action`),
+    db.query<{ count: string }>(`select count(*)::text as count from public.workflow_runs where status = 'failed'`),
     getPipelineFunnel(db),
   ]);
 
@@ -28,6 +36,7 @@ export async function getDashboardSummary(db: Queryable) {
     meetingsToday: Number(meetingsToday.rows[0]?.count ?? 0),
     proposalFollowUps: Number(proposalFollowUps.rows[0]?.count ?? 0),
     leadsWithNoNextAction: Number(missingNextAction.rows[0]?.count ?? 0),
+    automationFailures: Number(automationFailures.rows[0]?.count ?? 0),
     pipelineFunnel: funnel,
   };
 }
@@ -61,7 +70,8 @@ export async function listTodaysQueue(db: Queryable) {
   }>(
     `select id, lead_id, title, task_type, due_at, owner_id
        from public.tasks
-      where status = 'open' and due_at < date_trunc('day', now()) + interval '1 day'
+      where status = 'open'
+        and due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'
       order by due_at asc
       limit 10`,
   );

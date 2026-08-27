@@ -45,6 +45,7 @@ const updateSchema = z.object({
   description: z.string().optional(),
   status: z.enum(WORKFLOW_STATUSES).optional(),
   ownerId: z.string().uuid().optional(),
+  trigger: z.enum(WORKFLOW_TRIGGERS).optional(),
 });
 
 workflowsRouter.patch(
@@ -84,7 +85,7 @@ workflowsRouter.put(
   }),
 );
 
-const publishSchema = z.object({ enrollmentMode: z.enum(["keep_existing", "migrate_to_new_version", "restart_from_start"]).optional() });
+const publishSchema = z.object({ enrollmentMode: z.literal("keep_existing").optional() });
 
 workflowsRouter.post(
   "/:id/versions/:version/publish",
