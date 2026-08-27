@@ -6,12 +6,15 @@ import {
   useRouter,
   HeadContent,
 } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import { reportError } from "@/lib/telemetry";
 import { AppShell } from "@/app/app-shell";
 import { StoreProvider } from "@/store";
 import { Toaster } from "@/components/ui/sonner";
+import { isSupabaseConfigured } from "@/lib/supabase-client";
+import { useSupabaseSession } from "@/lib/use-supabase-session";
+import { LoginPage } from "@/features/auth/login-page";
 
 function NotFoundComponent() {
   return (
@@ -103,13 +106,37 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <HeadContent />
-      <StoreProvider>
-        <AppShell>
-          {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-          <Outlet />
-        </AppShell>
-        <Toaster richColors position="top-right" />
-      </StoreProvider>
+      <AuthGate>
+        <StoreProvider>
+          <AppShell>
+            {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+            <Outlet />
+          </AppShell>
+          <Toaster richColors position="top-right" />
+        </StoreProvider>
+      </AuthGate>
     </QueryClientProvider>
   );
+}
+
+/**
+ * Gates the whole app behind Supabase Auth — but only once a Supabase
+ * project is actually configured (VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY).
+ * Until then this renders `children` unconditionally, so the app keeps
+ * working exactly as it did before real auth existed (pure mock data, no
+ * login wall) — see lib/supabase-client.ts.
+ */
+function AuthGate({ children }: { children: ReactNode }) {
+  const { loading, session } = useSupabaseSession();
+
+  if (!isSupabaseConfigured) return <>{children}</>;
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
+        Loading…
+      </div>
+    );
+  }
+  if (!session) return <LoginPage />;
+  return <>{children}</>;
 }

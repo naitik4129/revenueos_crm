@@ -1,0 +1,212 @@
+import type { Queryable } from "../dto.js";
+import type { Actor } from "../authMiddleware.js";
+import { NotFoundError, ValidationError } from "../errors.js";
+import type { MeetingOutcome, MeetingStatus } from "../domain/enums.js";
+import { routeMeetingOutcome } from "../domain/meetingRouting.js";
+import { addTimelineEvent, actorEvent } from "./timeline.service.js";
+import { cancelOpenTasksForLead, createTask } from "./tasks.service.js";
+import { getLeadRowOr404, moveToLongTermNurture, updateLead } from "./leads.service.js";
+import { cancelRunsForLead } from "./runs.service.js";
+import { addDaysIso } from "../dto.js";
+
+export interface MeetingRow {
+  id: string;
+  lead_id: string;
+  owner_id: string | null;
+  owner_name: string | null;
+  title: string;
+  scheduled_at: Date;
+  duration_minutes: number;
+  meeting_url: string | null;
+  status: MeetingStatus;
+  outcome: MeetingOutcome | null;
+  notes: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+function meetingToDto(row: MeetingRow) {
+  return {
+    id: row.id,
+    leadId: row.lead_id,
+    ownerId: row.owner_id ?? undefined,
+    ownerName: row.owner_name ?? undefined,
+    title: row.title,
+    at: row.scheduled_at.toISOString(),
+    durationMin: row.duration_minutes,
+    url: row.meeting_url ?? undefined,
+    status: row.status,
+    outcome: row.outcome ?? undefined,
+    notes: row.notes ?? undefined,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+export interface ScheduleMeetingInput {
+  leadId: string;
+  ownerId?: string;
+  title: string;
+  at: string;
+  durationMin?: number;
+  url?: string;
+}
+
+export async function scheduleMeeting(db: Queryable, actor: Actor, input: ScheduleMeetingInput) {
+  if (!input.title.trim()) throw new ValidationError("Meeting title is required.");
+  const lead = await getLeadRowOr404(db, input.leadId);
+  if (lead.lifecycle_state === "do_not_contact") throw new ValidationError("This lead is Do Not Contact.");
+
+  const ownerId = input.ownerId ?? lead.owner_id ?? actor.id;
+  const result = await db.query<{ id: string }>(
+    `insert into public.meetings (lead_id, owner_id, title, scheduled_at, duration_minutes, meeting_url, status, created_by, created_by_name)
+     values ($1,$2,$3,$4,$5,$6,'scheduled',$7,$8) returning id`,
+    [input.leadId, ownerId, input.title.trim(), input.at, input.durationMin ?? 30, input.url ?? null, actor.id, actor.fullName],
+  );
+  const id = result.rows[0]!.id;
+
+  await addTimelineEvent(db, { leadId: input.leadId, kind: "meeting", title: "Meeting Scheduled", detail: input.title.trim(), ...actorEvent(actor) });
+
+  await updateLead(db, actor, input.leadId, { pipelineStage: "meeting_scheduled" });
+
+  // Edge case ("Meeting Booked During Nurture"): the objective of any
+  // in-flight nurture was to get a meeting booked — now that it has been,
+  // the old meeting-CTA nurture and its follow-up tasks are obsolete.
+  await cancelRunsForLead(db, input.leadId, "Meeting booked — nurture objective reached");
+  await cancelOpenTasksForLead(db, actor, input.leadId, "Superseded by scheduled meeting", [
+    "follow_up",
+    "nurture",
+    "schedule_meeting",
+    "call",
+  ]);
+
+  await createTask(db, actor, {
+    leadId: input.leadId,
+    ownerId,
+    type: "confirm_meeting",
+    title: "Prepare for the meeting",
+    dueAt: input.at,
+    origin: "manual",
+  });
+
+  return getMeetingOr404(db, id);
+}
+
+export async function getMeetingOr404(db: Queryable, id: string) {
+  const result = await db.query<MeetingRow>(`select * from public.meetings where id = $1`, [id]);
+  const row = result.rows[0];
+  if (!row) throw new NotFoundError("Meeting");
+  return meetingToDto(row);
+}
+
+async function getMeetingRowOr404(db: Queryable, id: string): Promise<MeetingRow> {
+  const result = await db.query<MeetingRow>(`select * from public.meetings where id = $1`, [id]);
+  const row = result.rows[0];
+  if (!row) throw new NotFoundError("Meeting");
+  return row;
+}
+
+export interface ListMeetingsFilters {
+  leadId?: string;
+  status?: MeetingStatus;
+  ownerId?: string;
+}
+
+export async function listMeetings(db: Queryable, filters: ListMeetingsFilters) {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  let i = 1;
+  if (filters.leadId) {
+    clauses.push(`lead_id = $${i++}`);
+    params.push(filters.leadId);
+  }
+  if (filters.status) {
+    clauses.push(`status = $${i++}`);
+    params.push(filters.status);
+  }
+  if (filters.ownerId) {
+    clauses.push(`owner_id = $${i++}`);
+    params.push(filters.ownerId);
+  }
+  const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
+  const result = await db.query<MeetingRow>(`select * from public.meetings ${where} order by scheduled_at asc`, params);
+  return result.rows.map(meetingToDto);
+}
+
+export interface UpdateMeetingInput {
+  title?: string;
+  at?: string;
+  durationMin?: number;
+  url?: string;
+  status?: MeetingStatus;
+  notes?: string;
+}
+
+/** Plain field/status edits with no outcome routing — use recordMeetingOutcome for Completed + outcome. */
+export async function updateMeeting(db: Queryable, actor: Actor, id: string, patch: UpdateMeetingInput) {
+  const current = await getMeetingRowOr404(db, id);
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let i = 1;
+  const push = (col: string, value: unknown) => {
+    sets.push(`${col} = $${i++}`);
+    params.push(value);
+  };
+  if (patch.title !== undefined) push("title", patch.title.trim());
+  if (patch.at !== undefined) push("scheduled_at", patch.at);
+  if (patch.durationMin !== undefined) push("duration_minutes", patch.durationMin);
+  if (patch.url !== undefined) push("meeting_url", patch.url || null);
+  if (patch.status !== undefined) push("status", patch.status);
+  if (patch.notes !== undefined) push("notes", patch.notes);
+  if (sets.length === 0) return meetingToDto(current);
+
+  params.push(id);
+  await db.query(`update public.meetings set ${sets.join(", ")} where id = $${i}`, params);
+
+  if (patch.status && patch.status !== current.status) {
+    const title = patch.status === "rescheduled" ? "Meeting Rescheduled" : patch.status === "cancelled" ? "Meeting Cancelled" : `Meeting ${patch.status}`;
+    await addTimelineEvent(db, { leadId: current.lead_id, kind: "meeting", title, ...actorEvent(actor), relatedMeetingId: id });
+  }
+
+  return getMeetingOr404(db, id);
+}
+
+/**
+ * Meeting outcome routing (product brief, "MEETINGS"). Only valid once the
+ * meeting is marked Completed (mirrors the DB CHECK constraint
+ * meetings_outcome_requires_completed).
+ */
+export async function recordMeetingOutcome(db: Queryable, actor: Actor, id: string, outcome: MeetingOutcome, notes?: string) {
+  const meeting = await getMeetingRowOr404(db, id);
+
+  await db.query(
+    `update public.meetings set status = 'completed', outcome = $2, notes = coalesce($3, notes) where id = $1`,
+    [id, outcome, notes ?? null],
+  );
+  await addTimelineEvent(db, {
+    leadId: meeting.lead_id,
+    kind: "meeting",
+    title: "Meeting Completed",
+    detail: `Outcome: ${outcome}`,
+    ...actorEvent(actor),
+    relatedMeetingId: id,
+  });
+
+  const routing = routeMeetingOutcome(outcome);
+  if (routing.stage) await updateLead(db, actor, meeting.lead_id, { pipelineStage: routing.stage });
+  if (routing.lifecycle === "long_term_nurture") await moveToLongTermNurture(db, actor, meeting.lead_id, `Meeting outcome: ${outcome}`);
+  if (routing.task) {
+    await createTask(db, actor, {
+      leadId: meeting.lead_id,
+      ownerId: meeting.owner_id,
+      type: routing.task.type,
+      title: routing.task.title,
+      dueAt: addDaysIso(routing.task.dueInDays),
+      origin: "manual",
+    });
+  }
+
+  return getMeetingOr404(db, id);
+}

@@ -1,0 +1,64 @@
+{
+  "name": "06 - Workflow Result / Progression Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "b6f1a006-0001-4a00-8000-000000000001",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-680, 300],
+      "notes": "Receives { actionId, outcome: 'success'|'failure', providerMessageId?, providerResponse?, error?, retryable? } from Workflows 03/04/05."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return [{ json: { backendBaseUrl: \"__NORTHBEAM_BACKEND_BASE_URL__\" } }];"
+      },
+      "id": "b6f1a006-0001-4a00-8000-000000000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.backendBaseUrl }}/api/v1/automation/actions/{{ $('Execute Workflow Trigger').item.json.actionId }}/result",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ outcome: $('Execute Workflow Trigger').item.json.outcome, providerMessageId: $('Execute Workflow Trigger').item.json.providerMessageId, providerResponse: $('Execute Workflow Trigger').item.json.providerResponse, error: $('Execute Workflow Trigger').item.json.error, retryable: $('Execute Workflow Trigger').item.json.retryable }) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 15000 }
+      },
+      "id": "b6f1a006-0001-4a00-8000-000000000003",
+      "name": "Report Result To Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-240, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Northbeam Backend Service Key"
+        }
+      },
+      "notes": "ALL progression logic — next-step selection, delay calculation, retry/backoff, completing the run — happens inside the backend (see Backend/src/services/automation.service.ts). This node's only job is to report what happened and hand back whatever the backend decided next. No business workflow is ever encoded here."
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Report Result To Backend", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

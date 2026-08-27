@@ -9,6 +9,7 @@ import {
   FileText,
   Gauge,
   ListChecks,
+  LogOut,
   Plus,
   Search,
   Users,
@@ -30,6 +31,7 @@ import { AddLeadDialog } from "@/features/leads/add-lead-dialog";
 import { useLeads, useNotifications, useSession } from "@/store";
 import { cn } from "@/lib/utils";
 import { relDay } from "@/lib/format";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase-client";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: Gauge },
@@ -133,6 +135,17 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <div className="truncate font-medium">{currentUser.name}</div>
                 <div className="text-muted-foreground">{currentUser.role}</div>
               </div>
+              {isSupabaseConfigured && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 shrink-0"
+                  aria-label="Sign out"
+                  onClick={() => void supabase?.auth.signOut()}
+                >
+                  <LogOut className="size-3.5" />
+                </Button>
+              )}
             </div>
           </div>
         </aside>

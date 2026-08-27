@@ -1,0 +1,139 @@
+{
+  "name": "01 - Due Action Worker",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "b6f1a001-0001-4a00-8000-000000000001",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-620, 300],
+      "notes": "The source of truth: fires every 1 minute regardless of the Wake Webhook below, so automation always eventually runs even if the backend's wake call is never configured, fails, or is dropped."
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wake-due-actions",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "b6f1a001-0001-4a00-8000-000000000006",
+      "name": "Wake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-620, 460],
+      "webhookId": "b6f1a001-webhook-wake-due-actions",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Northbeam Wake Webhook Secret"
+        }
+      },
+      "notes": "OPTIONAL latency optimization — see n8n/README.md §6 and Backend/src/services/n8nWake.ts. The backend calls this (fire-and-forget, best-effort) right after creating a scheduled_action that's due immediately, instead of making it wait for the next Schedule Trigger tick. Purely additive: if this is never configured on the backend side, this webhook simply never fires and the Schedule Trigger above still covers everything within ~1 minute."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Single place to configure the backend base URL for this workflow.\n// Edit the value below (or find/replace __NORTHBEAM_BACKEND_BASE_URL__\n// across every n8n/*.json file before importing) — see n8n/README.md.\nreturn [{ json: { backendBaseUrl: \"__NORTHBEAM_BACKEND_BASE_URL__\" } }];"
+      },
+      "id": "b6f1a001-0001-4a00-8000-000000000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-400, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.backendBaseUrl }}/api/v1/automation/due-actions/claim",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ limit: 20 }) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "b6f1a001-0001-4a00-8000-000000000003",
+      "name": "Claim Due Actions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-180, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Northbeam Backend Service Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Claim response is { data: [ActionContext, ...] }. Fan out into one\n// n8n item per claimed action so \"Dispatch Action\" below runs once per\n// action (n8n's default behaviour for a node with multiple input items).\nconst claimed = $input.first().json.data ?? [];\nreturn claimed.map((context) => ({ json: context }));"
+      },
+      "id": "b6f1a001-0001-4a00-8000-000000000004",
+      "name": "Split Claimed Actions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [40, 300]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "02 - Generic Action Dispatcher"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "b6f1a001-0001-4a00-8000-000000000005",
+      "name": "Dispatch Action",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [260, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [[{ "node": "Config", "type": "main", "index": 0 }]]
+    },
+    "Wake Webhook": {
+      "main": [[{ "node": "Config", "type": "main", "index": 0 }]]
+    },
+    "Config": {
+      "main": [[{ "node": "Claim Due Actions", "type": "main", "index": 0 }]]
+    },
+    "Claim Due Actions": {
+      "main": [[{ "node": "Split Claimed Actions", "type": "main", "index": 0 }]]
+    },
+    "Split Claimed Actions": {
+      "main": [[{ "node": "Dispatch Action", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

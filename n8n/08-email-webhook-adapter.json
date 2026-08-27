@@ -1,0 +1,63 @@
+{
+  "name": "08 - Email Provider Webhook Adapter",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-inbound",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "b6f1a008-0001-4a00-8000-000000000001",
+      "name": "Email Inbound Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-900, 300],
+      "webhookId": "b6f1a008-webhook-email-inbound",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Email Inbound Webhook Secret"
+        }
+      },
+      "notes": "responseMode 'onReceived' acks the provider immediately (200) so it never times out waiting for our processing — see n8n/README.md 'Webhook setup'. Configure your ESP's inbound-parse/webhook feature to POST here and to send whatever shared-secret header the 'Email Inbound Webhook Secret' credential checks."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// PLACEHOLDER normalizer — see n8n/README.md 'Providers'. Every ESP's\n// inbound webhook payload shape differs (SendGrid Inbound Parse, Postmark\n// Inbound, Mailgun Routes, ...). Adjust the field paths below to match\n// your provider; the output shape is the ONLY contract Workflow 07 needs.\nconst body = $input.first().json.body ?? {};\n\nconst fromAddress = body.from || body.sender || body.envelope?.from || '';\nconst providerMessageId = body.messageId || body['Message-ID'] || body.message_id || undefined;\nconst occurredAt = body.date ? new Date(body.date).toISOString() : new Date().toISOString();\nconst summary = body.text || body.TextBody || body['stripped-text'] || body.subject || '(no body)';\n\nreturn [{\n  json: {\n    channel: 'email',\n    fromAddress,\n    providerMessageId,\n    occurredAt,\n    summary,\n  },\n}];"
+      },
+      "id": "b6f1a008-0001-4a00-8000-000000000002",
+      "name": "Normalize Email Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-680, 300]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "07 - Generic Inbound Communication Handler"
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "b6f1a008-0001-4a00-8000-000000000003",
+      "name": "Handle Inbound Event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [-460, 300]
+    }
+  ],
+  "connections": {
+    "Email Inbound Webhook": { "main": [[{ "node": "Normalize Email Event", "type": "main", "index": 0 }]] },
+    "Normalize Email Event": { "main": [[{ "node": "Handle Inbound Event", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
