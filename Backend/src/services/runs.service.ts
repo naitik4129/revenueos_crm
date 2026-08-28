@@ -3,7 +3,7 @@ import type { Actor } from "../authMiddleware.js";
 import { ConflictError, NotFoundError } from "../errors.js";
 import type { AutomationMode, WorkflowRunStatus, WorkflowStepAction, WorkflowTrigger } from "../domain/enums.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
-import { findActiveWorkflowsForTrigger } from "./workflows.service.js";
+import { findActiveWorkflowsForTrigger, getWorkflowRowOr404 } from "./workflows.service.js";
 import { wakeAutomationExecutor } from "./n8nWake.js";
 
 export interface RunRow {
@@ -173,6 +173,54 @@ export async function scheduleStepAfter(db: Queryable, runId: string, leadId: st
 }
 
 /**
+ * Enrolls a lead in one specific workflow version: creates the run and
+ * schedules its first step, or returns null if the lead already has a
+ * non-terminal run against this workflow (no duplicate enrollment). Shared
+ * by autoEnroll (per trigger-matched candidate) and enrollLeadInWorkflow
+ * (a salesperson picking an exact workflow by id, regardless of its
+ * trigger). Returns the same DTO shape (camelCase, ISO dates) as every other
+ * runs endpoint (pause/resume/cancel/retry), not a raw DB row.
+ */
+async function enrollLeadInVersion(
+  db: Queryable,
+  leadId: string,
+  workflowId: string,
+  versionId: string,
+  reason: string,
+): Promise<ReturnType<typeof runToDto> | null> {
+  const existing = await db.query<{ id: string }>(
+    `select id from public.workflow_runs
+      where lead_id = $1 and workflow_id = $2 and status in ('running','waiting','paused')`,
+    [leadId, workflowId],
+  );
+  if (existing.rows[0]) return null;
+
+  const runResult = await db.query<RunRow>(
+    `insert into public.workflow_runs (workflow_id, workflow_version_id, lead_id, status)
+     values ($1,$2,$3,'running') returning *`,
+    [workflowId, versionId, leadId],
+  );
+  const run = runResult.rows[0]!;
+  const scheduled = await scheduleFirstStep(db, run.id, leadId, versionId);
+  await db.query(
+    `update public.workflow_runs set current_step_id = $2, status = $3, next_run_at = $4 where id = $1`,
+    [run.id, scheduled.currentStepId, scheduled.status, scheduled.nextRunAt],
+  );
+
+  await addTimelineEvent(db, {
+    leadId,
+    kind: "automation",
+    title: "Workflow Enrolled",
+    detail: reason,
+    ...AUTOMATION_ACTOR,
+    relatedWorkflowRunId: run.id,
+  });
+
+  const full = await getRunRowOr404(db, run.id);
+  return runToDto(full, full.version_number);
+}
+
+/**
  * The single coherent "enroll a lead in the right workflow" operation
  * (product brief, "WORKFLOW ENROLLMENT"): pick the active workflow(s) for
  * this trigger, use each one's latest published version (Rule: new
@@ -190,41 +238,43 @@ export async function autoEnroll(
   reason: string,
 ) {
   const candidates = await findActiveWorkflowsForTrigger(db, trigger);
-  const created: RunRow[] = [];
+  const created: ReturnType<typeof runToDto>[] = [];
 
   for (const candidate of candidates) {
-    const existing = await db.query<{ id: string }>(
-      `select id from public.workflow_runs
-        where lead_id = $1 and workflow_id = $2 and status in ('running','waiting','paused')`,
-      [leadId, candidate.workflow_id],
-    );
-    if (existing.rows[0]) continue;
-
-    const runResult = await db.query<RunRow>(
-      `insert into public.workflow_runs (workflow_id, workflow_version_id, lead_id, status)
-       values ($1,$2,$3,'running') returning *`,
-      [candidate.workflow_id, candidate.version_id, leadId],
-    );
-    const run = runResult.rows[0]!;
-    const scheduled = await scheduleFirstStep(db, run.id, leadId, candidate.version_id);
-    await db.query(
-      `update public.workflow_runs set current_step_id = $2, status = $3, next_run_at = $4 where id = $1`,
-      [run.id, scheduled.currentStepId, scheduled.status, scheduled.nextRunAt],
-    );
-
-    await addTimelineEvent(db, {
-      leadId,
-      kind: "automation",
-      title: "Workflow Enrolled",
-      detail: reason,
-      ...AUTOMATION_ACTOR,
-      relatedWorkflowRunId: run.id,
-    });
-
-    created.push({ ...run, current_step_id: scheduled.currentStepId, status: scheduled.status, next_run_at: scheduled.nextRunAt });
+    const run = await enrollLeadInVersion(db, leadId, candidate.workflow_id, candidate.version_id, reason);
+    if (run) created.push(run);
   }
 
   return created;
+}
+
+/**
+ * Explicit manual enrollment: a salesperson picking exactly which workflow
+ * to put a lead in, regardless of that workflow's configured trigger (unlike
+ * autoEnroll, which only matches workflows whose trigger equals the given
+ * value). Used by POST /runs when a workflowId is supplied.
+ */
+export async function enrollLeadInWorkflow(
+  db: Queryable,
+  leadId: string,
+  workflowId: string,
+  reason: string,
+): Promise<ReturnType<typeof runToDto> | null> {
+  const workflow = await getWorkflowRowOr404(db, workflowId);
+  if (workflow.status !== "active") {
+    throw new ConflictError(`Workflow "${workflow.name}" is not active.`);
+  }
+
+  const versionResult = await db.query<{ id: string }>(
+    `select id from public.workflow_versions where workflow_id = $1 and status = 'published'`,
+    [workflowId],
+  );
+  const versionId = versionResult.rows[0]?.id;
+  if (!versionId) {
+    throw new ConflictError(`Workflow "${workflow.name}" has no published version to enroll into.`);
+  }
+
+  return enrollLeadInVersion(db, leadId, workflowId, versionId, reason);
 }
 
 async function setRunStatus(
@@ -424,5 +474,6 @@ export async function listScheduledActions(db: Queryable, filters: ListScheduled
     lastError: r.last_error ?? undefined,
     executedAt: r.executed_at?.toISOString(),
     cancelledAt: r.cancelled_at?.toISOString(),
+    cancelReason: r.cancel_reason ?? undefined,
   }));
 }

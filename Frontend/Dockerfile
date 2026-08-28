@@ -6,6 +6,17 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+
+# Vite embeds these into the built bundle at compile time (import.meta.env.VITE_*),
+# so they must be supplied as build args (see compose.yaml's frontend.build.args),
+# not left to be read at container runtime.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ARG VITE_API_BASE_URL
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
+    VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY \
+    VITE_API_BASE_URL=$VITE_API_BASE_URL
+
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime

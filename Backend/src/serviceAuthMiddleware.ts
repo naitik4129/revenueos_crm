@@ -17,6 +17,13 @@ import { env } from "./env.js";
  * unaffected by this file.
  */
 export const requireServiceAuth = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!env.N8N_SERVICE_API_KEY) {
+    // Not configured — this deployment doesn't use an external automation
+    // executor (the in-process worker, src/worker.ts, is the primary one).
+    // Reject rather than throw on a missing Buffer input below.
+    throw new AuthenticationError("The automation service key is not configured on this deployment.");
+  }
+
   const provided = req.header("x-automation-key");
   if (!provided) {
     throw new AuthenticationError("Missing X-Automation-Key header.");

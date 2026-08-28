@@ -11,6 +11,8 @@ import {
   LIFECYCLE_STATES,
   RESPONSE_STATES,
   CONTACT_CHANNELS,
+  CALL_NOT_CONNECTED_REASONS,
+  CALL_CONNECTED_OUTCOMES,
 } from "../domain/enums.js";
 import * as leadsService from "../services/leads.service.js";
 import { leadToDto } from "../services/leads.service.js";
@@ -231,10 +233,8 @@ leadsRouter.post(
 
 const logCallSchema = z.object({
   connected: z.boolean(),
-  notConnectedReason: z
-    .enum(["no_answer", "busy", "call_rejected", "switched_off", "temporarily_unreachable", "voicemail", "network_failure", "invalid_number", "wrong_number", "other"])
-    .optional(),
-  connectedOutcome: z.enum(["positive", "maybe", "negative", "callback_requested", "information_requested", "wrong_person", "do_not_contact"]).optional(),
+  notConnectedReason: z.enum(CALL_NOT_CONNECTED_REASONS).optional(),
+  connectedOutcome: z.enum(CALL_CONNECTED_OUTCOMES).optional(),
   notes: z.string().optional(),
   callbackDueAt: z.string().datetime({ offset: true }).optional(),
 });

@@ -1,6 +1,6 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
-import { ValidationError } from "../errors.js";
+import { DoNotContactError, ValidationError } from "../errors.js";
 import type { CallConnectedOutcome, CallNotConnectedReason } from "../domain/enums.js";
 import { routeConnectedOutcome, routeNotConnected } from "../domain/callRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
@@ -57,7 +57,7 @@ function callToDto(row: CallRow) {
 export async function logCall(db: Queryable, actor: Actor, leadId: string, input: LogCallInput) {
   const lead = await getLeadRowOr404(db, leadId);
   if (lead.lifecycle_state === "do_not_contact") {
-    throw new ValidationError("This lead is Do Not Contact — no further contact can be logged.");
+    throw new DoNotContactError("This lead is Do Not Contact — no further contact can be logged.");
   }
 
   if (input.connected && !input.connectedOutcome) {

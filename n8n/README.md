@@ -1,5 +1,16 @@
 # Northbeam CRM — n8n automation layer
 
+> **Status: optional / legacy path.** The Backend now has its own in-process
+> automation executor (`Backend/src/worker.ts` — see
+> `Backend/.env.example`'s "Outbound send" section), which polls
+> `scheduled_actions` and sends via SMTP/the Meta WhatsApp Cloud API
+> directly, with no external system required. That worker is what's
+> actually running automation today. Everything below describes an
+> alternative, fully-external executor (the same `/api/v1/automation/*`
+> HTTP contract `automation.service.ts` exposes) for anyone who specifically
+> wants n8n instead of — or alongside — the in-process worker. It is **not**
+> required for automated messages to send.
+
 **Business workflows are configured in Northbeam CRM, not in n8n.** Nothing
 in this directory encodes "Not Connected Nurture," "Maybe Nurture,"
 "Negative Nurture," "Proposal Pending Nurture," or any other nurture

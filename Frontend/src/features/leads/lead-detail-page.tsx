@@ -35,6 +35,7 @@ import {
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { LogCallDialog } from "./log-call-dialog";
+import { EnrollWorkflowDialog, ScheduledFollowupTimeline } from "./scheduled-followups";
 import { dateInputValue, toIsoFromIst } from "@/lib/dates";
 import { fmtDateTime, isOverdue, money, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
@@ -75,6 +76,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
   const [reactivateOpen, setReactivateOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [nextOpen, setNextOpen] = useState(false);
+  const [enrollOpen, setEnrollOpen] = useState(false);
   const [note, setNote] = useState("");
 
   const activity = useMemo(
@@ -222,6 +224,12 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
               </div>
             </CardContent>
           </Card>
+
+          <ScheduledFollowupTimeline
+            leadId={leadId}
+            doNotContact={lead.doNotContact}
+            onEnrollClick={() => setEnrollOpen(true)}
+          />
 
           <Tabs defaultValue="overview">
             <TabsList>
@@ -461,8 +469,16 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                 </CardContent>
               </Card>
               <Card>
-                <CardHeader className="pb-2">
+                <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm">Workflow runs</CardTitle>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={lead.doNotContact}
+                    onClick={() => setEnrollOpen(true)}
+                  >
+                    Enroll in workflow
+                  </Button>
                 </CardHeader>
                 <CardContent className="space-y-2">
                   {leadRuns.map((run) => {
@@ -663,7 +679,8 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
             <CardContent className="py-4 text-xs text-muted-foreground">
               <p>CRM data is persisted through the backend.</p>
               <p className="mt-1 flex items-center gap-1.5">
-                <Bot className="size-3.5" /> Workflow execution remains in n8n.
+                <Bot className="size-3.5" /> Workflow sends run on the backend's automation
+                worker.
               </p>
             </CardContent>
           </Card>
@@ -671,6 +688,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
       </div>
 
       <LogCallDialog leadId={leadId} open={callOpen} onOpenChange={setCallOpen} />
+      <EnrollWorkflowDialog leadId={leadId} open={enrollOpen} onOpenChange={setEnrollOpen} />
       <ReasonDialog
         open={dncOpen}
         title="Mark Do Not Contact"
@@ -708,6 +726,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
         {...(lead.nextAction
           ? {
               initial: {
+                taskId: lead.nextAction.taskId,
                 type: lead.nextAction.type,
                 title: lead.nextAction.title,
                 dueAt: lead.nextAction.dueAt,
@@ -825,20 +844,35 @@ function NextActionDialog({
   open: boolean;
   onOpenChange: (value: boolean) => void;
   defaultOwner: string;
-  initial?: { type: TaskType; title: string; dueAt: string; ownerId: string };
+  initial?: { taskId: string; type: TaskType; title: string; dueAt: string; ownerId: string };
   onSave: (value: { type: TaskType; title: string; dueAt: string; ownerId: string }) => void;
 }) {
   const { users } = useSession();
-  const [type, setType] = useState<TaskType>(initial?.type ?? "call");
-  const [title, setTitle] = useState(initial?.title ?? "");
-  const [due, setDue] = useState(
-    initial
-      ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(
-          new Date(initial.dueAt),
-        )
-      : dateInputValue(1),
-  );
-  const [owner, setOwner] = useState(initial?.ownerId ?? defaultOwner);
+  const [type, setType] = useState<TaskType>("call");
+  const [title, setTitle] = useState("");
+  const [due, setDue] = useState(dateInputValue(1));
+  const [owner, setOwner] = useState(defaultOwner);
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+
+  // This dialog is always mounted (only `open` toggles), so useState
+  // initializers only ever run once — re-sync from `initial` here whenever
+  // it identifies a different task (or "new") than what's currently loaded,
+  // the same pattern TemplateDialog uses. Without this, reopening
+  // "Reschedule" after the first save/close shows stale first-mount values.
+  const key = initial?.taskId ?? "new";
+  if (open && loadedFor !== key) {
+    setLoadedFor(key);
+    setType(initial?.type ?? "call");
+    setTitle(initial?.title ?? "");
+    setDue(
+      initial
+        ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date(initial.dueAt))
+        : dateInputValue(1),
+    );
+    setOwner(initial?.ownerId ?? defaultOwner);
+  }
+  if (!open && loadedFor !== null) setLoadedFor(null);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">

@@ -7,7 +7,7 @@ import { parseBody, parseQuery } from "../validation/parse.js";
 import { SCHEDULED_ACTION_STATUSES, WORKFLOW_RUN_STATUSES } from "../domain/enums.js";
 import { ValidationError } from "../errors.js";
 import * as runsService from "../services/runs.service.js";
-import { autoEnroll } from "../services/runs.service.js";
+import { autoEnroll, enrollLeadInWorkflow } from "../services/runs.service.js";
 
 export const runsRouter = Router();
 runsRouter.use(requireAuth);
@@ -26,16 +26,30 @@ runsRouter.get(
   }),
 );
 
-const enrollSchema = z.object({ leadId: z.string().uuid(), reason: z.string().optional() });
+const enrollSchema = z.object({ leadId: z.string().uuid(), workflowId: z.string().uuid().optional(), reason: z.string().optional() });
 
-/** Manual enrollment (product brief: workflow_trigger 'manual_enrollment'). */
+/**
+ * Manual enrollment. With `workflowId`, enrolls the lead in exactly that
+ * workflow (any trigger — a salesperson's explicit choice). Without it,
+ * falls back to the product brief's 'manual_enrollment' trigger lookup for
+ * backward compatibility.
+ */
 runsRouter.post(
   "/",
   asyncHandler(async (req, res) => {
-    const { leadId, reason } = parseBody(enrollSchema, req.body);
-    const created = await withTransaction((client) =>
-      autoEnroll(client, leadId, "manual_enrollment", reason ?? "Manually enrolled"),
-    );
+    const { leadId, workflowId, reason } = parseBody(enrollSchema, req.body);
+    const enrolledReason = reason ?? "Manually enrolled";
+
+    if (workflowId) {
+      const run = await withTransaction((client) => enrollLeadInWorkflow(client, leadId, workflowId, enrolledReason));
+      if (!run) {
+        throw new ValidationError("This lead already has an active run for that workflow.");
+      }
+      res.status(201).json({ data: [run] });
+      return;
+    }
+
+    const created = await withTransaction((client) => autoEnroll(client, leadId, "manual_enrollment", enrolledReason));
     if (created.length === 0) {
       throw new ValidationError("No active published workflow with trigger 'manual_enrollment' is available to enroll this lead in.");
     }

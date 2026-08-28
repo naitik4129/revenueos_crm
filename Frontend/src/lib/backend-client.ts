@@ -331,6 +331,8 @@ export const backend = {
   runs: {
     list: (params?: Record<string, string | undefined>, signal?: AbortSignal) =>
       get<{ data: Run[] }>(query("/runs", params), signal),
+    create: (input: { leadId: string; workflowId: string; reason?: string | undefined }) =>
+      send<{ data: Run[] }>("POST", "/runs", input),
     pause: (id: string, reason?: string) => send<Run>("POST", `/runs/${id}/pause`, { reason }),
     resume: (id: string) => send<Run>("POST", `/runs/${id}/resume`),
     cancel: (id: string, reason?: string) => send<Run>("POST", `/runs/${id}/cancel`, { reason }),

@@ -1,6 +1,6 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
-import { ConflictError, NotFoundError, ValidationError } from "../errors.js";
+import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import { assertPipelineStageEditable, assertValidLifecycleState, assertValidPipelineStage, isTerminalLifecycle } from "../domain/pipeline.js";
 import type { AutomationMode, ContactChannel, LeadSource, LifecycleState, PipelineStage, ResponseState } from "../domain/enums.js";
 import { CONTACT_CHANNEL_STATUS } from "../domain/enums.js";
@@ -583,7 +583,7 @@ export async function logManualCommunication(
 ) {
   const lead = await getLeadRowOr404(db, leadId);
   if (lead.lifecycle_state === "do_not_contact") {
-    throw new ConflictError("This lead is Do Not Contact.");
+    throw new DoNotContactError();
   }
   const title = input.channel === "email" ? "Email Sent" : "WhatsApp Sent";
   await addTimelineEvent(db, {

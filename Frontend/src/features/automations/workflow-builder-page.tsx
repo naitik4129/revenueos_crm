@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { ArrowDown, ArrowLeft, ArrowUp, Plus, Trash2, Zap } from "lucide-react";
@@ -100,6 +100,24 @@ function Builder({ workflow }: { workflow: Workflow }) {
     }, 500);
     return () => window.clearTimeout(timer);
   }, [editable, buffer, bufferKey, store, version.version, workflow.id]);
+
+  // The debounce cleanup above cancels the pending save on *every*
+  // dependency change, including on unmount (navigating away). Without this
+  // separate mount-only effect, a dirty edit made within the last 500ms
+  // before navigating away is silently discarded — never saved, no warning.
+  // Refs (kept current every render) let this true-unmount-only cleanup see
+  // the latest buffer/store, flushing any still-dirty edit instead of
+  // dropping it.
+  const flushOnUnmountRef = useRef({ buffer, editable, bufferKey, store, workflowId: workflow.id, versionNumber: version.version });
+  flushOnUnmountRef.current = { buffer, editable, bufferKey, store, workflowId: workflow.id, versionNumber: version.version };
+  useEffect(() => {
+    return () => {
+      const current = flushOnUnmountRef.current;
+      if (current.editable && current.buffer.dirty && current.buffer.key === current.bufferKey) {
+        void current.store.updateDraftSteps(current.workflowId, current.versionNumber, current.buffer.steps);
+      }
+    };
+  }, []);
 
   const setSteps = (next: WorkflowStep[], immediate = false) => {
     const normalized = next.map((step, order) => ({ ...step, order }));

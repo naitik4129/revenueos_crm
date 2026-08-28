@@ -73,8 +73,9 @@ export function AddLeadDialog({
     form.firstName.trim() && form.company.trim() && (form.email.trim() || form.phone.trim());
 
   const submit = async () => {
+    let lead;
     try {
-      const lead = await addLead({
+      lead = await addLead({
         firstName: form.firstName.trim(),
         lastName: form.lastName.trim(),
         company: form.company.trim(),
@@ -85,21 +86,37 @@ export function AddLeadDialog({
         serviceInterest: form.serviceInterest,
         ownerId: form.ownerId,
       });
-      if (form.notes.trim()) await addNote(lead.id, form.notes.trim());
-      toast.success("Lead created");
-      onOpenChange(false);
-      setForm((f) => ({
-        ...f,
-        firstName: "",
-        lastName: "",
-        company: "",
-        phone: "",
-        email: "",
-        notes: "",
-      }));
-      void navigate({ to: "/leads/$leadId", params: { leadId: lead.id } });
     } catch (error) {
+      // Lead was never created — safe to leave the dialog open with the
+      // form intact so the user can fix and retry without risk of a
+      // duplicate.
       toast.error(messageFromError(error));
+      return;
+    }
+
+    // The lead now exists server-side. Treat this as done regardless of
+    // whether the optional note below succeeds — closing/resetting here
+    // (rather than after the note call) is what prevents a retry from
+    // re-submitting addLead and creating a duplicate.
+    toast.success("Lead created");
+    onOpenChange(false);
+    setForm((f) => ({
+      ...f,
+      firstName: "",
+      lastName: "",
+      company: "",
+      phone: "",
+      email: "",
+      notes: "",
+    }));
+    void navigate({ to: "/leads/$leadId", params: { leadId: lead.id } });
+
+    if (form.notes.trim()) {
+      try {
+        await addNote(lead.id, form.notes.trim());
+      } catch (error) {
+        toast.error(`Lead created, but the note failed to save: ${messageFromError(error)}`);
+      }
     }
   };
 

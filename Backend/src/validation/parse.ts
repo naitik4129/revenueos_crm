@@ -16,3 +16,11 @@ export function parseQuery<T>(schema: ZodSchema<T>, query: unknown): T {
   }
   return result.data;
 }
+
+export function parseParams<T>(schema: ZodSchema<T>, params: unknown): T {
+  const result = schema.safeParse(params);
+  if (!result.success) {
+    throw new ValidationError("Route parameters failed validation.", result.error.flatten());
+  }
+  return result.data;
+}

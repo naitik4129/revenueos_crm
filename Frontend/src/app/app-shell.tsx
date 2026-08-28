@@ -26,9 +26,10 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { toast } from "sonner";
 import { AddLeadContext } from "@/app/add-lead-context";
 import { AddLeadDialog } from "@/features/leads/add-lead-dialog";
-import { useLeads, useNotifications, useSession } from "@/store";
+import { messageFromError, useLeads, useNotifications, useSession } from "@/store";
 import { cn } from "@/lib/utils";
 import { relDay } from "@/lib/format";
 import { supabase } from "@/lib/supabase-client";
@@ -193,7 +194,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
               <Popover
                 onOpenChange={(o) => {
-                  if (o) void markNotificationsRead();
+                  if (o) {
+                    markNotificationsRead().catch((error: unknown) => {
+                      toast.error(messageFromError(error));
+                    });
+                  }
                 }}
               >
                 <PopoverTrigger asChild>

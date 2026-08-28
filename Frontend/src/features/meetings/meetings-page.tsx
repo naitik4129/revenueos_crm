@@ -27,7 +27,13 @@ import { fmtDateTime, isToday, relDay } from "@/lib/format";
 import { dateInputValue, toIsoFromIst } from "@/lib/dates";
 import { label } from "@/lib/labels";
 import { messageFromError, useLeads, useMeetings, useSession } from "@/store";
-import { MEETING_OUTCOMES, type Meeting, type MeetingOutcome, type MeetingStatus } from "@/types";
+import {
+  MEETING_OUTCOMES,
+  MEETING_STATUSES,
+  type Meeting,
+  type MeetingOutcome,
+  type MeetingStatus,
+} from "@/types";
 
 export function MeetingsPage() {
   const store = useMeetings();
@@ -113,11 +119,22 @@ export function MeetingsPage() {
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {["scheduled", "confirmed", "cancelled", "no_show"].map((value) => (
-                                <SelectItem key={value} value={value}>
-                                  {label(value)}
+                              {/* "completed" is deliberately excluded from the pickable list —
+                                  it must go through "Record outcome" so an outcome is always
+                                  captured. It's only ever shown (disabled) as the current value,
+                                  so the trigger still displays "Completed" instead of blank. */}
+                              {MEETING_STATUSES.filter((value) => value !== "completed").map(
+                                (value) => (
+                                  <SelectItem key={value} value={value}>
+                                    {label(value)}
+                                  </SelectItem>
+                                ),
+                              )}
+                              {meeting.status === "completed" && (
+                                <SelectItem value="completed" disabled>
+                                  {label("completed")}
                                 </SelectItem>
-                              ))}
+                              )}
                             </SelectContent>
                           </Select>
                         </td>
@@ -353,6 +370,18 @@ function OutcomeDialog({
 }) {
   const [outcome, setOutcome] = useState<MeetingOutcome>("proposal_required");
   const [notes, setNotes] = useState("");
+  const [loadedFor, setLoadedFor] = useState(false);
+
+  // Reset on every open (including Cancel, not just a successful save) —
+  // this dialog is always mounted, so without this a pick from a previous
+  // meeting (even one that was cancelled, not saved) carries over silently.
+  if (open && !loadedFor) {
+    setLoadedFor(true);
+    setOutcome("proposal_required");
+    setNotes("");
+  }
+  if (!open && loadedFor) setLoadedFor(false);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">

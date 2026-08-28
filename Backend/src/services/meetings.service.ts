@@ -1,6 +1,6 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
-import { NotFoundError, ValidationError } from "../errors.js";
+import { DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import type { MeetingOutcome, MeetingStatus } from "../domain/enums.js";
 import { routeMeetingOutcome } from "../domain/meetingRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
@@ -57,7 +57,7 @@ export interface ScheduleMeetingInput {
 export async function scheduleMeeting(db: Queryable, actor: Actor, input: ScheduleMeetingInput) {
   if (!input.title.trim()) throw new ValidationError("Meeting title is required.");
   const lead = await getLeadRowOr404(db, input.leadId);
-  if (lead.lifecycle_state === "do_not_contact") throw new ValidationError("This lead is Do Not Contact.");
+  if (lead.lifecycle_state === "do_not_contact") throw new DoNotContactError();
 
   const ownerId = input.ownerId ?? lead.owner_id ?? actor.id;
   const result = await db.query<{ id: string }>(
@@ -158,7 +158,14 @@ export async function updateMeeting(db: Queryable, actor: Actor, id: string, pat
   if (patch.at !== undefined) push("scheduled_at", patch.at);
   if (patch.durationMin !== undefined) push("duration_minutes", patch.durationMin);
   if (patch.url !== undefined) push("meeting_url", patch.url || null);
-  if (patch.status !== undefined) push("status", patch.status);
+  if (patch.status !== undefined) {
+    push("status", patch.status);
+    // DB constraint meetings_outcome_requires_completed forbids a non-null
+    // outcome on any status other than 'completed' — moving a meeting away
+    // from 'completed' (e.g. rescheduling one that already has an outcome)
+    // must clear it here, or the update below throws a raw constraint error.
+    if (patch.status !== "completed") push("outcome", null);
+  }
   if (patch.notes !== undefined) push("notes", patch.notes);
   if (sets.length === 0) return meetingToDto(current);
 
@@ -180,6 +187,14 @@ export async function updateMeeting(db: Queryable, actor: Actor, id: string, pat
  */
 export async function recordMeetingOutcome(db: Queryable, actor: Actor, id: string, outcome: MeetingOutcome, notes?: string) {
   const meeting = await getMeetingRowOr404(db, id);
+
+  // Idempotent on an exact repeat (double-submit / retried request): the
+  // routing side effects below (task creation, stage change) are NOT safe to
+  // re-run, so a no-op return here is required, not just an optimization. A
+  // genuine correction to a *different* outcome still goes through normally.
+  if (meeting.status === "completed" && meeting.outcome === outcome) {
+    return meetingToDto(meeting);
+  }
 
   await db.query(
     `update public.meetings set status = 'completed', outcome = $2, notes = coalesce($3, notes) where id = $1`,

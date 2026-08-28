@@ -3,7 +3,7 @@ import { z } from "zod";
 import { asyncHandler } from "../asyncHandler.js";
 import { requireAuth } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
-import { parseBody } from "../validation/parse.js";
+import { parseBody, parseParams } from "../validation/parse.js";
 import { WORKFLOW_STATUSES, WORKFLOW_STEP_ACTIONS, WORKFLOW_TRIGGERS, TEMPLATE_CHANNELS } from "../domain/enums.js";
 import * as workflowsService from "../services/workflows.service.js";
 
@@ -74,12 +74,13 @@ const stepSchema = z.object({
   enabled: z.boolean(),
 });
 const stepsSchema = z.object({ steps: z.array(stepSchema) });
+const versionParamSchema = z.object({ version: z.coerce.number().int().positive() });
 
 workflowsRouter.put(
   "/:id/versions/:version/steps",
   asyncHandler(async (req, res) => {
     const { steps } = parseBody(stepsSchema, req.body);
-    const version = Number(req.params.version);
+    const { version } = parseParams(versionParamSchema, req.params);
     const workflow = await withTransaction((client) => workflowsService.updateDraftSteps(client, req.params.id!, version, steps));
     res.json(workflow);
   }),
@@ -91,7 +92,7 @@ workflowsRouter.post(
   "/:id/versions/:version/publish",
   asyncHandler(async (req, res) => {
     const { enrollmentMode } = parseBody(publishSchema, req.body ?? {});
-    const version = Number(req.params.version);
+    const { version } = parseParams(versionParamSchema, req.params);
     const workflow = await withTransaction((client) =>
       workflowsService.publishVersion(client, req.actor!, req.params.id!, version, enrollmentMode),
     );

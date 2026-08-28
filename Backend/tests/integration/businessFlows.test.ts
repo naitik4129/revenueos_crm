@@ -181,4 +181,32 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     expect(withDraft.versions.some((version) => version.status === "draft" && version.version === 2)).toBe(true);
     expect(withDraft.versions.some((version) => version.status === "published" && version.version === 1)).toBe(true);
   });
+
+  it("enrollLeadInWorkflow enrolls a lead in a chosen workflow regardless of its trigger", async () => {
+    const { createLead } = await import("../../src/services/leads.service.js");
+    const { createWorkflow, updateDraftSteps, publishVersion } = await import("../../src/services/workflows.service.js");
+    const { enrollLeadInWorkflow } = await import("../../src/services/runs.service.js");
+
+    const lead = await withTestTransaction((client) =>
+      createLead(client, actor, { firstName: "Farah", company: "Foxtrot Co", source: "website", email: "farah@example.com" }),
+    );
+    // Trigger is call_not_connected, NOT manual_enrollment — autoEnroll(..., "manual_enrollment", ...)
+    // would never find this workflow; enrollLeadInWorkflow must still enroll into it by id.
+    const workflow = await withTestTransaction((client) =>
+      createWorkflow(client, actor, { name: "Not Connected Nurture (integration)", trigger: "call_not_connected" }),
+    );
+    await withTestTransaction((client) =>
+      updateDraftSteps(client, workflow.id, 1, [{ order: 0, delayDays: 0, action: "create_call_task", config: "Follow up", enabled: true }]),
+    );
+    await withTestTransaction((client) => publishVersion(client, actor, workflow.id, 1, "keep_existing"));
+
+    const run = await withTestTransaction((client) => enrollLeadInWorkflow(client, lead.id, workflow.id, "Manually enrolled (test)"));
+    expect(run).not.toBeNull();
+    expect(run?.workflowId).toBe(workflow.id);
+    expect(run?.status).toBe("running");
+
+    // Re-enrolling while the run is still active is a no-op (no duplicate enrollment), not an error.
+    const duplicate = await withTestTransaction((client) => enrollLeadInWorkflow(client, lead.id, workflow.id, "Second attempt"));
+    expect(duplicate).toBeNull();
+  });
 });

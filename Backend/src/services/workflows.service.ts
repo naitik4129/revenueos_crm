@@ -2,6 +2,7 @@ import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { InvalidTransitionError, NotFoundError, ValidationError } from "../errors.js";
 import type { WorkflowStatus, WorkflowStepAction, WorkflowTrigger, WorkflowVersionStatus } from "../domain/enums.js";
+import { findUnknownTemplateTokens } from "../domain/templateRenderer.js";
 
 export interface WorkflowRow {
   id: string;
@@ -267,6 +268,36 @@ export async function updateDraftSteps(db: Queryable, workflowId: string, versio
 export type EnrollmentMode = "keep_existing" | "migrate_to_new_version" | "restart_from_start";
 
 /**
+ * Refuses to publish a version whose send_email/send_whatsapp steps
+ * reference a template containing a `{{...}}` token outside the known set
+ * (src/domain/templateRenderer.ts's KNOWN_TEMPLATE_VARIABLES) — a typo'd
+ * variable would otherwise ship straight to a real customer's inbox/WhatsApp
+ * as literal `{{lead.nikname}}`-style text (src/worker.ts's renderer leaves
+ * unknown tokens untouched by design, rather than guessing or blanking).
+ */
+async function assertNoUnknownTemplateVariables(db: Queryable, versionId: string): Promise<void> {
+  const result = await db.query<{ step_order: number; template_name: string; subject: string | null; body: string }>(
+    `select ws.step_order, mt.name as template_name, mt.subject, mt.body
+       from public.workflow_steps ws
+       join public.message_templates mt on mt.id = ws.template_id
+      where ws.workflow_version_id = $1 and ws.action in ('send_email', 'send_whatsapp')`,
+    [versionId],
+  );
+
+  const problems: string[] = [];
+  for (const row of result.rows) {
+    const tokens = new Set([...findUnknownTemplateTokens(row.body), ...(row.subject ? findUnknownTemplateTokens(row.subject) : [])]);
+    if (tokens.size > 0) {
+      problems.push(`Step ${row.step_order + 1} template "${row.template_name}": {{${[...tokens].join("}}, {{")}}}`);
+    }
+  }
+
+  if (problems.length > 0) {
+    throw new ValidationError(`Cannot publish — unrecognized template variable(s) found: ${problems.join("; ")}`);
+  }
+}
+
+/**
  * Publishing never touches existing workflow_runs (Rule 11: a run keeps the
  * version it entered) — this is the "safe default" the product brief asks
  * for while the real migration UX isn't finalized. Only `keep_existing` is
@@ -293,6 +324,8 @@ export async function publishVersion(db: Queryable, actor: Actor, workflowId: st
   if (Number(stepCount.rows[0]?.count ?? 0) === 0) {
     throw new ValidationError("Cannot publish a version with no steps.");
   }
+
+  await assertNoUnknownTemplateVariables(db, v.id);
 
   // Demote the currently-published version first, then promote the new one
   // — the partial unique index (one Published per workflow) is not

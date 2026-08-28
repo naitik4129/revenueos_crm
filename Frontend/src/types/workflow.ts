@@ -104,4 +104,5 @@ export interface ScheduledAction {
   lastError?: string;
   executedAt?: string;
   cancelledAt?: string;
+  cancelReason?: string;
 }

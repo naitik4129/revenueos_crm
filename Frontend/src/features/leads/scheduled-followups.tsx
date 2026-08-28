@@ -1,0 +1,273 @@
+import { useState } from "react";
+import { toast } from "sonner";
+import { Bot, Check, Clock3, Mail, MessageSquare, TriangleAlert, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import { fmtDateTime, relDay } from "@/lib/format";
+import { label } from "@/lib/labels";
+import { stepsWithCumulativeDay } from "@/lib/workflow-timeline";
+import { messageFromError, useAutomations } from "@/store";
+import type { Run, ScheduledAction } from "@/types";
+
+/** Manual "enroll this lead in a workflow" dialog — controlled like LogCallDialog, so both the empty-state prompt below and the Automation tab's "Workflow runs" card can open the same instance. */
+export function EnrollWorkflowDialog({
+  leadId,
+  open,
+  onOpenChange,
+}: {
+  leadId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const automationStore = useAutomations();
+  const [workflowId, setWorkflowId] = useState("");
+  const [reason, setReason] = useState("");
+
+  const enrollable = automationStore.workflows.filter(
+    (workflow) =>
+      workflow.status === "active" &&
+      workflow.versions.some((version) => version.status === "published"),
+  );
+
+  const submit = async () => {
+    if (!workflowId) return;
+    try {
+      await automationStore.enrollLead(leadId, workflowId, reason.trim() || undefined);
+      toast.success("Lead enrolled in workflow");
+      setWorkflowId("");
+      setReason("");
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(messageFromError(error));
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Enroll in workflow</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Workflow</Label>
+            <Select value={workflowId} onValueChange={setWorkflowId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Choose a workflow" />
+              </SelectTrigger>
+              <SelectContent>
+                {enrollable.map((workflow) => (
+                  <SelectItem key={workflow.id} value={workflow.id}>
+                    {workflow.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {enrollable.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                No active, published workflows available yet.
+              </p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label>Reason (optional)</Label>
+            <Textarea
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              rows={2}
+              placeholder="Why this lead is going into this workflow"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={() => void submit()} disabled={!workflowId}>
+            Enroll
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const CHANNEL_ICON: Record<string, typeof Mail> = {
+  send_email: Mail,
+  send_whatsapp: MessageSquare,
+};
+
+function StepRow({
+  order,
+  day,
+  actionType,
+  action,
+  isNext,
+}: {
+  order: number;
+  day: number;
+  actionType: string;
+  action: ScheduledAction | undefined;
+  isNext: boolean;
+}) {
+  const ChannelIcon = CHANNEL_ICON[actionType] ?? Bot;
+
+  let icon = <Clock3 className="size-4 text-muted-foreground" />;
+  let tone = "border-border";
+  let statusText = "Upcoming";
+  let detail = `Day ${day} · ${label(actionType)}`;
+
+  if (action?.status === "completed") {
+    icon = <Check className="size-4 text-success" />;
+    tone = "border-success/30 bg-success/5";
+    statusText = "Sent";
+    detail = `${fmtDateTime(action.executedAt)} · ${label(actionType)}`;
+  } else if (action?.status === "failed") {
+    icon = <TriangleAlert className="size-4 text-destructive" />;
+    tone = "border-destructive/30 bg-destructive/5";
+    statusText = "Failed";
+    detail = action.lastError ?? label(actionType);
+  } else if (action?.status === "skipped" || action?.status === "cancelled") {
+    icon = <X className="size-4 text-muted-foreground" />;
+    tone = "border-border opacity-70";
+    statusText = action.status === "cancelled" ? "Cancelled" : "Skipped";
+    detail = action.cancelReason ?? action.lastError ?? label(actionType);
+  } else if (action) {
+    // pending / due / executing
+    icon = <Clock3 className="size-4 text-info" />;
+    tone = "border-info/40 bg-info/5";
+    statusText = isNext ? "Next up" : "Scheduled";
+    detail = `${relDay(action.scheduledFor)} · ${label(actionType)}`;
+  } else if (!isNext) {
+    tone = "opacity-60";
+  }
+
+  return (
+    <div className={cn("flex items-center gap-3 rounded-md border px-3 py-2", tone)}>
+      <div className="flex size-7 shrink-0 items-center justify-center rounded-full border bg-background">
+        {icon}
+      </div>
+      <ChannelIcon className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium">
+          Step {order + 1} · {statusText}
+        </div>
+        <div className="truncate text-xs text-muted-foreground">{detail}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "At a glance" view of a lead's nurture sequence: which messages already
+ * went out, and exactly when the next one is due — assembled entirely from
+ * data useAutomations() already loads (workflows+steps, runs, scheduled
+ * actions), no extra requests.
+ */
+export function ScheduledFollowupTimeline({
+  leadId,
+  doNotContact,
+  onEnrollClick,
+}: {
+  leadId: string;
+  doNotContact: boolean;
+  onEnrollClick: () => void;
+}) {
+  const automationStore = useAutomations();
+  const leadRuns = automationStore.runs.filter((run: Run) => run.leadId === leadId);
+  const nonTerminalRun = leadRuns.find((run) =>
+    ["running", "waiting", "paused"].includes(run.status),
+  );
+  // Fall back to the most recent run (even a completed/cancelled one) so
+  // there's still useful history to show — but whether the enroll shortcut
+  // appears is driven by nonTerminalRun specifically, not by "any run ever",
+  // so it doesn't disappear forever the moment a lead's first workflow ends.
+  const displayRun =
+    nonTerminalRun ?? leadRuns.slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
+
+  const enrollButton = (
+    <Button size="sm" variant="outline" disabled={doNotContact} onClick={onEnrollClick}>
+      Enroll in workflow
+    </Button>
+  );
+
+  if (!displayRun) {
+    return (
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+          <div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Scheduled follow-up
+            </div>
+            <div className="text-sm">Not currently enrolled in a nurture workflow.</div>
+          </div>
+          {enrollButton}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const workflow = automationStore.workflows.find((item) => item.id === displayRun.workflowId);
+  const version = workflow?.versions.find((item) => item.version === displayRun.version);
+  const rows = stepsWithCumulativeDay(version?.steps ?? []);
+  const actionsForRun = automationStore.scheduledActions.filter(
+    (action) => action.workflowRunId === displayRun.id,
+  );
+  const currentOrder = rows.find((row) => row.step.id === displayRun.currentStep)?.step.order;
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+        <CardTitle className="text-sm">
+          Scheduled follow-up
+          {workflow ? ` — ${workflow.name}` : ""}
+        </CardTitle>
+        <div className="flex items-center gap-2">
+          <StatusText run={displayRun} />
+          {!nonTerminalRun && enrollButton}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-1.5">
+        {rows.map(({ step, day }) => (
+          <StepRow
+            key={step.id}
+            order={step.order}
+            day={day}
+            actionType={step.action}
+            action={actionsForRun.find((action) => action.workflowStepId === step.id)}
+            isNext={step.order === currentOrder}
+          />
+        ))}
+        {rows.length === 0 && (
+          <p className="py-2 text-sm text-muted-foreground">This workflow has no steps.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatusText({ run }: { run: Run }) {
+  if (run.status === "completed") return <span className="text-xs text-success">Completed</span>;
+  if (run.status === "failed") return <span className="text-xs text-destructive">Failed</span>;
+  if (run.status === "cancelled")
+    return <span className="text-xs text-muted-foreground">Cancelled</span>;
+  if (run.status === "paused") return <span className="text-xs text-warning">Paused</span>;
+  return null;
+}

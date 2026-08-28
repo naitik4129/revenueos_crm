@@ -1,6 +1,6 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
-import { NotFoundError, ValidationError } from "../errors.js";
+import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import type { ProposalStatus } from "../domain/enums.js";
 import { routeProposalStatus } from "../domain/proposalRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
@@ -60,7 +60,7 @@ export interface CreateProposalInput {
 export async function createProposal(db: Queryable, actor: Actor, input: CreateProposalInput) {
   if (!input.title.trim()) throw new ValidationError("Proposal title is required.");
   const lead = await getLeadRowOr404(db, input.leadId);
-  if (lead.lifecycle_state === "do_not_contact") throw new ValidationError("This lead is Do Not Contact.");
+  if (lead.lifecycle_state === "do_not_contact") throw new DoNotContactError();
 
   const result = await db.query<{ id: string }>(
     `insert into public.proposals (lead_id, owner_id, title, document_reference, amount, status, notes, created_by, created_by_name)
@@ -141,6 +141,15 @@ export async function updateProposal(db: Queryable, id: string, patch: UpdatePro
 }
 
 /**
+ * Terminal proposal statuses: their routing already moved the lead's
+ * lifecycle (accepted -> won, rejected/expired -> long_term_nurture) or
+ * ended the deal (withdrawn). Their side effects (cancelling tasks,
+ * enrolling workflows, changing lifecycle) are one-way — re-running them by
+ * transitioning back out is not a safe "undo", so it's blocked below.
+ */
+const TERMINAL_PROPOSAL_STATUSES: ProposalStatus[] = ["accepted", "rejected", "withdrawn", "expired"];
+
+/**
  * Proposal status routing (product brief, "PROPOSALS"). This IS the
  * business operation — a bare PATCH on `status` would skip the required
  * lead-state cascade (Rule 16), so status changes only ever go through
@@ -149,6 +158,11 @@ export async function updateProposal(db: Queryable, id: string, patch: UpdatePro
 export async function updateProposalStatus(db: Queryable, actor: Actor, id: string, status: ProposalStatus) {
   const proposal = await getProposalRowOr404(db, id);
   if (proposal.status === status) return proposalToDto(proposal);
+  if (TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)) {
+    throw new ConflictError(
+      `Proposal is already "${proposal.status}", a terminal status — it can't be moved to "${status}". Create a new proposal instead.`,
+    );
+  }
 
   const sets = ["status = $2"];
   const params: unknown[] = [id, status];

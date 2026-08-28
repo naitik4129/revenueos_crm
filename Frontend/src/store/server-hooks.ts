@@ -392,6 +392,11 @@ export function useAutomations() {
             : backend.runs.retry(id),
     onSuccess: invalidate,
   });
+  const enroll = useMutation({
+    mutationFn: (input: { leadId: string; workflowId: string; reason?: string | undefined }) =>
+      backend.runs.create(input),
+    onSuccess: invalidate,
+  });
   const templateCreate = useMutation({
     mutationFn: (input: CreateTemplateInput) => backend.templates.create(input),
     onSuccess: invalidate,
@@ -417,6 +422,7 @@ export function useAutomations() {
       publish,
       duplicate,
       runAction,
+      enroll,
       templateCreate,
       templateUpdate,
     ].some((mutation) => mutation.isPending),
@@ -440,6 +446,8 @@ export function useAutomations() {
     resumeRun: (id: string) => runAction.mutateAsync({ id, action: "resume" }),
     cancelRun: (id: string) => runAction.mutateAsync({ id, action: "cancel" }),
     retryRun: (id: string) => runAction.mutateAsync({ id, action: "retry" }),
+    enrollLead: (leadId: string, workflowId: string, reason?: string) =>
+      enroll.mutateAsync({ leadId, workflowId, reason }),
     addTemplate: (input: Omit<Template, "id" | "active">) =>
       templateCreate.mutateAsync({
         name: input.name,

@@ -226,6 +226,21 @@ function UploadDialog({
   const [fileName, setFileName] = useState("proposal-v1.pdf");
   const [amount, setAmount] = useState("450000");
   const [notes, setNotes] = useState("");
+  const [loadedFor, setLoadedFor] = useState(false);
+
+  // This dialog is always mounted (only `open` toggles) — without resetting
+  // here, reopening "Upload proposal" for a different lead shows whatever
+  // was left over from the last upload (title/fileName/amount/notes).
+  if (open && !loadedFor) {
+    setLoadedFor(true);
+    setLeadId("");
+    setTitle("Sales Automation Proposal");
+    setFileName("proposal-v1.pdf");
+    setAmount("450000");
+    setNotes("");
+  }
+  if (!open && loadedFor) setLoadedFor(false);
+
   const selectedLead = leadId || leads[0]?.id || "";
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

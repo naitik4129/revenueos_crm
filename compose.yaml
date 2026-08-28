@@ -3,11 +3,17 @@ services:
     build:
       context: ./Frontend
       dockerfile: Dockerfile
-    environment:
-      NODE_ENV: production
-      HOST: 0.0.0.0
-      PORT: 3000
+      # Vite bakes these into the static bundle at build time — nginx serves
+      # static files with no server-side runtime to read env vars from after
+      # the image is built, so these must be build args, not `environment:`.
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:?VITE_SUPABASE_URL is required}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:?VITE_SUPABASE_ANON_KEY is required}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8787}
     init: true
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      # nginx.conf hardcodes `listen 8080` inside the container (the
+      # nginx-unprivileged base image's default) — only the host side of this
+      # mapping is configurable.
+      - "${FRONTEND_PORT:-8080}:8080"
     restart: unless-stopped
