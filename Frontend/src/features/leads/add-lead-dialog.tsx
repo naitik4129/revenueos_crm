@@ -24,21 +24,27 @@ import { messageFromError, useLeads, useSession } from "@/store";
 import { LEAD_SOURCES, type LeadSource } from "@/types";
 import { label } from "@/lib/labels";
 
-const INDUSTRIES = [
-  "Healthcare",
-  "Fintech",
-  "Manufacturing",
-  "SaaS",
-  "Retail",
-  "Logistics",
-  "Education",
-  "Energy",
-  "Insurance",
-  "Real Estate",
+const SERVICES = [
+  "B2B Lead Generation",
+  "Market Research",
+  "Target Account Identification",
+  "Account-Based Marketing (ABM)",
+  "Cold Calling",
+  "Email Outreach",
+  "LinkedIn Outreach",
+  "WhatsApp Outreach",
+  "Lead Nurturing & Follow-Up",
+  "Sales Conversion Support",
+  "Industrial Marketing",
+  "Digital Marketing",
+  "SEO",
+  "Website Optimization",
+  "Market Expansion",
+  "Business Development",
+  "Field Marketing / Direct Visits",
+  "End-to-End Sales & Marketing",
   "Other",
 ];
-
-const SERVICES = ["Sales Automation", "CRM Implementation", "Lead Nurturing", "Consulting"];
 
 export function AddLeadDialog({
   open,
@@ -57,8 +63,7 @@ export function AddLeadDialog({
     phone: "",
     email: "",
     source: "website" as LeadSource,
-    industry: "SaaS",
-    serviceInterest: "Sales Automation",
+    serviceInterest: "B2B Lead Generation",
     ownerId: currentUser?.id ?? "",
     notes: "",
   });
@@ -82,7 +87,6 @@ export function AddLeadDialog({
         phone: form.phone.trim(),
         email: form.email.trim(),
         source: form.source,
-        industry: form.industry,
         serviceInterest: form.serviceInterest,
         ownerId: form.ownerId,
       });
@@ -159,20 +163,6 @@ export function AddLeadDialog({
                 {LEAD_SOURCES.map((s) => (
                   <SelectItem key={s} value={s}>
                     {label(s)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Industry">
-            <Select value={form.industry} onValueChange={(v) => set("industry", v)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {INDUSTRIES.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {s}
                   </SelectItem>
                 ))}
               </SelectContent>

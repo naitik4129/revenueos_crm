@@ -23,6 +23,8 @@ export interface CallRoutingResult {
   task?: TaskSpec;
   /** Nurture workflow trigger to auto-enroll into, if any. */
   workflowTrigger?: WorkflowTrigger;
+  /** True when the outcome should immediately prompt the rep to schedule a meeting (Positive only). */
+  promptScheduleMeeting?: boolean;
   /** Phone contactability status to record, if the reason implies the number itself is bad. */
   phoneContactStatus?: "invalid" | "wrong_number";
 }
@@ -61,6 +63,7 @@ export function routeConnectedOutcome(
         stage: "meeting_scheduling",
         automation: "manual",
         task: { type: "schedule_meeting", title: "Schedule discovery meeting", dueInDays: 1 },
+        promptScheduleMeeting: true,
       };
     case "maybe":
       return {

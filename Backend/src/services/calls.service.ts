@@ -6,7 +6,6 @@ import { routeConnectedOutcome, routeNotConnected } from "../domain/callRouting.
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
 import { createTask, cancelOpenTasksForLead } from "./tasks.service.js";
 import { getLeadRowOr404, markDnc, setAutomationMode, setContactability, updateLead } from "./leads.service.js";
-import { autoEnroll } from "./runs.service.js";
 import { addDaysIso } from "../dto.js";
 
 export interface LogCallInput {
@@ -104,7 +103,7 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
   // lead-level DNC endpoint (Rule 6).
   if (input.connected && input.connectedOutcome === "do_not_contact") {
     await markDnc(db, actor, leadId, { reason: input.notes?.trim() || "Requested on call" });
-    return { call: callToDto(call), lead: await getLeadRowOr404(db, leadId) };
+    return { call: callToDto(call), lead: await getLeadRowOr404(db, leadId), workflowTrigger: undefined, promptScheduleMeeting: false };
   }
 
   const routing = input.connected
@@ -146,11 +145,17 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
     await cancelOpenTasksForLead(db, actor, leadId, "Superseded by positive call outcome", ["follow_up", "nurture"]);
   }
 
-  if (routing.workflowTrigger) {
-    await autoEnroll(db, leadId, routing.workflowTrigger, `Call outcome: ${input.connected ? input.connectedOutcome : "Not Connected"}`);
-  }
-
-  return { call: callToDto(call), lead: await getLeadRowOr404(db, leadId) };
+  // Unlike other routing effects, workflow enrollment is NOT applied here —
+  // the caller (route handler) surfaces `routing.workflowTrigger` back to the
+  // frontend so the rep is always asked which workflow to enroll in, rather
+  // than one being silently auto-picked (product decision: nurture entry
+  // always prompts a choice).
+  return {
+    call: callToDto(call),
+    lead: await getLeadRowOr404(db, leadId),
+    workflowTrigger: routing.workflowTrigger,
+    promptScheduleMeeting: routing.promptScheduleMeeting,
+  };
 }
 
 export async function listCallsForLead(db: Queryable, leadId: string) {

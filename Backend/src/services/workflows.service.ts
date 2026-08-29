@@ -1,6 +1,6 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
-import { InvalidTransitionError, NotFoundError, ValidationError } from "../errors.js";
+import { ConflictError, InvalidTransitionError, NotFoundError, ValidationError } from "../errors.js";
 import type { WorkflowStatus, WorkflowStepAction, WorkflowTrigger, WorkflowVersionStatus } from "../domain/enums.js";
 import { findUnknownTemplateTokens } from "../domain/templateRenderer.js";
 
@@ -378,6 +378,62 @@ export async function duplicateWorkflow(db: Queryable, actor: Actor, workflowId:
   return getWorkflow(db, newId);
 }
 
+/**
+ * `workflow_runs.workflow_id`/`workflow_version_id` are ON DELETE RESTRICT
+ * (Supabase/migrations/001_initial_migration.sql:1202-1203) — enrollment
+ * history must survive a workflow being deleted by default, so a workflow
+ * that any lead has ever been enrolled in (any run status, not just active
+ * ones) is refused unless the caller explicitly passes `force: true`
+ * (surfaced in the UI as a second "force delete" confirmation after the
+ * first one is refused) — in which case its workflow_runs rows are deleted
+ * first (scheduled_actions.workflow_run_id is ON DELETE CASCADE, so those
+ * go with them; tasks/timeline_events referencing a run are ON DELETE SET
+ * NULL, so those survive as orphaned records instead of being deleted).
+ *
+ * Versions/steps are ON DELETE CASCADE from workflows, but that cascade
+ * alone is NOT enough: `workflow_steps_draft_only_edit` (a defense-in-depth
+ * trigger, migration line ~1139) fires on every insert/update/delete of a
+ * workflow_steps row — including ones removed by cascade — and refuses to
+ * touch a step unless its parent version's status is "Draft" (by the time
+ * the cascade reaches the steps, the version row is already gone, so the
+ * trigger sees status NULL and rejects it: "workflow_steps can only be
+ * modified while their workflow_version is Draft"). That guard exists to
+ * stop a *live* Published/Previous version's historical steps from being
+ * silently rewritten — but we're deleting the whole workflow, so there's no
+ * history left to protect. Flip each version to Draft immediately before
+ * removing it, one at a time (never two at once — the partial unique index
+ * workflow_versions_one_draft_per_workflow allows only one Draft per
+ * workflow), so every step delete happens while its trigger check passes.
+ */
+export async function deleteWorkflow(db: Queryable, id: string, options: { force?: boolean } = {}) {
+  await getWorkflowRowOr404(db, id);
+  const runs = await db.query<{ count: string }>(`select count(*)::text as count from public.workflow_runs where workflow_id = $1`, [id]);
+  const runCount = Number(runs.rows[0]?.count ?? 0);
+  if (runCount > 0 && !options.force) {
+    throw new ConflictError(
+      `${runCount} lead${runCount === 1 ? " has" : "s have"} been enrolled in this workflow — pause it instead, or force-delete to permanently remove its enrollment history too.`,
+      { reason: "has_enrollment_history", runCount },
+    );
+  }
+  if (runCount > 0) {
+    await db.query(`delete from public.workflow_runs where workflow_id = $1`, [id]);
+  }
+
+  const versions = await db.query<{ id: string; status: WorkflowVersionStatus }>(
+    `select id, status from public.workflow_versions where workflow_id = $1 order by (status = 'draft') desc`,
+    [id],
+  );
+  for (const version of versions.rows) {
+    if (version.status !== "draft") {
+      await db.query(`update public.workflow_versions set status = 'draft', published_at = null where id = $1`, [version.id]);
+    }
+    await db.query(`delete from public.workflow_steps where workflow_version_id = $1`, [version.id]);
+    await db.query(`delete from public.workflow_versions where id = $1`, [version.id]);
+  }
+
+  await db.query(`delete from public.workflows where id = $1`, [id]);
+}
+
 // ---------------------------------------------------------------------------
 // Message templates
 // ---------------------------------------------------------------------------
@@ -458,4 +514,31 @@ export async function updateTemplate(db: Queryable, id: string, patch: { name?: 
   }
   const updated = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [id]);
   return templateToDto(updated.rows[0]!);
+}
+
+/**
+ * `workflow_steps.template_id` is ON DELETE SET NULL, so deleting a template
+ * never fails outright — but a step in a *published* version that loses its
+ * template would silently stop sending the next time it's due
+ * (computeEligibility in automation.service.ts reports "No template
+ * resolved" rather than crashing, which is easy to miss). Deleting a
+ * template only referenced by draft steps is fine (that's normal workflow-
+ * builder editing) and still allowed.
+ */
+export async function deleteTemplate(db: Queryable, id: string) {
+  const existing = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [id]);
+  if (!existing.rows[0]) throw new NotFoundError("Template");
+
+  const liveUsage = await db.query<{ count: string }>(
+    `select count(*)::text as count
+       from public.workflow_steps ws
+       join public.workflow_versions wv on wv.id = ws.workflow_version_id
+      where ws.template_id = $1 and wv.status = 'published'`,
+    [id],
+  );
+  if (Number(liveUsage.rows[0]?.count ?? 0) > 0) {
+    throw new ConflictError("Cannot delete a template used by a published workflow step — remove it from that step first.");
+  }
+
+  await db.query(`delete from public.message_templates where id = $1`, [id]);
 }

@@ -94,6 +94,7 @@ function query(path: string, params?: Record<string, string | number | boolean |
 const get = <T>(path: string, signal?: AbortSignal) => request<T>(path, signal ? { signal } : {});
 const send = <T>(method: "POST" | "PATCH" | "PUT", path: string, body?: unknown) =>
   request<T>(path, { method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+const del = (path: string) => request<void>(path, { method: "DELETE" });
 
 export interface CreateLeadInput {
   firstName: string;
@@ -256,7 +257,12 @@ export const backend = {
     reactivate: (id: string, reason?: string) =>
       send<Lead>("POST", `/leads/${id}/reactivate`, { reason }),
     logCall: (id: string, input: LogCallInput) =>
-      send<{ call: Call; lead: Lead }>("POST", `/leads/${id}/calls`, input),
+      send<{
+        call: Call;
+        lead: Lead;
+        workflowTrigger?: WorkflowTrigger;
+        promptScheduleMeeting?: boolean;
+      }>("POST", `/leads/${id}/calls`, input),
     calls: (id: string, signal?: AbortSignal) =>
       get<{ data: Call[] }>(`/leads/${id}/calls`, signal),
     timeline: (id: string, signal?: AbortSignal) =>
@@ -321,12 +327,14 @@ export const backend = {
         enrollmentMode: "keep_existing",
       }),
     duplicate: (id: string) => send<Workflow>("POST", `/workflows/${id}/duplicate`),
+    delete: (id: string, force?: boolean) => del(`/workflows/${id}${force ? "?force=true" : ""}`),
   },
   templates: {
     list: (signal?: AbortSignal) => get<{ data: Template[] }>("/templates", signal),
     create: (input: CreateTemplateInput) => send<Template>("POST", "/templates", input),
     update: (id: string, input: UpdateTemplateInput) =>
       send<Template>("PATCH", `/templates/${id}`, input),
+    delete: (id: string) => del(`/templates/${id}`),
   },
   runs: {
     list: (params?: Record<string, string | undefined>, signal?: AbortSignal) =>

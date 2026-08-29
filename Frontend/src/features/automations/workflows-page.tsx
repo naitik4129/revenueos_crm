@@ -1,13 +1,14 @@
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Bot, Copy, Plus } from "lucide-react";
+import { Bot, Copy, Plus, Trash2 } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { AutomationTabs } from "@/features/automations/automation-tabs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { StatusBadge } from "@/components/common/status-badge";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { relDay } from "@/lib/format";
 import { useAutomations, useSession } from "@/store";
 import { messageFromError } from "@/store";
@@ -29,13 +30,24 @@ import {
 } from "@/components/ui/select";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { label } from "@/lib/labels";
-import { WORKFLOW_TRIGGERS, type WorkflowTrigger } from "@/types";
+import { BackendError } from "@/lib/backend-client";
+import { WORKFLOW_TRIGGERS, type Workflow, type WorkflowTrigger } from "@/types";
 
 export function WorkflowsPage() {
-  const { workflows, updateWorkflow, duplicateWorkflow, addWorkflow, isLoading, error, isPending } =
-    useAutomations();
+  const {
+    workflows,
+    updateWorkflow,
+    duplicateWorkflow,
+    deleteWorkflow,
+    addWorkflow,
+    isLoading,
+    error,
+    isPending,
+  } = useAutomations();
   const { userName } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Workflow | null>(null);
+  const [forceDeleteTarget, setForceDeleteTarget] = useState<Workflow | null>(null);
   const mutate = async (work: () => Promise<unknown>, success: string) => {
     try {
       await work();
@@ -127,6 +139,14 @@ export function WorkflowsPage() {
                             Edit steps
                           </Link>
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setDeleteTarget(w)}
+                          aria-label="Delete workflow"
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
                       </div>
                     </div>
                   </CardContent>
@@ -151,6 +171,52 @@ export function WorkflowsPage() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onSave={(input) => void mutate(() => addWorkflow(input), "Workflow draft created")}
+      />
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(value) => {
+          if (!value) setDeleteTarget(null);
+        }}
+        title={`Delete "${deleteTarget?.name ?? ""}"?`}
+        description="This removes the workflow and all of its versions and steps. Workflows that leads have ever been enrolled in need a second confirmation — pausing is the non-destructive alternative."
+        disabled={isPending}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const target = deleteTarget;
+          setDeleteTarget(null);
+          deleteWorkflow(target.id)
+            .then(() => toast.success("Workflow deleted"))
+            .catch((failure: unknown) => {
+              if (
+                failure instanceof BackendError &&
+                (failure.details as { reason?: string } | undefined)?.reason ===
+                  "has_enrollment_history"
+              ) {
+                setForceDeleteTarget(target);
+                return;
+              }
+              toast.error(messageFromError(failure));
+            });
+        }}
+      />
+      <ConfirmDialog
+        open={!!forceDeleteTarget}
+        onOpenChange={(value) => {
+          if (!value) setForceDeleteTarget(null);
+        }}
+        title={`Force delete "${forceDeleteTarget?.name ?? ""}"?`}
+        description="Leads have been enrolled in this workflow. Force-deleting permanently erases that enrollment history (which runs, when, what happened) — this cannot be undone. Pausing the workflow is the reversible alternative."
+        confirmLabel="Force delete"
+        disabled={isPending}
+        onConfirm={() => {
+          if (!forceDeleteTarget) return;
+          const target = forceDeleteTarget;
+          setForceDeleteTarget(null);
+          void mutate(
+            () => deleteWorkflow(target.id, true),
+            "Workflow and its enrollment history deleted",
+          );
+        }}
       />
     </div>
   );

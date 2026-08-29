@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { AutomationTabs } from "@/features/automations/automation-tabs";
 import { Button } from "@/components/ui/button";
@@ -24,14 +24,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { messageFromError, useAutomations } from "@/store";
 import type { Template, TemplateType } from "@/types";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 
 export function TemplatesPage() {
-  const { templates, addTemplate, updateTemplate, isLoading, error, isPending } = useAutomations();
+  const { templates, addTemplate, updateTemplate, deleteTemplate, isLoading, error, isPending } =
+    useAutomations();
   const [editing, setEditing] = useState<Template | null>(null);
   const [creating, setCreating] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Template | null>(null);
 
   return (
     <div className="pb-10">
@@ -81,9 +84,19 @@ export function TemplatesPage() {
                         {t.active ? "Active" : "Disabled"}
                       </span>
                     </div>
-                    <Button size="sm" variant="outline" onClick={() => setEditing(t)}>
-                      Edit
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="outline" onClick={() => setEditing(t)}>
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleteTarget(t)}
+                        aria-label="Delete template"
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -111,6 +124,23 @@ export function TemplatesPage() {
               .then(() => toast.success("Template created"))
               .catch((failure) => toast.error(messageFromError(failure)));
           }
+        }}
+      />
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(v) => {
+          if (!v) setDeleteTarget(null);
+        }}
+        title={`Delete "${deleteTarget?.name ?? ""}"?`}
+        description="This removes the template. Templates still used by a published workflow step can't be deleted — remove them from that step first."
+        disabled={isPending}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const target = deleteTarget;
+          setDeleteTarget(null);
+          void deleteTemplate(target.id)
+            .then(() => toast.success("Template deleted"))
+            .catch((failure) => toast.error(messageFromError(failure)));
         }}
       />
     </div>
@@ -179,7 +209,8 @@ function TemplateDialog({
             <Label className="mb-1.5 block text-xs">Body</Label>
             <Textarea rows={7} value={body} onChange={(e) => setBody(e.target.value)} />
             <p className="pt-1 text-xs text-muted-foreground">
-              Use {"{{first_name}}"} and {"{{company}}"} for personalisation.
+              Use {"{{lead.firstName}}"}, {"{{lead.company}}"}, {"{{lead.fullName}}"}, or{" "}
+              {"{{owner.name}}"} for personalisation.
             </p>
           </div>
         </div>

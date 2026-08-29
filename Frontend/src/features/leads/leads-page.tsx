@@ -15,19 +15,29 @@ import {
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
 import { isOverdue, relDay } from "@/lib/format";
-import { useLeads, useSession } from "@/store";
+import { useAutomations, useLeads, useSession } from "@/store";
 import { PIPELINE_STAGES } from "@/types";
 import { label } from "@/lib/labels";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 
 export function LeadsPage() {
   const { leads, isLoading, error } = useLeads();
+  const { scheduledActions } = useAutomations();
   const { users, userName } = useSession();
   const addLead = useAddLead();
   const [q, setQ] = useState("");
   const [owner, setOwner] = useState("all");
   const [stage, setStage] = useState("all");
   const [auto, setAuto] = useState("all");
+
+  // Same blind spot as the lead detail page's "Next action" card: a lead
+  // whose active workflow's next step is send_email/send_whatsapp has no
+  // `tasks` row (only create_call_task/create_follow_up_task steps write
+  // one), so `lead.nextAction` alone under-reports "has a next action".
+  const hasAutomationStep = (leadId: string) =>
+    scheduledActions.some(
+      (action) => action.leadId === leadId && ["pending", "due"].includes(action.status),
+    );
 
   const filtered = useMemo(
     () =>
@@ -45,7 +55,9 @@ export function LeadsPage() {
     [leads, owner, stage, auto, q],
   );
 
-  const missing = filtered.filter((l) => l.lifecycleState === "active" && !l.nextAction).length;
+  const missing = filtered.filter(
+    (l) => l.lifecycleState === "active" && !l.nextAction && !hasAutomationStep(l.id),
+  ).length;
 
   return (
     <div className="pb-10">
@@ -171,6 +183,8 @@ export function LeadsPage() {
                           l.nextAction.title
                         ) : l.doNotContact ? (
                           <span className="text-muted-foreground">Suppressed</span>
+                        ) : hasAutomationStep(l.id) ? (
+                          <span className="text-muted-foreground">Automated step scheduled</span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-warning-foreground">
                             <AlertTriangle className="size-3.5" /> No next action

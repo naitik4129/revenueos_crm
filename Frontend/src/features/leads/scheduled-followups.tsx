@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -23,28 +24,52 @@ import { cn } from "@/lib/utils";
 import { fmtDateTime, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { stepsWithCumulativeDay } from "@/lib/workflow-timeline";
+import { findCurrentStep } from "@/lib/workflow-timeline";
 import { messageFromError, useAutomations } from "@/store";
-import type { Run, ScheduledAction } from "@/types";
+import type { Run, ScheduledAction, WorkflowTrigger } from "@/types";
 
-/** Manual "enroll this lead in a workflow" dialog — controlled like LogCallDialog, so both the empty-state prompt below and the Automation tab's "Workflow runs" card can open the same instance. */
+/**
+ * Manual "enroll this lead in a workflow" dialog — controlled like
+ * LogCallDialog, so the empty-state prompt below, the Automation tab's
+ * "Workflow runs" card, and the Lead Journey card's post-call-outcome
+ * prompt can all open the same instance. When `triggerFilter` is set (the
+ * lead just moved into a nurture stage from a call outcome), the workflow
+ * list is narrowed to that trigger and pre-selected when there's exactly
+ * one match — the rep still has to click Enroll, nothing is auto-applied.
+ */
 export function EnrollWorkflowDialog({
   leadId,
   open,
   onOpenChange,
+  triggerFilter,
 }: {
   leadId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  triggerFilter?: WorkflowTrigger;
 }) {
   const automationStore = useAutomations();
   const [workflowId, setWorkflowId] = useState("");
   const [reason, setReason] = useState("");
 
-  const enrollable = automationStore.workflows.filter(
+  const active = automationStore.workflows.filter(
     (workflow) =>
       workflow.status === "active" &&
       workflow.versions.some((version) => version.status === "published"),
   );
+  const matchingTrigger = triggerFilter
+    ? active.filter((workflow) => workflow.trigger === triggerFilter)
+    : [];
+  const enrollable = matchingTrigger.length > 0 ? matchingTrigger : active;
+
+  const loadedFor = `${open}:${triggerFilter ?? ""}`;
+  const [lastLoadedFor, setLastLoadedFor] = useState("");
+  if (open && lastLoadedFor !== loadedFor) {
+    setLastLoadedFor(loadedFor);
+    setWorkflowId(matchingTrigger.length === 1 ? matchingTrigger[0]!.id : "");
+    setReason("");
+  }
+  if (!open && lastLoadedFor !== "") setLastLoadedFor("");
 
   const submit = async () => {
     if (!workflowId) return;
@@ -64,6 +89,11 @@ export function EnrollWorkflowDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Enroll in workflow</DialogTitle>
+          {triggerFilter && (
+            <DialogDescription>
+              This lead just moved to nurture — pick the workflow to enroll them in.
+            </DialogDescription>
+          )}
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1.5">
@@ -83,6 +113,12 @@ export function EnrollWorkflowDialog({
             {enrollable.length === 0 && (
               <p className="text-xs text-muted-foreground">
                 No active, published workflows available yet.
+              </p>
+            )}
+            {triggerFilter && matchingTrigger.length === 0 && active.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                No workflow is configured for this outcome specifically — showing all active
+                workflows instead.
               </p>
             )}
           </div>
@@ -181,6 +217,9 @@ function StepRow({
  * data useAutomations() already loads (workflows+steps, runs, scheduled
  * actions), no extra requests.
  */
+/** How many upcoming steps the card shows inline before collapsing the rest behind "View all". */
+const VISIBLE_STEP_COUNT = 2;
+
 export function ScheduledFollowupTimeline({
   leadId,
   doNotContact,
@@ -190,6 +229,7 @@ export function ScheduledFollowupTimeline({
   doNotContact: boolean;
   onEnrollClick: () => void;
 }) {
+  const [viewAllOpen, setViewAllOpen] = useState(false);
   const automationStore = useAutomations();
   const leadRuns = automationStore.runs.filter((run: Run) => run.leadId === leadId);
   const nonTerminalRun = leadRuns.find((run) =>
@@ -230,35 +270,72 @@ export function ScheduledFollowupTimeline({
   const actionsForRun = automationStore.scheduledActions.filter(
     (action) => action.workflowRunId === displayRun.id,
   );
-  const currentOrder = rows.find((row) => row.step.id === displayRun.currentStep)?.step.order;
+  const currentOrder = findCurrentStep(workflow, displayRun)?.order;
+  const actionFor = (stepId: string) =>
+    actionsForRun.find((action) => action.workflowStepId === stepId);
+
+  // Show the upcoming step and the one right after it, not just "the first
+  // two rows" — once earlier steps have already sent, index 0 would be
+  // stale history instead of what's actually next.
+  const currentIndex = rows.findIndex((row) => row.step.order === currentOrder);
+  const windowStart = currentIndex >= 0 ? currentIndex : 0;
+  const visibleRows = rows.slice(windowStart, windowStart + VISIBLE_STEP_COUNT);
+  const hiddenCount = rows.length - visibleRows.length;
+  const title = `Scheduled follow-up${workflow ? ` — ${workflow.name}` : ""}`;
 
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm">
-          Scheduled follow-up
-          {workflow ? ` — ${workflow.name}` : ""}
-        </CardTitle>
+        <CardTitle className="text-sm">{title}</CardTitle>
         <div className="flex items-center gap-2">
           <StatusText run={displayRun} />
           {!nonTerminalRun && enrollButton}
         </div>
       </CardHeader>
       <CardContent className="space-y-1.5">
-        {rows.map(({ step, day }) => (
+        {visibleRows.map(({ step, day }) => (
           <StepRow
             key={step.id}
             order={step.order}
             day={day}
             actionType={step.action}
-            action={actionsForRun.find((action) => action.workflowStepId === step.id)}
+            action={actionFor(step.id)}
             isNext={step.order === currentOrder}
           />
         ))}
         {rows.length === 0 && (
           <p className="py-2 text-sm text-muted-foreground">This workflow has no steps.</p>
         )}
+        {hiddenCount > 0 && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-auto px-1 py-1 text-xs text-muted-foreground"
+            onClick={() => setViewAllOpen(true)}
+          >
+            View all {rows.length} steps
+          </Button>
+        )}
       </CardContent>
+      <Dialog open={viewAllOpen} onOpenChange={setViewAllOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[70vh] space-y-1.5 overflow-y-auto">
+            {rows.map(({ step, day }) => (
+              <StepRow
+                key={step.id}
+                order={step.order}
+                day={day}
+                actionType={step.action}
+                action={actionFor(step.id)}
+                isNext={step.order === currentOrder}
+              />
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

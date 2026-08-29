@@ -1,16 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import {
-  ArrowLeft,
-  Bot,
-  CalendarPlus,
-  Check,
-  Mail,
-  MessageSquare,
-  Phone,
-  ShieldBan,
-} from "lucide-react";
+import { ArrowLeft, Bot, CalendarPlus, Check, ShieldBan } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,10 +26,14 @@ import {
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { LogCallDialog } from "./log-call-dialog";
-import { EnrollWorkflowDialog, ScheduledFollowupTimeline } from "./scheduled-followups";
+import { EnrollWorkflowDialog } from "./scheduled-followups";
+import { LeadJourneyCard } from "./lead-journey-card";
+import { ScheduleMeetingDialog } from "@/features/meetings/schedule-meeting-dialog";
 import { dateInputValue, toIsoFromIst } from "@/lib/dates";
 import { fmtDateTime, isOverdue, money, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
+import { nurtureTriggerForStage } from "@/lib/pipeline";
+import { findCurrentStep } from "@/lib/workflow-timeline";
 import {
   messageFromError,
   useAutomations,
@@ -59,6 +54,7 @@ import {
   type PipelineStage,
   type ResponseState,
   type TaskType,
+  type WorkflowTrigger,
 } from "@/types";
 
 export function LeadDetailPage({ leadId }: { leadId: string }) {
@@ -77,7 +73,15 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
   const [reason, setReason] = useState("");
   const [nextOpen, setNextOpen] = useState(false);
   const [enrollOpen, setEnrollOpen] = useState(false);
+  const [enrollTriggerFilter, setEnrollTriggerFilter] = useState<WorkflowTrigger | undefined>(
+    undefined,
+  );
+  const [scheduleMeetingOpen, setScheduleMeetingOpen] = useState(false);
   const [note, setNote] = useState("");
+  const openEnroll = (trigger?: WorkflowTrigger) => {
+    setEnrollTriggerFilter(trigger);
+    setEnrollOpen(true);
+  };
 
   const activity = useMemo(
     () => timelineStore.timeline.slice().sort((a, b) => b.at.localeCompare(a.at)),
@@ -114,6 +118,15 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
   const leadActionsScheduled = automationStore.scheduledActions.filter(
     (item) => item.leadId === leadId,
   );
+  // The "Next action" card only knows about `tasks` rows (create_call_task /
+  // create_follow_up_task steps), so a lead whose active workflow's next
+  // step is send_email/send_whatsapp otherwise shows "No next action
+  // assigned" even though it's correctly enrolled and due to fire — this
+  // fills that gap from data the automation store already loaded, same as
+  // ScheduledFollowupTimeline does.
+  const nextAutomationStep = leadActionsScheduled
+    .filter((action) => ["pending", "due"].includes(action.status))
+    .sort((a, b) => a.scheduledFor.localeCompare(b.scheduledFor))[0];
   const mutate = async (work: () => Promise<unknown>, success: string) => {
     try {
       await work();
@@ -135,35 +148,6 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                 <ArrowLeft className="mr-1 size-4" /> Leads
               </Link>
             </Button>
-            <Button size="sm" onClick={() => setCallOpen(true)} disabled={lead.doNotContact}>
-              <Phone className="mr-1 size-4" /> Log call
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={lead.doNotContact}
-              onClick={() =>
-                void mutate(
-                  () => leadActions.logCommunication(leadId, "email"),
-                  "Email activity recorded",
-                )
-              }
-            >
-              <Mail className="mr-1 size-4" /> Email
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={lead.doNotContact}
-              onClick={() =>
-                void mutate(
-                  () => leadActions.logCommunication(leadId, "whatsapp"),
-                  "WhatsApp activity recorded",
-                )
-              }
-            >
-              <MessageSquare className="mr-1 size-4" /> WhatsApp
-            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -178,7 +162,19 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
 
       <div className="grid gap-4 p-6 lg:grid-cols-[1fr_320px]">
         <div className="min-w-0 space-y-4">
-          <Card className={lead.nextAction ? "" : "border-warning/50 bg-warning/5"}>
+          <LeadJourneyCard
+            leadId={leadId}
+            pipelineStage={lead.pipelineStage}
+            doNotContact={lead.doNotContact}
+            onCallClick={() => setCallOpen(true)}
+            onEnrollClick={() => openEnroll(nurtureTriggerForStage(lead.pipelineStage))}
+          />
+
+          <Card
+            className={
+              lead.nextAction || nextAutomationStep ? "" : "border-warning/50 bg-warning/5"
+            }
+          >
             <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
               <div>
                 <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -193,6 +189,15 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                         {relDay(lead.nextAction.dueAt)}
                       </span>{" "}
                       · {lead.nextAction.ownerName ?? userName(lead.nextAction.ownerId)}
+                    </div>
+                  </>
+                ) : nextAutomationStep ? (
+                  <>
+                    <div className="text-base font-semibold">
+                      Automated: {label(nextAutomationStep.actionType)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Workflow step · due {relDay(nextAutomationStep.scheduledFor)}
                     </div>
                   </>
                 ) : (
@@ -224,12 +229,6 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
               </div>
             </CardContent>
           </Card>
-
-          <ScheduledFollowupTimeline
-            leadId={leadId}
-            doNotContact={lead.doNotContact}
-            onEnrollClick={() => setEnrollOpen(true)}
-          />
 
           <Tabs defaultValue="overview">
             <TabsList>
@@ -265,19 +264,26 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                   <CardTitle className="text-sm">Pipeline</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
-                  <SelectField
-                    label="Stage"
-                    value={lead.pipelineStage}
-                    disabled={lead.lifecycleState !== "active"}
-                    options={PIPELINE_STAGES}
-                    onChange={(value) =>
-                      void mutate(
-                        () =>
-                          leadActions.updateLead(leadId, { pipelineStage: value as PipelineStage }),
-                        "Stage updated",
-                      )
-                    }
-                  />
+                  <div>
+                    <SelectField
+                      label="Stage (manual override)"
+                      value={lead.pipelineStage}
+                      disabled={lead.lifecycleState !== "active"}
+                      options={PIPELINE_STAGES}
+                      onChange={(value) =>
+                        void mutate(
+                          () =>
+                            leadActions.updateLead(leadId, {
+                              pipelineStage: value as PipelineStage,
+                            }),
+                          "Stage updated",
+                        )
+                      }
+                    />
+                    <p className="pt-1 text-[11px] text-muted-foreground">
+                      Normally set automatically by call outcomes, meetings, and proposals.
+                    </p>
+                  </div>
                   <SelectField
                     label="Response"
                     value={lead.responseState}
@@ -475,7 +481,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                     size="sm"
                     variant="outline"
                     disabled={lead.doNotContact}
-                    onClick={() => setEnrollOpen(true)}
+                    onClick={() => openEnroll()}
                   >
                     Enroll in workflow
                   </Button>
@@ -485,6 +491,12 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                     const workflow = automationStore.workflows.find(
                       (item) => item.id === run.workflowId,
                     );
+                    const currentStep = findCurrentStep(workflow, run);
+                    const currentStepLabel = currentStep
+                      ? label(currentStep.action)
+                      : ["running", "waiting"].includes(run.status)
+                        ? "No enabled steps configured"
+                        : "—";
                     return (
                       <div key={run.id} className="rounded-md border px-3 py-2">
                         <div className="flex justify-between">
@@ -494,18 +506,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                           <StatusBadge value={run.status} />
                         </div>
                         <div className="pt-0.5 text-xs text-muted-foreground">
-                          Current step:{" "}
-                          {run.currentStep
-                            ? workflow?.versions
-                                .find((version) => version.version === run.version)
-                                ?.steps.find((step) => step.id === run.currentStep)?.action
-                              ? label(
-                                  workflow.versions
-                                    .find((version) => version.version === run.version)
-                                    ?.steps.find((step) => step.id === run.currentStep)?.action,
-                                )
-                              : run.currentStep
-                            : "—"}
+                          Current step: {currentStepLabel}
                           {run.nextRunAt ? ` · next ${relDay(run.nextRunAt)}` : ""}
                         </div>
                         {run.lastError && (
@@ -679,16 +680,36 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
             <CardContent className="py-4 text-xs text-muted-foreground">
               <p>CRM data is persisted through the backend.</p>
               <p className="mt-1 flex items-center gap-1.5">
-                <Bot className="size-3.5" /> Workflow sends run on the backend's automation
-                worker.
+                <Bot className="size-3.5" /> Workflow sends run on the backend's automation worker.
               </p>
             </CardContent>
           </Card>
         </div>
       </div>
 
-      <LogCallDialog leadId={leadId} open={callOpen} onOpenChange={setCallOpen} />
-      <EnrollWorkflowDialog leadId={leadId} open={enrollOpen} onOpenChange={setEnrollOpen} />
+      <LogCallDialog
+        leadId={leadId}
+        open={callOpen}
+        onOpenChange={setCallOpen}
+        onEnrollPrompt={(trigger) => openEnroll(trigger)}
+        onScheduleMeetingPrompt={() => setScheduleMeetingOpen(true)}
+      />
+      <ScheduleMeetingDialog
+        leadId={leadId}
+        meeting={null}
+        open={scheduleMeetingOpen}
+        onOpenChange={setScheduleMeetingOpen}
+        onSave={(value) => void mutate(() => meetingStore.addMeeting(value), "Meeting scheduled")}
+      />
+      <EnrollWorkflowDialog
+        leadId={leadId}
+        open={enrollOpen}
+        onOpenChange={(value) => {
+          setEnrollOpen(value);
+          if (!value) setEnrollTriggerFilter(undefined);
+        }}
+        {...(enrollTriggerFilter ? { triggerFilter: enrollTriggerFilter } : {})}
+      />
       <ReasonDialog
         open={dncOpen}
         title="Mark Do Not Contact"
@@ -866,7 +887,9 @@ function NextActionDialog({
     setTitle(initial?.title ?? "");
     setDue(
       initial
-        ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date(initial.dueAt))
+        ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(
+            new Date(initial.dueAt),
+          )
         : dateInputValue(1),
     );
     setOwner(initial?.ownerId ?? defaultOwner);

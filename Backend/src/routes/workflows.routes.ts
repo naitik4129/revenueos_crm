@@ -3,7 +3,7 @@ import { z } from "zod";
 import { asyncHandler } from "../asyncHandler.js";
 import { requireAuth } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
-import { parseBody, parseParams } from "../validation/parse.js";
+import { parseBody, parseParams, parseQuery } from "../validation/parse.js";
 import { WORKFLOW_STATUSES, WORKFLOW_STEP_ACTIONS, WORKFLOW_TRIGGERS, TEMPLATE_CHANNELS } from "../domain/enums.js";
 import * as workflowsService from "../services/workflows.service.js";
 
@@ -108,6 +108,17 @@ workflowsRouter.post(
   }),
 );
 
+const deleteWorkflowQuerySchema = z.object({ force: z.coerce.boolean().optional() });
+
+workflowsRouter.delete(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const { force } = parseQuery(deleteWorkflowQuerySchema, req.query);
+    await withTransaction((client) => workflowsService.deleteWorkflow(client, req.params.id!, { force }));
+    res.status(204).send();
+  }),
+);
+
 // --- Templates ---------------------------------------------------------------
 
 export const templatesRouter = Router();
@@ -151,5 +162,13 @@ templatesRouter.patch(
     const patch = parseBody(updateTemplateSchema, req.body);
     const template = await withTransaction((client) => workflowsService.updateTemplate(client, req.params.id!, patch));
     res.json(template);
+  }),
+);
+
+templatesRouter.delete(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    await withTransaction((client) => workflowsService.deleteTemplate(client, req.params.id!));
+    res.status(204).send();
   }),
 );

@@ -251,7 +251,12 @@ leadsRouter.post(
   asyncHandler(async (req, res) => {
     const input = parseBody(logCallSchema, req.body);
     const result = await withTransaction((client) => logCall(client, req.actor!, req.params.id!, input));
-    res.status(201).json({ call: result.call, lead: await withNextAction(result.lead) });
+    res.status(201).json({
+      call: result.call,
+      lead: await withNextAction(result.lead),
+      workflowTrigger: result.workflowTrigger,
+      promptScheduleMeeting: result.promptScheduleMeeting,
+    });
   }),
 );
 

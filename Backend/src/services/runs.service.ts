@@ -1,7 +1,8 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, NotFoundError } from "../errors.js";
-import type { AutomationMode, WorkflowRunStatus, WorkflowStepAction, WorkflowTrigger } from "../domain/enums.js";
+import type { AutomationMode, LifecycleState, WorkflowRunStatus, WorkflowStepAction, WorkflowTrigger } from "../domain/enums.js";
+import { isTerminalLifecycle } from "../domain/pipeline.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { findActiveWorkflowsForTrigger, getWorkflowRowOr404 } from "./workflows.service.js";
 import { wakeAutomationExecutor } from "./n8nWake.js";
@@ -173,6 +174,30 @@ export async function scheduleStepAfter(db: Queryable, runId: string, leadId: st
 }
 
 /**
+ * Enrolling a lead in a workflow means nothing fires unless the lead's
+ * automation is actually on — so enrollment always turns it on. Deliberately
+ * does NOT import setAutomationMode from leads.service.ts: that module
+ * already imports applyAutomationModeToRuns from this one, and importing
+ * back would create a circular dependency between the two files. Mirrors
+ * setAutomationMode's own update + timeline event + cascade inline instead,
+ * using the same terminal-lifecycle guard (isTerminalLifecycle) so a
+ * won/lost/discarded/do_not_contact/merged lead's automation is never
+ * resurrected by an enrollment call.
+ */
+async function activateAutomationForEnrollment(db: Queryable, leadId: string, reason: string) {
+  const result = await db.query<{ automation_mode: AutomationMode; lifecycle_state: LifecycleState }>(
+    `select automation_mode, lifecycle_state from public.leads where id = $1`,
+    [leadId],
+  );
+  const lead = result.rows[0];
+  if (!lead || lead.automation_mode === "active" || isTerminalLifecycle(lead.lifecycle_state)) return;
+
+  await db.query(`update public.leads set automation_mode = 'active', last_activity_at = now() where id = $1`, [leadId]);
+  await addTimelineEvent(db, { leadId, kind: "automation", title: "Automation Resumed", detail: reason, ...AUTOMATION_ACTOR });
+  await applyAutomationModeToRuns(db, leadId, "active", reason);
+}
+
+/**
  * Enrolls a lead in one specific workflow version: creates the run and
  * schedules its first step, or returns null if the lead already has a
  * non-terminal run against this workflow (no duplicate enrollment). Shared
@@ -215,6 +240,8 @@ async function enrollLeadInVersion(
     ...AUTOMATION_ACTOR,
     relatedWorkflowRunId: run.id,
   });
+
+  await activateAutomationForEnrollment(db, leadId, `Automation activated by workflow enrollment: ${reason}`);
 
   const full = await getRunRowOr404(db, run.id);
   return runToDto(full, full.version_number);

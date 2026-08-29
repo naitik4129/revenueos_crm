@@ -28,16 +28,23 @@ import {
   CALL_NOT_CONNECTED_REASONS,
   type CallConnectedOutcome,
   type CallNotConnectedReason,
+  type WorkflowTrigger,
 } from "@/types";
 
 export function LogCallDialog({
   leadId,
   open,
   onOpenChange,
+  onEnrollPrompt,
+  onScheduleMeetingPrompt,
 }: {
   leadId: string;
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** Called instead of the plain success toast when the outcome moves the lead into nurture — the rep is always asked which workflow to enroll in, nothing is auto-enrolled silently. */
+  onEnrollPrompt?: (trigger: WorkflowTrigger) => void;
+  /** Called when the outcome is Positive — chains straight into scheduling a meeting instead of leaving the rep to notice the "Schedule discovery meeting" task on their own. */
+  onScheduleMeetingPrompt?: () => void;
 }) {
   const { getLead, logCall, isPending } = useLeads();
   const lead = getLead(leadId);
@@ -63,7 +70,7 @@ export function LogCallDialog({
   const save = async () => {
     if (connected === null) return;
     try {
-      await logCall(leadId, {
+      const result = await logCall(leadId, {
         connected,
         ...(connected
           ? { connectedOutcome: outcome ?? undefined }
@@ -76,6 +83,8 @@ export function LogCallDialog({
       toast.success(connected ? `Call logged — ${label(outcome)}` : "Call logged — Not Connected");
       onOpenChange(false);
       reset();
+      if (result?.workflowTrigger) onEnrollPrompt?.(result.workflowTrigger);
+      if (result?.promptScheduleMeeting) onScheduleMeetingPrompt?.();
     } catch (error) {
       toast.error(messageFromError(error));
     }

@@ -375,6 +375,11 @@ export function useAutomations() {
     mutationFn: (id: string) => backend.workflows.duplicate(id),
     onSuccess: invalidate,
   });
+  const workflowDelete = useMutation({
+    mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
+      backend.workflows.delete(id, force),
+    onSuccess: invalidate,
+  });
   const runAction = useMutation({
     mutationFn: ({
       id,
@@ -406,6 +411,10 @@ export function useAutomations() {
       backend.templates.update(id, input),
     onSuccess: invalidate,
   });
+  const templateDelete = useMutation({
+    mutationFn: (id: string) => backend.templates.delete(id),
+    onSuccess: invalidate,
+  });
   const workflowList = workflows.data?.data ?? [];
   return {
     workflows: workflowList,
@@ -421,10 +430,12 @@ export function useAutomations() {
       steps,
       publish,
       duplicate,
+      workflowDelete,
       runAction,
       enroll,
       templateCreate,
       templateUpdate,
+      templateDelete,
     ].some((mutation) => mutation.isPending),
     templateName: (id?: string) =>
       templates.data?.data.find((template) => template.id === id)?.name ?? "—",
@@ -442,6 +453,8 @@ export function useAutomations() {
       steps.mutateAsync({ id, version, steps: value }),
     publishVersion: (id: string, version: number) => publish.mutateAsync({ id, version }),
     duplicateWorkflow: (id: string) => duplicate.mutateAsync(id),
+    deleteWorkflow: (id: string, force?: boolean) =>
+      workflowDelete.mutateAsync(force !== undefined ? { id, force } : { id }),
     pauseRun: (id: string) => runAction.mutateAsync({ id, action: "pause" }),
     resumeRun: (id: string) => runAction.mutateAsync({ id, action: "resume" }),
     cancelRun: (id: string) => runAction.mutateAsync({ id, action: "cancel" }),
@@ -458,6 +471,7 @@ export function useAutomations() {
       }),
     updateTemplate: (id: string, input: UpdateTemplateInput) =>
       templateUpdate.mutateAsync({ id, input }),
+    deleteTemplate: (id: string) => templateDelete.mutateAsync(id),
   };
 }
 export type AutomationsSlice = ReturnType<typeof useAutomations>;

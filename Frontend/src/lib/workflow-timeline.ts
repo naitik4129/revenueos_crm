@@ -1,4 +1,4 @@
-import type { WorkflowStep } from "@/types";
+import type { Run, Workflow, WorkflowStep } from "@/types";
 
 export interface StepWithDay {
   step: WorkflowStep;
@@ -21,4 +21,21 @@ export function stepsWithCumulativeDay(steps: WorkflowStep[]): StepWithDay[] {
     day += step.delayDays;
     return { step, day };
   });
+}
+
+/**
+ * The single source of truth for "which step is a run currently on" —
+ * shared by the lead detail page's Workflow runs card, the Runs page, and
+ * the Scheduled follow-up timeline, so a run with no enabled steps left
+ * (currentStep null while still running/waiting) reads the same everywhere
+ * instead of three slightly different ad-hoc lookups each falling back to
+ * their own "—"/undefined.
+ */
+export function findCurrentStep(
+  workflow: Workflow | undefined,
+  run: Run,
+): WorkflowStep | undefined {
+  return workflow?.versions
+    .find((version) => version.version === run.version)
+    ?.steps.find((step) => step.id === run.currentStep);
 }

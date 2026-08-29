@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
+import { findCurrentStep } from "@/lib/workflow-timeline";
 import { messageFromError, useAutomations, useLeads } from "@/store";
 
 export function RunsPage() {
@@ -64,9 +65,12 @@ export function RunsPage() {
                     {runs.map((run) => {
                       const lead = leads.find((item) => item.id === run.leadId);
                       const workflow = workflows.find((item) => item.id === run.workflowId);
-                      const currentAction = workflow?.versions
-                        .find((version) => version.version === run.version)
-                        ?.steps.find((step) => step.id === run.currentStep)?.action;
+                      const currentStep = findCurrentStep(workflow, run);
+                      const currentStepLabel = currentStep
+                        ? label(currentStep.action)
+                        : ["running", "waiting"].includes(run.status)
+                          ? "No enabled steps configured"
+                          : label(run.currentStep);
                       return (
                         <tr key={run.id} className="border-t hover:bg-accent/40">
                           <td className="px-3 py-2 text-xs">
@@ -86,7 +90,7 @@ export function RunsPage() {
                             {workflow?.name ?? run.workflowId} V{run.version}
                           </td>
                           <td className="px-3 py-2">
-                            {label(currentAction ?? run.currentStep)}
+                            {currentStepLabel}
                             {run.lastError && (
                               <div className="text-xs text-destructive">{run.lastError}</div>
                             )}
