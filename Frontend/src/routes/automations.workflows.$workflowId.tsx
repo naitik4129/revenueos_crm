@@ -8,12 +8,12 @@ export const Route = createFileRoute("/automations/workflows/$workflowId")({
       {
         name: "description",
         content:
-          "Edit a nurture workflow as a numbered list of steps: delay, action and template. Publish to update n8n.",
+          "Edit a nurture workflow as a numbered list of steps: delay, action and template. Publish to update live behaviour.",
       },
       { property: "og:title", content: "Workflow builder — Northbeam CRM" },
       {
         property: "og:description",
-        content: "Managers change automation behaviour without touching n8n.",
+        content: "Managers change automation behaviour without touching code.",
       },
     ],
   }),

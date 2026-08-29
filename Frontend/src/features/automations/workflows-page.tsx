@@ -61,7 +61,7 @@ export function WorkflowsPage() {
     <div className="pb-10">
       <PageHeader
         title="Automations"
-        description="Workflows are defined here and executed by n8n. Publishing a version changes live behaviour."
+        description="Workflows are defined here and executed by the backend automation worker. Publishing a version changes live behaviour."
         tabs={<AutomationTabs />}
         actions={
           <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -160,7 +160,7 @@ export function WorkflowsPage() {
                 <p className="text-sm font-medium">Managers own the automation</p>
                 <p className="text-xs text-muted-foreground">
                   Add or reorder steps, change delays and swap templates here — no developer needs
-                  to touch n8n.
+                  to touch code.
                 </p>
               </CardContent>
             </Card>

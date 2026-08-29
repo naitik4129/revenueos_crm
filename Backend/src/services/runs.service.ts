@@ -5,7 +5,6 @@ import type { AutomationMode, LifecycleState, WorkflowRunStatus, WorkflowStepAct
 import { isTerminalLifecycle } from "../domain/pipeline.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { findActiveWorkflowsForTrigger, getWorkflowRowOr404 } from "./workflows.service.js";
-import { wakeAutomationExecutor } from "./n8nWake.js";
 
 export interface RunRow {
   id: string;
@@ -129,13 +128,6 @@ async function insertScheduledAction(db: Queryable, runId: string, leadId: strin
       JSON.stringify({ templateId: step.template_id, config: step.config }),
     ],
   );
-
-  // Only nudge n8n for a step that's due right now (no delay) — anything
-  // with delay_days > 0 will naturally be picked up by a future poll, and
-  // waking n8n early for it would just be a wasted no-op claim.
-  if (step.delay_days === 0) {
-    wakeAutomationExecutor();
-  }
 
   return scheduledFor;
 }
@@ -372,11 +364,6 @@ export async function resumeRun(db: Queryable, actor: Actor, id: string) {
   }
   const nextStatus: WorkflowRunStatus = run.next_run_at && run.next_run_at > new Date() ? "waiting" : "running";
   await setRunStatus(db, actor, run, nextStatus, "Workflow Resumed");
-  if (nextStatus === "running") {
-    // The paused action's scheduled_for has already passed — it's due
-    // immediately on resume, not just on the next poll.
-    wakeAutomationExecutor();
-  }
   const updated = await getRunRowOr404(db, id);
   return runToDto(updated, updated.version_number);
 }
@@ -401,9 +388,8 @@ export async function retryRun(db: Queryable, actor: Actor, id: string) {
     [id],
   );
   // A salesperson clicking "Retry" means "try again now" — the failed
-  // action's scheduled_for is already in the past, so the next poll would
-  // catch it regardless, but nudge n8n immediately for a responsive UI.
-  wakeAutomationExecutor();
+  // action's scheduled_for is already in the past, so the worker's next
+  // poll picks it up.
   await addTimelineEvent(db, { leadId: run.lead_id, kind: "automation", title: "Workflow Retried", ...actorEvent(actor), relatedWorkflowRunId: run.id });
   const updated = await getRunRowOr404(db, id);
   return runToDto(updated, updated.version_number);

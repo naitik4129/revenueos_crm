@@ -9,10 +9,9 @@ import { createTask } from "./tasks.service.js";
 
 /**
  * This module is the ONLY place business rules run for automation
- * execution. n8n (or any future executor) never decides what a step means,
- * what template/delay/stage applies, or what happens next — it calls these
- * functions (via automation.routes.ts) and acts on the result. See
- * n8n/README.md for the full architecture this backs.
+ * execution — src/worker.ts (the in-process automation executor) calls
+ * these functions and acts on the result; it never decides what a step
+ * means, what template/delay/stage applies, or what happens next itself.
  */
 
 const MESSAGE_ACTION_TYPES: WorkflowStepAction[] = ["send_email", "send_whatsapp"];
@@ -198,11 +197,11 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
 
 /**
  * Concurrency-safe claim: a single UPDATE ... WHERE id IN (SELECT ... FOR
- * UPDATE SKIP LOCKED) is atomic, so two Due Action Worker executions racing
- * on the same rows can never both claim the same one — the loser's SELECT
- * simply skips rows the winner already locked. Also reclaims rows stuck in
- * 'executing' for >15 minutes (a crashed/killed n8n execution never
- * reported back), so a crash can't strand an action forever.
+ * UPDATE SKIP LOCKED) is atomic, so two worker poll ticks racing on the same
+ * rows can never both claim the same one — the loser's SELECT simply skips
+ * rows the winner already locked. Also reclaims rows stuck in 'executing'
+ * for >15 minutes (a crashed worker process never reported back), so a
+ * crash can't strand an action forever.
  */
 export async function claimDueActions(db: Queryable, limit: number): Promise<ActionContext[]> {
   const claimed = await db.query<ScheduledActionRow>(
@@ -278,9 +277,8 @@ async function advanceRun(db: Queryable, run: RunRow) {
 
 /**
  * Executes create_call_task / create_follow_up_task / change_lead_stage /
- * stop_workflow directly against backend business operations (never
- * reimplemented in n8n — see Rule in n8n/README.md), then advances the run.
- * Idempotent-safe to retry: it only mutates once action.status is
+ * stop_workflow directly against backend business operations, then advances
+ * the run. Idempotent-safe to retry: it only mutates once action.status is
  * 'executing' and flips it to 'completed' in the same statement set, so a
  * network-level retry of an already-completed call fails fast at the status
  * guard below instead of double-applying.
@@ -356,10 +354,9 @@ export interface RecordResultInput {
 
 /**
  * Reports the outcome of an external send (send_email / send_whatsapp — the
- * only action types n8n itself performs directly). On success, advances the
+ * only action types the worker sends directly). On success, advances the
  * run exactly like executeInternalAction does. On failure, applies backend-
- * owned retry/backoff: n8n never decides whether or when to retry, it only
- * reports what the provider said.
+ * owned retry/backoff.
  */
 export async function recordActionResult(db: Queryable, actionId: string, input: RecordResultInput) {
   const action = await getActionRowOr404(db, actionId);
@@ -426,100 +423,3 @@ export async function recordActionResult(db: Queryable, actionId: string, input:
   return { action: (await getActionContext(db, actionId)).action, run: await getRunRowOr404(db, run.id) };
 }
 
-export interface LeadLookupResult {
-  id: string;
-  firstName: string;
-  lastName: string;
-  company: string;
-  lifecycleState: string;
-}
-
-/**
- * Read-only lead lookup by contact info for the inbound-communication
- * handler (n8n/07): a provider webhook knows a phone/email address, not a
- * CRM lead id, and n8n has no salesperson session to call the normal
- * (requireAuth) /leads search with. Deliberately narrow — email/phone
- * match only, capped result set, no other lead fields exposed.
- */
-export async function lookupLeadByContact(db: Queryable, params: { email?: string; phone?: string }): Promise<LeadLookupResult[]> {
-  if (!params.email && !params.phone) {
-    throw new ValidationError("Provide at least one of email or phone to look up a lead.");
-  }
-  const clauses: string[] = [];
-  const values: unknown[] = [];
-  let i = 1;
-  if (params.email) {
-    clauses.push(`lower(email) = lower($${i++})`);
-    values.push(params.email);
-  }
-  if (params.phone) {
-    clauses.push(`phone = $${i++}`);
-    values.push(params.phone);
-  }
-
-  const result = await db.query<{ id: string; first_name: string; last_name: string; company: string; lifecycle_state: string }>(
-    `select id, first_name, last_name, company, lifecycle_state
-       from public.leads
-      where ${clauses.join(" or ")}
-      order by created_at desc
-      limit 5`,
-    values,
-  );
-  return result.rows.map((r) => ({ id: r.id, firstName: r.first_name, lastName: r.last_name, company: r.company, lifecycleState: r.lifecycle_state }));
-}
-
-export interface InboundEventInput {
-  leadId: string;
-  channel: "email" | "whatsapp";
-  providerMessageId?: string;
-  occurredAt?: string;
-  summary: string;
-}
-
-/**
- * Normalizes an inbound reply into CRM state: bumps response_state, logs it
- * to the timeline, and invalidates (cancels) any not-yet-sent nurture step
- * of the same channel — so a lead mid-conversation doesn't also receive a
- * now-stale queued nurture message. Does NOT touch already-claimed
- * ('executing') actions (the per-send eligibility recheck handles that
- * race) or non-message steps (a queued task/stage-change step is left
- * alone; a reply doesn't make those wrong).
- */
-export async function recordInboundEvent(db: Queryable, input: InboundEventInput) {
-  const lead = await getLeadRowOr404(db, input.leadId);
-
-  const nextResponseState = lead.response_state === "no_response" ? "responded" : "conversation_active";
-  await db.query(`update public.leads set response_state = $2, last_activity_at = now() where id = $1`, [lead.id, nextResponseState]);
-
-  await addTimelineEvent(db, {
-    leadId: lead.id,
-    kind: input.channel,
-    title: input.channel === "email" ? "Email Reply Received" : "WhatsApp Reply Received",
-    detail: input.summary,
-    ...AUTOMATION_ACTOR,
-    occurredAt: input.occurredAt ? new Date(input.occurredAt) : undefined,
-    metadata: input.providerMessageId ? { providerMessageId: input.providerMessageId } : null,
-  });
-
-  const actionType: WorkflowStepAction = input.channel === "email" ? "send_email" : "send_whatsapp";
-  const cancelled = await db.query<{ id: string; workflow_run_id: string }>(
-    `update public.scheduled_actions
-        set status = 'cancelled', cancelled_at = now(), cancel_reason = 'Lead replied — nurture step invalidated'
-      where lead_id = $1 and action_type = $2 and status in ('pending', 'due')
-      returning id, workflow_run_id`,
-    [lead.id, actionType],
-  );
-
-  for (const row of cancelled.rows) {
-    await addTimelineEvent(db, {
-      leadId: lead.id,
-      kind: "automation",
-      title: "Automation Step Invalidated",
-      detail: "Cancelled because the lead replied.",
-      ...AUTOMATION_ACTOR,
-      relatedWorkflowRunId: row.workflow_run_id,
-    });
-  }
-
-  return { lead: await getLeadRowOr404(db, lead.id), cancelledActionsCount: cancelled.rowCount ?? 0 };
-}

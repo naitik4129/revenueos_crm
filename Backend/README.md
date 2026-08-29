@@ -143,55 +143,24 @@ GET/POST   /notifications                          POST /notifications/:id/read
 GET        /me | /profiles
 ```
 
-### Automation executor API (`/api/v1/automation`) — n8n only
+### Automation execution
 
-Everything above requires a salesperson's Supabase session
-(`Authorization: Bearer <supabase-access-token>`). `/api/v1/automation/*` is
-a separate trust boundary for the n8n executor described in `n8n/README.md`:
-it requires an `X-Automation-Key` header matching `N8N_SERVICE_API_KEY`
-(see `.env.example`, `src/serviceAuthMiddleware.ts`) instead — n8n never
-gets a Supabase session, and this key unlocks nothing outside this router.
-Salesperson auth (`requireAuth`) is completely unchanged.
-
-```
-POST /automation/due-actions/claim          {limit?}  — concurrency-safe claim (SKIP LOCKED)
-GET  /automation/actions/:id/context                  — fresh lead/run/step/template + eligibility
-POST /automation/actions/:id/skip           {reason}
-POST /automation/actions/:id/execute-internal          — create_call_task / create_follow_up_task /
-                                                          change_lead_stage / stop_workflow: backend
-                                                          performs the mutation AND advances the run
-POST /automation/actions/:id/result         {outcome, providerMessageId?, error?, retryable?}
-                                                        — send_email / send_whatsapp results only;
-                                                          success advances the run, failure applies
-                                                          backend-owned retry/backoff
-POST /automation/inbound-events             {leadId, channel, providerMessageId?, occurredAt?, summary}
-GET  /automation/leads/lookup               ?email=&phone=  — narrow read-only lookup for n8n/07,
-                                                                which has no salesperson session to
-                                                                call the normal /leads search with
-```
-
-All business logic — next-step selection, delay calculation, template/stage
-resolution, retry/backoff, eligibility (lifecycle/DNC/automation-mode/
-contactability/response-state) — lives in `src/services/automation.service.ts`.
-n8n only calls these routes and acts on the response; it never encodes a
-business workflow's steps, delays, or templates itself. See
-`n8n/README.md` for the full architecture and how each of the 10 n8n
-workflows uses this API.
-
-**The reverse direction** — this backend calling _out_ to n8n — is a single,
-optional, fire-and-forget nudge: `src/services/n8nWake.ts`'s
-`wakeAutomationExecutor()`, called from `runs.service.ts` whenever a
-scheduled action becomes due immediately, `POST`s to n8n's `Wake Webhook`
-(`N8N_WAKE_WEBHOOK_URL` / `N8N_WAKE_WEBHOOK_SECRET` in `.env.example`) so a
-salesperson doesn't wait up to a minute for n8n's own poll to notice. It is
-never awaited and every failure is swallowed — leaving it unconfigured only
-costs latency, never correctness (see `n8n/README.md` §6.2).
+There is no external executor and no separate service-auth API surface —
+`src/worker.ts` is a standalone Node process (`npm run worker`) that polls
+`scheduled_actions` directly and calls the same functions in
+`src/services/automation.service.ts` in-process: claim due actions
+(concurrency-safe `SKIP LOCKED` claim), recheck eligibility
+(lifecycle/DNC/automation-mode/contactability/response-state), render the
+template, send via SMTP (`src/providers/email.provider.ts`) or the Meta
+WhatsApp Cloud API (`src/providers/whatsapp.provider.ts`), and record the
+result — which advances the run to the next step or applies backend-owned
+retry/backoff on failure. All business logic (next-step selection, delay
+calculation, template/stage resolution, retry/backoff, eligibility) lives
+in `automation.service.ts`; `worker.ts` is deliberately thin and just calls
+it on a poll loop (see `SMTP_*` / `META_WHATSAPP_*` / `WORKER_*` in
+`.env.example`).
 
 ## What this backend deliberately does NOT do
 
-- Talk to any email/WhatsApp provider directly, or run a scheduler loop —
-  that's n8n's job (`n8n/01-due-action-worker.json` polls
-  `/automation/due-actions/claim`). This backend only decides _what_ should
-  happen and _when_, and records what n8n reports back.
 - Manager/Admin roles or RBAC — one user type, Salesperson, per the product
   brief.

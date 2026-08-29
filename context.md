@@ -7,9 +7,8 @@ Northbeam is a React CRM backed by an authenticated Express/Postgres API. The pr
 The repository contains:
 
 - `Frontend/`: React 19, TanStack Router, TanStack Query, Tailwind, and Radix UI.
-- `Backend/`: Express, Zod validation, PostgreSQL services, Supabase JWT authentication, and n8n service endpoints.
+- `Backend/`: Express, Zod validation, PostgreSQL services, Supabase JWT authentication, and an in-process automation worker (`Backend/src/worker.ts`) that sends workflow emails/WhatsApp messages directly via SMTP and the Meta WhatsApp Cloud API.
 - `Supabase/migrations/001_initial_migration.sql`: the existing database schema.
-- `n8n/`: automation-executor documentation and assets.
 
 ## Frontend data boundary
 
@@ -23,7 +22,7 @@ Backend values remain lowercase in `Frontend/src/types`. Pipeline stage, lifecyc
 
 The backend owns call outcome routing, next actions (open tasks), meeting outcome routing, proposal transitions, workflow versions and runs, scheduled actions, notification state, lifecycle changes, contactability, DNC history, and timeline writes. UI mutations send user intent and invalidate affected queries; they do not reproduce routing tables or synthesize audit events.
 
-Manual Email and WhatsApp actions persist audit activity only. No provider sends are performed by those buttons. Workflow execution remains external to the frontend and is intended for n8n.
+Manual Email and WhatsApp actions persist audit activity only. No provider sends are performed by those buttons. Workflow execution is external to the frontend — it runs on the backend's automation worker (`Backend/src/worker.ts`), not in the request/response cycle.
 
 ## Time and configuration
 

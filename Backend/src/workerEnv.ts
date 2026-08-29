@@ -24,8 +24,6 @@ const WorkerEnvSchema = z.object({
   META_WHATSAPP_API_VERSION: z.string().default("v23.0"),
   META_WHATSAPP_PHONE_NUMBER_ID: z.string().min(1),
   META_WHATSAPP_ACCESS_TOKEN: z.string().min(1),
-  META_WHATSAPP_APP_SECRET: z.string().min(1),
-  META_WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().min(1),
 
   // src/worker.ts poll loop.
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),

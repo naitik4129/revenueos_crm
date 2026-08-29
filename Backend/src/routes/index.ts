@@ -8,7 +8,6 @@ import { runsRouter, scheduledActionsRouter } from "./runs.routes.js";
 import { dashboardRouter } from "./dashboard.routes.js";
 import { notificationsRouter } from "./notifications.routes.js";
 import { meRouter, profilesRouter } from "./me.routes.js";
-import { automationRouter } from "./automation.routes.js";
 
 export const apiRouter = Router();
 
@@ -24,4 +23,3 @@ apiRouter.use("/runs", runsRouter);
 apiRouter.use("/scheduled-actions", scheduledActionsRouter);
 apiRouter.use("/dashboard", dashboardRouter);
 apiRouter.use("/notifications", notificationsRouter);
-apiRouter.use("/automation", automationRouter);

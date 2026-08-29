@@ -7,13 +7,11 @@ import { sendWhatsApp } from "./providers/whatsapp.provider.js";
 import type { WorkflowStepAction } from "./domain/enums.js";
 
 /**
- * The in-process automation executor: polls for due scheduled_actions and
- * dispatches them. This file is deliberately thin — every business decision
+ * The automation executor: polls for due scheduled_actions and dispatches
+ * them. This file is deliberately thin — every business decision
  * (eligibility, retry/backoff, next-step scheduling, timeline logging)
- * already lives in automation.service.ts and is reused as-is; this loop just
- * calls those functions in-process instead of an external system (n8n)
- * calling them over HTTP. See n8n/README.md for the (now optional) HTTP
- * equivalent of this same flow.
+ * already lives in automation.service.ts and is reused as-is; this loop
+ * just calls those functions in-process.
  */
 
 const MESSAGE_ACTION_TYPES: WorkflowStepAction[] = ["send_email", "send_whatsapp"];
