@@ -9,13 +9,9 @@ import { z } from "zod";
  * requirement; index.ts/app.ts/routes/services never import it.
  */
 const WorkerEnvSchema = z.object({
-  // Outbound email (nurture-workflow send_email steps), used by
-  // src/providers/email.provider.ts.
-  SMTP_HOST: z.string().min(1),
-  SMTP_PORT: z.coerce.number().int().positive().default(587),
-  SMTP_SECURE: z.string().default("false").transform((value) => value === "true"),
-  SMTP_USER: z.string().min(1),
-  SMTP_PASS: z.string().min(1),
+  // Outbound email (nurture-workflow send_email steps) via the Resend HTTP
+  // API, used by src/providers/email.provider.ts.
+  RESEND_API_KEY: z.string().min(1),
   SMTP_FROM_NAME: z.string().default("MOTM Technologies"),
   SMTP_FROM_ADDRESS: z.string().email(),
 
@@ -36,8 +32,8 @@ function loadWorkerEnv() {
   if (!parsed.success) {
     console.error("Invalid worker environment configuration:", parsed.error.flatten().fieldErrors);
     throw new Error(
-      "Invalid worker environment configuration. src/worker.ts needs SMTP_*/META_WHATSAPP_*/WORKER_* set even " +
-        "though the API server does not — see .env.example.",
+      "Invalid worker environment configuration. src/worker.ts needs RESEND_API_KEY/SMTP_FROM_*/META_WHATSAPP_*/WORKER_* " +
+        "set even though the API server does not — see .env.example.",
     );
   }
   return parsed.data;
