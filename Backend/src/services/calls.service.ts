@@ -1,10 +1,10 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
-import { DoNotContactError, ValidationError } from "../errors.js";
+import { DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import type { CallConnectedOutcome, CallNotConnectedReason } from "../domain/enums.js";
 import { routeConnectedOutcome, routeNotConnected } from "../domain/callRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
-import { createTask, cancelOpenTasksForLead } from "./tasks.service.js";
+import { createTask, cancelOpenTasksForLead, completeTask } from "./tasks.service.js";
 import { getLeadRowOr404, markDnc, setAutomationMode, setContactability, updateLead } from "./leads.service.js";
 import { addDaysIso } from "../dto.js";
 
@@ -15,6 +15,8 @@ export interface LogCallInput {
   notes?: string;
   /** Required when connectedOutcome === 'callback_requested'. */
   callbackDueAt?: string;
+  /** When set, the open 'call' task that prompted this log is completed atomically with it. */
+  taskId?: string;
 }
 
 export interface CallRow {
@@ -98,6 +100,19 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
     ...actorEvent(actor),
     relatedCallId: call.id,
   });
+
+  if (input.taskId) {
+    const taskResult = await db.query<{ id: string; lead_id: string; task_type: string; status: string }>(
+      `select id, lead_id, task_type, status from public.tasks where id = $1`,
+      [input.taskId],
+    );
+    const task = taskResult.rows[0];
+    if (!task) throw new NotFoundError("Task");
+    if (task.lead_id !== leadId) throw new ValidationError("Task does not belong to this lead.");
+    if (task.task_type !== "call") throw new ValidationError("Only a call task can be completed by logging a call.");
+    if (task.status !== "open") throw new ValidationError("This task is no longer open.");
+    await completeTask(db, actor, input.taskId);
+  }
 
   // Do Not Contact overrides everything else — shares the same path as the
   // lead-level DNC endpoint (Rule 6).

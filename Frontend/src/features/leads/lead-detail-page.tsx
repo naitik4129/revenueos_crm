@@ -68,6 +68,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
   const timelineStore = useTimeline(leadId);
   const lead = detail.lead;
   const [callOpen, setCallOpen] = useState(false);
+  const [callTaskId, setCallTaskId] = useState<string | undefined>(undefined);
   const [dncOpen, setDncOpen] = useState(false);
   const [reactivateOpen, setReactivateOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -167,7 +168,10 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
             leadId={leadId}
             pipelineStage={lead.pipelineStage}
             doNotContact={lead.doNotContact}
-            onCallClick={() => setCallOpen(true)}
+            onCallClick={() => {
+              setCallTaskId(undefined);
+              setCallOpen(true);
+            }}
             onEnrollClick={() => openEnroll(nurtureTriggerForStage(lead.pipelineStage))}
           />
 
@@ -214,12 +218,17 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() =>
+                    onClick={() => {
+                      if (lead.nextAction!.type === "call") {
+                        setCallTaskId(lead.nextAction!.taskId);
+                        setCallOpen(true);
+                        return;
+                      }
                       void mutate(
                         () => taskStore.completeTask(lead.nextAction!.taskId),
                         "Next action completed",
-                      )
-                    }
+                      );
+                    }}
                   >
                     <Check className="mr-1 size-4" /> Complete
                   </Button>
@@ -335,9 +344,14 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() =>
-                          void mutate(() => taskStore.completeTask(task.id), "Task completed")
-                        }
+                        onClick={() => {
+                          if (task.type === "call") {
+                            setCallTaskId(task.id);
+                            setCallOpen(true);
+                            return;
+                          }
+                          void mutate(() => taskStore.completeTask(task.id), "Task completed");
+                        }}
                       >
                         Complete
                       </Button>
@@ -708,8 +722,12 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
 
       <LogCallDialog
         leadId={leadId}
+        taskId={callTaskId}
         open={callOpen}
-        onOpenChange={setCallOpen}
+        onOpenChange={(value) => {
+          setCallOpen(value);
+          if (!value) setCallTaskId(undefined);
+        }}
         onEnrollPrompt={(trigger) => openEnroll(trigger)}
         onScheduleMeetingPrompt={() => setScheduleMeetingOpen(true)}
       />

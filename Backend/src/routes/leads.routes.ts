@@ -237,6 +237,7 @@ const logCallSchema = z.object({
   connectedOutcome: z.enum(CALL_CONNECTED_OUTCOMES).optional(),
   notes: z.string().optional(),
   callbackDueAt: z.string().datetime({ offset: true }).optional(),
+  taskId: z.string().uuid().optional(),
 });
 
 leadsRouter.get(

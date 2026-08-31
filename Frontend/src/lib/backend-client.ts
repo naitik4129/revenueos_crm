@@ -178,6 +178,7 @@ export interface LogCallInput {
   connectedOutcome?: CallConnectedOutcome | undefined;
   notes?: string | undefined;
   callbackDueAt?: string | undefined;
+  taskId?: string | undefined;
 }
 export interface CreateTaskInput {
   leadId: string;

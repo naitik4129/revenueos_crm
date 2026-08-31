@@ -17,6 +17,7 @@ import { isOverdue, isToday, relDay } from "@/lib/format";
 import { useLeads, useSession, useTasks } from "@/store";
 import { messageFromError } from "@/store";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
+import { LogCallDialog } from "@/features/leads/log-call-dialog";
 
 type View = "today" | "overdue" | "upcoming" | "done";
 
@@ -26,6 +27,7 @@ export function TasksPage() {
   const { users, userName } = useSession();
   const [view, setView] = useState<View>("today");
   const [owner, setOwner] = useState("all");
+  const [callTask, setCallTask] = useState<{ leadId: string; taskId: string } | null>(null);
 
   const filtered = tasks.filter((t) => {
     if (owner !== "all" && t.ownerId !== owner) return false;
@@ -104,6 +106,11 @@ export function TasksPage() {
                             checked={t.done}
                             disabled={t.status !== "open" || isPending}
                             onCheckedChange={() => {
+                              if (t.status !== "open") return;
+                              if (t.type === "call") {
+                                setCallTask({ leadId: t.leadId, taskId: t.id });
+                                return;
+                              }
                               void completeTask(t.id).catch((reason) => toastError(reason));
                             }}
                           />
@@ -162,6 +169,16 @@ export function TasksPage() {
           </Card>
         )}
       </div>
+      {callTask && (
+        <LogCallDialog
+          leadId={callTask.leadId}
+          taskId={callTask.taskId}
+          open={true}
+          onOpenChange={(value) => {
+            if (!value) setCallTask(null);
+          }}
+        />
+      )}
     </div>
   );
 }

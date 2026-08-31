@@ -33,12 +33,15 @@ import {
 
 export function LogCallDialog({
   leadId,
+  taskId,
   open,
   onOpenChange,
   onEnrollPrompt,
   onScheduleMeetingPrompt,
 }: {
   leadId: string;
+  /** When set, saving this call also completes the open 'call' task that prompted it. */
+  taskId?: string | undefined;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   /** Called instead of the plain success toast when the outcome moves the lead into nurture — the rep is always asked which workflow to enroll in, nothing is auto-enrolled silently. */
@@ -79,6 +82,7 @@ export function LogCallDialog({
         ...(connected && outcome === "callback_requested"
           ? { callbackDueAt: toIsoFromIst(callbackAt) }
           : {}),
+        taskId,
       });
       toast.success(connected ? `Call logged — ${label(outcome)}` : "Call logged — Not Connected");
       onOpenChange(false);
