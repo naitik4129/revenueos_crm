@@ -2,11 +2,13 @@ import { pool, withTransaction } from "./db.js";
 import { workerEnv as env } from "./workerEnv.js";
 import * as automationService from "./services/automation.service.js";
 import { renderTemplate } from "./domain/templateRenderer.js";
+import { htmlToWhatsAppText } from "./domain/htmlToWhatsAppText.js";
 import { sendEmail } from "./providers/email.provider.js";
 import { sendWhatsApp } from "./providers/whatsapp.provider.js";
 import type { WorkflowStepAction } from "./domain/enums.js";
 import { baileysManager } from "./providers/baileys.manager.js";
 import { PermanentProviderError, ProviderDeferredError } from "./providers/provider-errors.js";
+import { supabaseAdmin } from "./supabaseAdmin.js";
 
 /**
  * The automation executor: polls for due scheduled_actions and dispatches
@@ -47,12 +49,32 @@ async function dispatchMessage(ctx: automationService.ActionContext): Promise<Se
   if (ctx.action.actionType === "send_email") {
     if (!ctx.lead.email) throw new Error("Eligible send_email action has no lead email (invariant violation).");
     const subject = rendered.subject?.trim() || ctx.template.name;
-    const result = await sendEmail({ to: ctx.lead.email, subject, html: rendered.body });
+    const attachments = await Promise.all(
+      ctx.template.attachments.map(async (attachment) => {
+        const { data, error } = await supabaseAdmin.storage.from("template-attachments").download(attachment.storagePath);
+        if (error || !data) throw new Error(`Failed to download email attachment "${attachment.fileName}": ${error?.message ?? "no data"}`);
+        const buffer = Buffer.from(await data.arrayBuffer());
+        return { filename: attachment.fileName, content: buffer.toString("base64") };
+      }),
+    );
+    const result = await sendEmail({
+      to: ctx.lead.email,
+      subject,
+      html: rendered.body,
+      ...(attachments.length ? { attachments } : {}),
+    });
     return { outcome: "success", providerMessageId: result.providerMessageId };
   }
 
   if (!ctx.lead.phoneE164) throw new PermanentProviderError("Eligible WhatsApp action has no normalized phone number.");
-  const result = await sendWhatsApp({ actionId: ctx.action.id, to: ctx.lead.phoneE164, body: rendered.body });
+  const whatsappText = htmlToWhatsAppText(rendered.body);
+  const attachment = ctx.template.attachments[0];
+  const result = await sendWhatsApp({
+    actionId: ctx.action.id,
+    to: ctx.lead.phoneE164,
+    body: whatsappText,
+    ...(attachment ? { attachment: { storagePath: attachment.storagePath, fileName: attachment.fileName, mimeType: attachment.mimeType } } : {}),
+  });
   return { outcome: "success", providerMessageId: result.providerMessageId };
 }
 

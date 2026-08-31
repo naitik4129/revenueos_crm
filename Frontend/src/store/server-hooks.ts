@@ -20,7 +20,7 @@ import type {
   AutomationMode,
   MeetingOutcome,
   ProposalStatus,
-  Template,
+  TemplateType,
   User,
   WorkflowStep,
 } from "@/types";
@@ -415,6 +415,16 @@ export function useAutomations() {
     mutationFn: (id: string) => backend.templates.delete(id),
     onSuccess: invalidate,
   });
+  const templateAttachmentUpload = useMutation({
+    mutationFn: ({ templateId, file }: { templateId: string; file: File }) =>
+      backend.templates.uploadAttachment(templateId, file),
+    onSuccess: invalidate,
+  });
+  const templateAttachmentDelete = useMutation({
+    mutationFn: ({ templateId, attachmentId }: { templateId: string; attachmentId: string }) =>
+      backend.templates.deleteAttachment(templateId, attachmentId),
+    onSuccess: invalidate,
+  });
   const workflowList = workflows.data?.data ?? [];
   return {
     workflows: workflowList,
@@ -436,6 +446,8 @@ export function useAutomations() {
       templateCreate,
       templateUpdate,
       templateDelete,
+      templateAttachmentUpload,
+      templateAttachmentDelete,
     ].some((mutation) => mutation.isPending),
     templateName: (id?: string) =>
       templates.data?.data.find((template) => template.id === id)?.name ?? "—",
@@ -461,17 +473,20 @@ export function useAutomations() {
     retryRun: (id: string) => runAction.mutateAsync({ id, action: "retry" }),
     enrollLead: (leadId: string, workflowId: string, reason?: string) =>
       enroll.mutateAsync({ leadId, workflowId, reason }),
-    addTemplate: (input: Omit<Template, "id" | "active">) =>
+    addTemplate: (input: { name: string; type: TemplateType; subject: string; body: string }) =>
       templateCreate.mutateAsync({
         name: input.name,
         channel: input.type,
         subject: input.subject,
         body: input.body,
-        attachment: input.attachment,
       }),
     updateTemplate: (id: string, input: UpdateTemplateInput) =>
       templateUpdate.mutateAsync({ id, input }),
     deleteTemplate: (id: string) => templateDelete.mutateAsync(id),
+    uploadTemplateAttachment: (templateId: string, file: File) =>
+      templateAttachmentUpload.mutateAsync({ templateId, file }),
+    deleteTemplateAttachment: (templateId: string, attachmentId: string) =>
+      templateAttachmentDelete.mutateAsync({ templateId, attachmentId }),
   };
 }
 export type AutomationsSlice = ReturnType<typeof useAutomations>;

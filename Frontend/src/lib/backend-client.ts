@@ -22,6 +22,7 @@ import type {
   Task,
   TaskType,
   Template,
+  TemplateAttachment,
   TimelineEvent,
   User,
   Workflow,
@@ -95,6 +96,45 @@ const get = <T>(path: string, signal?: AbortSignal) => request<T>(path, signal ?
 const send = <T>(method: "POST" | "PATCH" | "PUT", path: string, body?: unknown) =>
   request<T>(path, { method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
 const del = (path: string) => request<void>(path, { method: "DELETE" });
+
+/** Like `request`, but for a multipart/form-data body — omits the JSON Content-Type header so the browser sets the multipart boundary itself. */
+async function uploadFile<T>(path: string, formData: FormData): Promise<T> {
+  if (configurationError || !backendBaseUrl || !supabase)
+    throw new BackendError(
+      0,
+      "configuration_error",
+      configurationError ?? "Frontend is not configured.",
+    );
+  const { data, error } = await supabase.auth.getSession();
+  if (error || !data.session?.access_token)
+    throw new BackendError(401, "authentication_failed", "Authentication is required.");
+  let response: Response;
+  try {
+    response = await fetch(`${backendBaseUrl}/api/v1${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${data.session.access_token}` },
+      body: formData,
+    });
+  } catch (error) {
+    throw new BackendError(
+      0,
+      "network_error",
+      error instanceof Error ? error.message : "Backend request failed.",
+    );
+  }
+  const body = (await response.json().catch(() => undefined)) as
+    { error?: { code?: string; message?: string; details?: unknown } } | undefined;
+  if (!response.ok) {
+    if (response.status === 401) void supabase.auth.signOut({ scope: "local" });
+    throw new BackendError(
+      response.status,
+      body?.error?.code ?? "unknown",
+      body?.error?.message ?? response.statusText,
+      body?.error?.details,
+    );
+  }
+  return body as T;
+}
 
 export interface CreateLeadInput {
   firstName: string;
@@ -199,13 +239,11 @@ export interface CreateTemplateInput {
   channel: "email" | "whatsapp";
   subject?: string | undefined;
   body: string;
-  attachment?: string | undefined;
 }
 export interface UpdateTemplateInput {
   name?: string | undefined;
   subject?: string | undefined;
   body?: string | undefined;
-  attachment?: string | undefined;
   active?: boolean | undefined;
 }
 
@@ -430,6 +468,13 @@ export const backend = {
     update: (id: string, input: UpdateTemplateInput) =>
       send<Template>("PATCH", `/templates/${id}`, input),
     delete: (id: string) => del(`/templates/${id}`),
+    uploadAttachment: (templateId: string, file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return uploadFile<TemplateAttachment>(`/templates/${templateId}/attachments`, formData);
+    },
+    deleteAttachment: (templateId: string, attachmentId: string) =>
+      del(`/templates/${templateId}/attachments/${attachmentId}`),
   },
   runs: {
     list: (params?: Record<string, string | undefined>, signal?: AbortSignal) =>

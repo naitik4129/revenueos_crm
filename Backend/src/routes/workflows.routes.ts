@@ -1,4 +1,6 @@
 import { Router } from "express";
+import type { NextFunction, Request, Response } from "express";
+import multer from "multer";
 import { z } from "zod";
 import { asyncHandler } from "../asyncHandler.js";
 import { requireAuth } from "../authMiddleware.js";
@@ -6,6 +8,7 @@ import { pool, withTransaction } from "../db.js";
 import { parseBody, parseParams, parseQuery } from "../validation/parse.js";
 import { WORKFLOW_STATUSES, WORKFLOW_STEP_ACTIONS, WORKFLOW_TRIGGERS, TEMPLATE_CHANNELS } from "../domain/enums.js";
 import * as workflowsService from "../services/workflows.service.js";
+import { ValidationError } from "../errors.js";
 
 export const workflowsRouter = Router();
 workflowsRouter.use(requireAuth);
@@ -127,7 +130,7 @@ templatesRouter.use(requireAuth);
 templatesRouter.get(
   "/",
   asyncHandler(async (_req, res) => {
-    res.json({ data: await workflowsService.listTemplates(pool) });
+    res.json({ data: await workflowsService.listTemplatesWithAttachments(pool) });
   }),
 );
 
@@ -136,7 +139,6 @@ const createTemplateSchema = z.object({
   channel: z.enum(TEMPLATE_CHANNELS),
   subject: z.string().optional(),
   body: z.string().min(1),
-  attachment: z.string().optional(),
 });
 
 templatesRouter.post(
@@ -152,7 +154,6 @@ const updateTemplateSchema = z.object({
   name: z.string().min(1).optional(),
   subject: z.string().optional(),
   body: z.string().min(1).optional(),
-  attachment: z.string().optional(),
   active: z.boolean().optional(),
 });
 
@@ -169,6 +170,69 @@ templatesRouter.delete(
   "/:id",
   asyncHandler(async (req, res) => {
     await withTransaction((client) => workflowsService.deleteTemplate(client, req.params.id!));
+    res.status(204).send();
+  }),
+);
+
+// --- Template attachments -----------------------------------------------------
+
+const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (!ALLOWED_ATTACHMENT_MIME_TYPES.has(file.mimetype)) {
+      cb(new ValidationError(`Unsupported file type: ${file.mimetype}. Allowed: PDF, Word, Excel, or images.`));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+function uploadSingleAttachment(req: Request, res: Response, next: NextFunction) {
+  upload.single("file")(req, res, (err: unknown) => {
+    if (err instanceof multer.MulterError) {
+      next(new ValidationError(err.code === "LIMIT_FILE_SIZE" ? "File is too large (max 15MB)." : err.message));
+      return;
+    }
+    next(err);
+  });
+}
+
+templatesRouter.post(
+  "/:id/attachments",
+  uploadSingleAttachment,
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw new ValidationError("No file uploaded.");
+    const attachment = await withTransaction((client) =>
+      workflowsService.createTemplateAttachment(client, req.params.id!, {
+        buffer: req.file!.buffer,
+        originalName: req.file!.originalname,
+        mimeType: req.file!.mimetype,
+        size: req.file!.size,
+      }),
+    );
+    res.status(201).json(attachment);
+  }),
+);
+
+templatesRouter.delete(
+  "/:id/attachments/:attachmentId",
+  asyncHandler(async (req, res) => {
+    await withTransaction((client) =>
+      workflowsService.deleteTemplateAttachment(client, req.params.id!, req.params.attachmentId!),
+    );
     res.status(204).send();
   }),
 );

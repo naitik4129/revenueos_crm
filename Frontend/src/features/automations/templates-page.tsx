@@ -1,13 +1,12 @@
-import { useState } from "react";
+import { useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2 } from "lucide-react";
+import { Paperclip, Plus, Trash2, X } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { AutomationTabs } from "@/features/automations/automation-tabs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -23,15 +22,46 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { messageFromError, useAutomations } from "@/store";
-import type { Template, TemplateType } from "@/types";
+import type { Template, TemplateAttachment, TemplateType } from "@/types";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
+import { TemplateBodyEditor } from "@/features/automations/template-body-editor";
+import { htmlToWhatsAppText } from "@/lib/html-to-whatsapp-text";
+
+const ATTACHMENT_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp";
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isBodyEmpty(html: string): boolean {
+  return stripHtml(html).length === 0;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export function TemplatesPage() {
-  const { templates, addTemplate, updateTemplate, deleteTemplate, isLoading, error, isPending } =
-    useAutomations();
+  const {
+    templates,
+    addTemplate,
+    updateTemplate,
+    deleteTemplate,
+    uploadTemplateAttachment,
+    deleteTemplateAttachment,
+    isLoading,
+    error,
+    isPending,
+  } = useAutomations();
   const [editing, setEditing] = useState<Template | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Template | null>(null);
@@ -66,9 +96,13 @@ export function TemplatesPage() {
                 </CardHeader>
                 <CardContent className="flex flex-1 flex-col gap-3">
                   {t.subject && <div className="text-xs font-medium">{t.subject}</div>}
-                  <p className="line-clamp-4 whitespace-pre-line text-xs text-muted-foreground">
-                    {t.body}
-                  </p>
+                  <p className="line-clamp-4 text-xs text-muted-foreground">{stripHtml(t.body)}</p>
+                  {t.attachments.length > 0 && (
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Paperclip className="size-3" />
+                      {t.attachments.length} attachment{t.attachments.length > 1 ? "s" : ""}
+                    </div>
+                  )}
                   <div className="mt-auto flex items-center justify-between pt-1">
                     <div className="flex items-center gap-2">
                       <Switch
@@ -114,17 +148,10 @@ export function TemplatesPage() {
             setEditing(null);
           }
         }}
-        onSave={(vals) => {
-          if (editing) {
-            void updateTemplate(editing.id, vals)
-              .then(() => toast.success("Template updated"))
-              .catch((failure) => toast.error(messageFromError(failure)));
-          } else {
-            void addTemplate(vals)
-              .then(() => toast.success("Template created"))
-              .catch((failure) => toast.error(messageFromError(failure)));
-          }
-        }}
+        addTemplate={addTemplate}
+        updateTemplate={updateTemplate}
+        uploadTemplateAttachment={uploadTemplateAttachment}
+        deleteTemplateAttachment={deleteTemplateAttachment}
       />
       <ConfirmDialog
         open={!!deleteTarget}
@@ -151,17 +178,35 @@ function TemplateDialog({
   open,
   template,
   onOpenChange,
-  onSave,
+  addTemplate,
+  updateTemplate,
+  uploadTemplateAttachment,
+  deleteTemplateAttachment,
 }: {
   open: boolean;
   template: Template | null;
   onOpenChange: (v: boolean) => void;
-  onSave: (v: { name: string; type: TemplateType; subject: string; body: string }) => void;
+  addTemplate: (input: {
+    name: string;
+    type: TemplateType;
+    subject: string;
+    body: string;
+  }) => Promise<Template>;
+  updateTemplate: (
+    id: string,
+    input: { name?: string; subject?: string; body?: string; active?: boolean },
+  ) => Promise<Template>;
+  uploadTemplateAttachment: (templateId: string, file: File) => Promise<TemplateAttachment>;
+  deleteTemplateAttachment: (templateId: string, attachmentId: string) => Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [type, setType] = useState<TemplateType>("email");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [existingAttachments, setExistingAttachments] = useState<TemplateAttachment[]>([]);
+  const [removedAttachmentIds, setRemovedAttachmentIds] = useState<string[]>([]);
+  const [stagedFiles, setStagedFiles] = useState<File[]>([]);
+  const [saving, setSaving] = useState(false);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
   const key = template?.id ?? "new";
@@ -171,12 +216,65 @@ function TemplateDialog({
     setType(template?.type ?? "email");
     setSubject(template?.subject ?? "");
     setBody(template?.body ?? "");
+    setExistingAttachments(template?.attachments ?? []);
+    setRemovedAttachmentIds([]);
+    setStagedFiles([]);
   }
   if (!open && loadedFor !== null) setLoadedFor(null);
 
+  const visibleExisting = existingAttachments.filter((a) => !removedAttachmentIds.includes(a.id));
+  const attachmentCount = visibleExisting.length + stagedFiles.length;
+
+  function handleFilesSelected(e: ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (selected.length === 0) return;
+    if (type === "whatsapp" && attachmentCount + selected.length > 1) {
+      toast.error("WhatsApp templates support only one attachment.");
+      return;
+    }
+    setStagedFiles((prev) => [...prev, ...selected]);
+  }
+
+  async function handleSave() {
+    if (!name.trim() || isBodyEmpty(body)) return;
+    const effectiveSubject = type === "email" ? subject.trim() : "";
+    setSaving(true);
+    let saved: Template;
+    try {
+      saved = template
+        ? await updateTemplate(template.id, { name: name.trim(), subject: effectiveSubject, body })
+        : await addTemplate({ name: name.trim(), type, subject: effectiveSubject, body });
+    } catch (err) {
+      toast.error(messageFromError(err));
+      setSaving(false);
+      return;
+    }
+    toast.success(template ? "Template updated" : "Template created");
+    setSaving(false);
+    onOpenChange(false);
+
+    for (const id of removedAttachmentIds) {
+      try {
+        await deleteTemplateAttachment(saved.id, id);
+      } catch (err) {
+        toast.error(`Failed to remove an attachment: ${messageFromError(err)}`);
+      }
+    }
+    for (const file of stagedFiles) {
+      try {
+        await uploadTemplateAttachment(saved.id, file);
+      } catch (err) {
+        toast.error(
+          `Failed to upload "${file.name}": ${messageFromError(err)}. Edit the template again to retry.`,
+        );
+      }
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{template ? "Edit template" : "New template"}</DialogTitle>
         </DialogHeader>
@@ -188,7 +286,11 @@ function TemplateDialog({
             </div>
             <div>
               <Label className="mb-1.5 block text-xs">Channel</Label>
-              <Select value={type} onValueChange={(v) => setType(v as TemplateType)}>
+              <Select
+                value={type}
+                onValueChange={(v) => setType(v as TemplateType)}
+                disabled={!!template}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -205,13 +307,97 @@ function TemplateDialog({
               <Input value={subject} onChange={(e) => setSubject(e.target.value)} />
             </div>
           )}
+
           <div>
             <Label className="mb-1.5 block text-xs">Body</Label>
-            <Textarea rows={7} value={body} onChange={(e) => setBody(e.target.value)} />
+            <Tabs defaultValue="edit">
+              <TabsList className="h-8">
+                <TabsTrigger value="edit" className="px-2.5 py-1 text-xs">
+                  Edit
+                </TabsTrigger>
+                <TabsTrigger value="preview" className="px-2.5 py-1 text-xs">
+                  Preview
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="edit" className="mt-1.5">
+                <TemplateBodyEditor value={body} onChange={setBody} loadKey={key} />
+              </TabsContent>
+              <TabsContent value="preview" className="mt-1.5">
+                {type === "email" ? (
+                  <div
+                    className="min-h-[150px] rounded-md border p-3 text-sm"
+                    dangerouslySetInnerHTML={{ __html: body }}
+                  />
+                ) : (
+                  <pre className="min-h-[150px] whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-sans text-sm">
+                    {htmlToWhatsAppText(body)}
+                  </pre>
+                )}
+              </TabsContent>
+            </Tabs>
             <p className="pt-1 text-xs text-muted-foreground">
-              Use {"{{lead.firstName}}"}, {"{{lead.company}}"}, {"{{lead.fullName}}"}, or{" "}
-              {"{{owner.name}}"} for personalisation.
+              Use the "Insert variable" menu in the toolbar to personalise with lead/owner details.
             </p>
+          </div>
+
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <Label className="text-xs">Attachments{type === "whatsapp" ? " (max 1)" : ""}</Label>
+              <label>
+                <span className="cursor-pointer text-xs text-primary underline-offset-4 hover:underline">
+                  + Add file
+                </span>
+                <input
+                  type="file"
+                  multiple={type === "email"}
+                  accept={ATTACHMENT_ACCEPT}
+                  className="hidden"
+                  onChange={handleFilesSelected}
+                />
+              </label>
+            </div>
+            {attachmentCount === 0 ? (
+              <p className="text-xs text-muted-foreground">No attachments.</p>
+            ) : (
+              <ul className="space-y-1">
+                {visibleExisting.map((a) => (
+                  <li
+                    key={a.id}
+                    className="flex items-center justify-between rounded-md border px-2 py-1 text-xs"
+                  >
+                    <span className="truncate">
+                      {a.fileName}{" "}
+                      <span className="text-muted-foreground">({formatBytes(a.sizeBytes)})</span>
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${a.fileName}`}
+                      onClick={() => setRemovedAttachmentIds((prev) => [...prev, a.id])}
+                    >
+                      <X className="size-3.5 text-muted-foreground hover:text-foreground" />
+                    </button>
+                  </li>
+                ))}
+                {stagedFiles.map((file, index) => (
+                  <li
+                    key={`${file.name}-${index}`}
+                    className="flex items-center justify-between rounded-md border border-dashed px-2 py-1 text-xs"
+                  >
+                    <span className="truncate">
+                      {file.name}{" "}
+                      <span className="text-muted-foreground">({formatBytes(file.size)})</span>
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${file.name}`}
+                      onClick={() => setStagedFiles((prev) => prev.filter((_, i) => i !== index))}
+                    >
+                      <X className="size-3.5 text-muted-foreground hover:text-foreground" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
         <DialogFooter>
@@ -219,13 +405,10 @@ function TemplateDialog({
             Cancel
           </Button>
           <Button
-            disabled={!name.trim() || !body.trim()}
-            onClick={() => {
-              onSave({ name: name.trim(), type, subject, body });
-              onOpenChange(false);
-            }}
+            disabled={!name.trim() || isBodyEmpty(body) || saving}
+            onClick={() => void handleSave()}
           >
-            Save
+            {saving ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,4 +1,11 @@
-import makeWASocket, { DisconnectReason, generateMessageIDV2, proto, type ConnectionState, type WASocket } from "baileys";
+import makeWASocket, {
+  DisconnectReason,
+  generateMessageIDV2,
+  proto,
+  type AnyMessageContent,
+  type ConnectionState,
+  type WASocket,
+} from "baileys";
 import pino from "pino";
 import type { PoolClient } from "pg";
 import { pool, withTransaction } from "../db.js";
@@ -8,6 +15,13 @@ import { clearBaileysAuthState, loadBaileysAuthState } from "./baileys-auth.stor
 import { PermanentProviderError, ProviderDeferredError } from "./provider-errors.js";
 import { processInboundUpsert } from "../services/whatsapp-inbound.service.js";
 import { isOutboundRestricted, isTerminalDisconnect, randomSpacingMs, reconnectDelayMs } from "../domain/baileys-policy.js";
+import { supabaseAdmin } from "../supabaseAdmin.js";
+
+export interface WhatsAppAttachment {
+  storagePath: string;
+  fileName: string;
+  mimeType: string;
+}
 
 const WORKER_LOCK_ID = 8_726_149_211;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -270,13 +284,18 @@ export class BaileysManager {
     this.intentionalClose = false;
   }
 
-  sendAction(input: { actionId: string; phoneE164: string; body: string }): Promise<{ providerMessageId: string }> {
+  sendAction(input: {
+    actionId: string;
+    phoneE164: string;
+    body: string;
+    attachment?: WhatsAppAttachment;
+  }): Promise<{ providerMessageId: string }> {
     const task = this.sendTail.then(() => this.performSend(input));
     this.sendTail = task.catch(() => undefined);
     return task;
   }
 
-  private async performSend(input: { actionId: string; phoneE164: string; body: string }) {
+  private async performSend(input: { actionId: string; phoneE164: string; body: string; attachment?: WhatsAppAttachment }) {
     if (!this.socket || !this.connected) throw new ProviderDeferredError("WhatsApp is disconnected or awaiting QR pairing.");
     const jid = phoneE164ToJid(input.phoneE164);
     const proposedMessageId = generateMessageIDV2(this.socket.user?.id);
@@ -292,6 +311,10 @@ export class BaileysManager {
         [input.actionId],
       );
       const row = result.rows[0]!;
+      // Text-only placeholder even when this send carries an attachment: if a
+      // retry-receipt request lands in the narrow window between this claim
+      // and the real send below, it would be served this placeholder instead
+      // of the actual media message. Accepted minor edge case, not fixed here.
       const retryPayload = proto.Message.toObject(proto.Message.fromObject({ conversation: input.body }));
       const encrypted = encryptBytes(
         Buffer.from(JSON.stringify(retryPayload), "utf8"),
@@ -396,8 +419,20 @@ export class BaileysManager {
       throw new ProviderDeferredError("WhatsApp is not connected.");
     }
 
+    let messageContent: AnyMessageContent = { text: input.body };
+    if (input.attachment) {
+      const { data, error } = await supabaseAdmin.storage
+        .from("template-attachments")
+        .download(input.attachment.storagePath);
+      if (error || !data) throw new Error(`Failed to download WhatsApp attachment: ${error?.message ?? "no data"}`);
+      const buffer = Buffer.from(await data.arrayBuffer());
+      messageContent = input.attachment.mimeType.startsWith("image/")
+        ? { image: buffer, caption: input.body }
+        : { document: buffer, fileName: input.attachment.fileName, mimetype: input.attachment.mimeType, caption: input.body };
+    }
+
     return withTransaction(async (db) => {
-      const sent = await this.socket!.sendMessage(jid, { text: input.body }, { messageId: claim.messageId });
+      const sent = await this.socket!.sendMessage(jid, messageContent, { messageId: claim.messageId });
       if (!sent?.message) throw new Error("Baileys returned no message payload.");
       const payload = proto.Message.toObject(proto.Message.fromObject(sent.message));
       const encrypted = encryptBytes(Buffer.from(JSON.stringify(payload), "utf8"), `whatsapp:outbound:${claim.messageId}`);

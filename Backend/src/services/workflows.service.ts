@@ -1,8 +1,20 @@
+import { randomUUID } from "node:crypto";
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, InvalidTransitionError, NotFoundError, ValidationError } from "../errors.js";
 import type { WorkflowStatus, WorkflowStepAction, WorkflowTrigger, WorkflowVersionStatus } from "../domain/enums.js";
 import { findUnknownTemplateTokens } from "../domain/templateRenderer.js";
+import { supabaseAdmin } from "../supabaseAdmin.js";
+
+const TEMPLATE_ATTACHMENTS_BUCKET = "template-attachments";
+const EMAIL_ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024;
+const WHATSAPP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+const ATTACHMENT_SIGNED_URL_TTL_SECONDS = 300;
+
+function sanitizeFileName(name: string): string {
+  const base = name.split(/[/\\]/).pop() ?? name;
+  return base.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-150) || "file";
+}
 
 export interface WorkflowRow {
   id: string;
@@ -444,10 +456,19 @@ export interface TemplateRow {
   channel: "email" | "whatsapp";
   subject: string | null;
   body: string;
-  attachment_reference: string | null;
   is_active: boolean;
   created_at: Date;
   updated_at: Date;
+}
+
+export interface TemplateAttachmentRow {
+  id: string;
+  template_id: string;
+  file_name: string;
+  storage_path: string;
+  mime_type: string;
+  size_bytes: number;
+  created_at: Date;
 }
 
 function templateToDto(row: TemplateRow) {
@@ -457,7 +478,6 @@ function templateToDto(row: TemplateRow) {
     type: row.channel,
     subject: row.subject ?? "",
     body: row.body,
-    attachment: row.attachment_reference ?? undefined,
     active: row.is_active,
   };
 }
@@ -467,21 +487,46 @@ export async function listTemplates(db: Queryable) {
   return result.rows.map(templateToDto);
 }
 
-export async function createTemplate(db: Queryable, actor: Actor, input: { name: string; channel: "email" | "whatsapp"; subject?: string; body: string; attachment?: string }) {
+/** Same as listTemplates but with each template's attachments (and a short-lived signed download URL per attachment) merged in — used by the templates list route. */
+export async function listTemplatesWithAttachments(db: Queryable) {
+  const templates = await listTemplates(db);
+  if (templates.length === 0) return templates.map((t) => ({ ...t, attachments: [] as ReturnType<typeof attachmentToDto>[] }));
+
+  const attachmentsResult = await db.query<TemplateAttachmentRow>(
+    `select * from public.template_attachments where template_id = any($1) order by created_at asc`,
+    [templates.map((t) => t.id)],
+  );
+  const byTemplateId = new Map<string, TemplateAttachmentRow[]>();
+  for (const row of attachmentsResult.rows) {
+    const list = byTemplateId.get(row.template_id) ?? [];
+    list.push(row);
+    byTemplateId.set(row.template_id, list);
+  }
+
+  return Promise.all(
+    templates.map(async (template) => {
+      const rows = byTemplateId.get(template.id) ?? [];
+      const attachments = await Promise.all(rows.map((row) => attachmentToDto(row)));
+      return { ...template, attachments };
+    }),
+  );
+}
+
+export async function createTemplate(db: Queryable, actor: Actor, input: { name: string; channel: "email" | "whatsapp"; subject?: string; body: string }) {
   if (!input.name.trim()) throw new ValidationError("Template name is required.");
   if (!input.body.trim()) throw new ValidationError("Template body is required.");
   if (input.channel === "whatsapp" && input.subject) {
     throw new ValidationError("WhatsApp templates cannot have a subject.");
   }
   const result = await db.query<TemplateRow>(
-    `insert into public.message_templates (name, channel, subject, body, attachment_reference, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6,$7) returning *`,
-    [input.name.trim(), input.channel, input.channel === "email" ? input.subject?.trim() || null : null, input.body, input.attachment ?? null, actor.id, actor.fullName],
+    `insert into public.message_templates (name, channel, subject, body, created_by, created_by_name)
+     values ($1,$2,$3,$4,$5,$6) returning *`,
+    [input.name.trim(), input.channel, input.channel === "email" ? input.subject?.trim() || null : null, input.body, actor.id, actor.fullName],
   );
   return templateToDto(result.rows[0]!);
 }
 
-export async function updateTemplate(db: Queryable, id: string, patch: { name?: string; subject?: string; body?: string; attachment?: string; active?: boolean }) {
+export async function updateTemplate(db: Queryable, id: string, patch: { name?: string; subject?: string; body?: string; active?: boolean }) {
   const existing = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [id]);
   if (!existing.rows[0]) throw new NotFoundError("Template");
 
@@ -500,10 +545,6 @@ export async function updateTemplate(db: Queryable, id: string, patch: { name?: 
     sets.push(`body = $${i++}`);
     params.push(patch.body);
   }
-  if (patch.attachment !== undefined) {
-    sets.push(`attachment_reference = $${i++}`);
-    params.push(patch.attachment || null);
-  }
   if (patch.active !== undefined) {
     sets.push(`is_active = $${i++}`);
     params.push(patch.active);
@@ -514,6 +555,79 @@ export async function updateTemplate(db: Queryable, id: string, patch: { name?: 
   }
   const updated = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [id]);
   return templateToDto(updated.rows[0]!);
+}
+
+async function attachmentToDto(row: TemplateAttachmentRow) {
+  const { data } = await supabaseAdmin.storage
+    .from(TEMPLATE_ATTACHMENTS_BUCKET)
+    .createSignedUrl(row.storage_path, ATTACHMENT_SIGNED_URL_TTL_SECONDS);
+  return {
+    id: row.id,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    downloadUrl: data?.signedUrl ?? null,
+  };
+}
+
+export async function listTemplateAttachments(db: Queryable, templateId: string) {
+  const result = await db.query<TemplateAttachmentRow>(
+    `select * from public.template_attachments where template_id = $1 order by created_at asc`,
+    [templateId],
+  );
+  return Promise.all(result.rows.map((row) => attachmentToDto(row)));
+}
+
+export async function createTemplateAttachment(
+  db: Queryable,
+  templateId: string,
+  file: { buffer: Buffer; originalName: string; mimeType: string; size: number },
+) {
+  const templateResult = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [templateId]);
+  const template = templateResult.rows[0];
+  if (!template) throw new NotFoundError("Template");
+
+  if (template.channel === "whatsapp") {
+    const existing = await db.query<{ count: string }>(
+      `select count(*)::text as count from public.template_attachments where template_id = $1`,
+      [templateId],
+    );
+    if (Number(existing.rows[0]?.count ?? 0) >= 1) {
+      throw new ValidationError("WhatsApp templates support only one attachment — remove the existing one first.");
+    }
+    if (file.size > WHATSAPP_ATTACHMENT_MAX_BYTES) {
+      throw new ValidationError(`WhatsApp attachments must be under ${WHATSAPP_ATTACHMENT_MAX_BYTES / (1024 * 1024)}MB.`);
+    }
+  } else if (file.size > EMAIL_ATTACHMENT_MAX_BYTES) {
+    throw new ValidationError(`Attachments must be under ${EMAIL_ATTACHMENT_MAX_BYTES / (1024 * 1024)}MB.`);
+  }
+
+  const storagePath = `${templateId}/${randomUUID()}-${sanitizeFileName(file.originalName)}`;
+  const { error: uploadError } = await supabaseAdmin.storage
+    .from(TEMPLATE_ATTACHMENTS_BUCKET)
+    .upload(storagePath, file.buffer, { contentType: file.mimeType, upsert: false });
+  if (uploadError) throw new Error(`Failed to upload attachment: ${uploadError.message}`);
+
+  const inserted = await db.query<TemplateAttachmentRow>(
+    `insert into public.template_attachments (template_id, file_name, storage_path, mime_type, size_bytes)
+     values ($1,$2,$3,$4,$5) returning *`,
+    [templateId, file.originalName, storagePath, file.mimeType, file.size],
+  );
+  return attachmentToDto(inserted.rows[0]!);
+}
+
+export async function deleteTemplateAttachment(db: Queryable, templateId: string, attachmentId: string) {
+  const existing = await db.query<TemplateAttachmentRow>(
+    `select * from public.template_attachments where id = $1 and template_id = $2`,
+    [attachmentId, templateId],
+  );
+  const row = existing.rows[0];
+  if (!row) throw new NotFoundError("Attachment");
+
+  const { error } = await supabaseAdmin.storage.from(TEMPLATE_ATTACHMENTS_BUCKET).remove([row.storage_path]);
+  if (error) throw new Error(`Failed to remove attachment from storage: ${error.message}`);
+
+  await db.query(`delete from public.template_attachments where id = $1`, [attachmentId]);
 }
 
 /**

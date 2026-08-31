@@ -70,13 +70,20 @@ export interface Run {
   lastError?: string;
 }
 export type TemplateType = "email" | "whatsapp";
+export interface TemplateAttachment {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  downloadUrl: string | null;
+}
 export interface Template {
   id: string;
   name: string;
   type: TemplateType;
   subject: string;
   body: string;
-  attachment?: string;
+  attachments: TemplateAttachment[];
   active: boolean;
 }
 export const SCHEDULED_ACTION_STATUSES = [

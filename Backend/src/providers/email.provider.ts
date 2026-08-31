@@ -2,10 +2,17 @@ import nodemailer from "nodemailer";
 import { loadEmailConnection } from "../services/connections.service.js";
 import { PermanentProviderError, ProviderDeferredError } from "./provider-errors.js";
 
+export interface SendEmailAttachment {
+  filename: string;
+  /** Base64-encoded file content. */
+  content: string;
+}
+
 export interface SendEmailInput {
   to: string;
   subject: string;
   html: string;
+  attachments?: SendEmailAttachment[];
 }
 
 export interface SendEmailResult {
@@ -21,7 +28,13 @@ async function sendViaResend(input: SendEmailInput, apiKey: string, senderName: 
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: `${senderName} <${senderAddress}>`, to: input.to, subject: input.subject, html: input.html }),
+    body: JSON.stringify({
+      from: `${senderName} <${senderAddress}>`,
+      to: input.to,
+      subject: input.subject,
+      html: input.html,
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+    }),
   });
   const data = (await response.json().catch(() => ({}))) as ResendSendResponse;
   if (!response.ok || !data.id) {
@@ -66,7 +79,13 @@ export async function sendEmail(input: SendEmailInput, options: { allowDisabled?
     tls: { minVersion: "TLSv1.2" },
   });
   try {
-    const info = await transporter.sendMail({ from: { name: senderName, address: senderAddress }, to: input.to, subject: input.subject, html: input.html });
+    const info = await transporter.sendMail({
+      from: { name: senderName, address: senderAddress },
+      to: input.to,
+      subject: input.subject,
+      html: input.html,
+      attachments: input.attachments?.map((a) => ({ filename: a.filename, content: Buffer.from(a.content, "base64") })),
+    });
     return { providerMessageId: info.messageId };
   } catch (error) {
     const smtpError = error as Error & { responseCode?: number };

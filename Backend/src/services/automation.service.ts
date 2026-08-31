@@ -128,7 +128,16 @@ export interface ActionContext {
   };
   run: { id: string; workflowId: string; status: WorkflowRunStatus; currentStepId: string | null };
   step: { id: string; order: number; delayDays: number; action: WorkflowStepAction; config: string | null } | null;
-  template: { id: string; name: string; channel: "email" | "whatsapp"; subject: string | null; body: string } | null;
+  template:
+    | {
+        id: string;
+        name: string;
+        channel: "email" | "whatsapp";
+        subject: string | null;
+        body: string;
+        attachments: { id: string; storagePath: string; fileName: string; mimeType: string }[];
+      }
+    | null;
   eligibility: Eligibility;
 }
 
@@ -145,12 +154,25 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
 
   const templateId = (action.payload as { templateId?: string | null }).templateId ?? step?.template_id ?? null;
   let template: TemplateRow | null = null;
+  let templateAttachments: { id: string; storagePath: string; fileName: string; mimeType: string }[] = [];
   if (templateId) {
     const templateResult = await db.query<TemplateRow>(
       `select id, name, channel, subject, body, is_active from public.message_templates where id = $1`,
       [templateId],
     );
     template = templateResult.rows[0] ?? null;
+    if (template) {
+      const attachmentsResult = await db.query<{ id: string; storage_path: string; file_name: string; mime_type: string }>(
+        `select id, storage_path, file_name, mime_type from public.template_attachments where template_id = $1 order by created_at asc`,
+        [templateId],
+      );
+      templateAttachments = attachmentsResult.rows.map((row) => ({
+        id: row.id,
+        storagePath: row.storage_path,
+        fileName: row.file_name,
+        mimeType: row.mime_type,
+      }));
+    }
   }
 
   let contactStatus: string | undefined;
@@ -192,7 +214,16 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
     },
     run: { id: run.id, workflowId: run.workflow_id, status: run.status, currentStepId: run.current_step_id },
     step: step ? { id: step.id, order: step.step_order, delayDays: step.delay_days, action: step.action, config: step.config } : null,
-    template: template ? { id: template.id, name: template.name, channel: template.channel, subject: template.subject, body: template.body } : null,
+    template: template
+      ? {
+          id: template.id,
+          name: template.name,
+          channel: template.channel,
+          subject: template.subject,
+          body: template.body,
+          attachments: templateAttachments,
+        }
+      : null,
     eligibility,
   };
 }

@@ -8,6 +8,12 @@
  * "insert variable" / live-preview UI should mirror KNOWN_TEMPLATE_VARIABLES
  * from here rather than hardcoding its own copy.)
  *
+ * `body` is HTML authored by the template rich-text editor; substituted
+ * variable values are HTML-escaped so a lead field containing `<`, `&`, `"`
+ * etc. can't break the surrounding markup or inject new tags. The template's
+ * own authored HTML is never touched — only the matched `{{...}}` span is
+ * replaced.
+ *
  * Pure and side-effect-free: unknown tokens are left in the output as-is
  * (never silently blanked) and reported back via `unknownTokens` so the
  * caller decides what to do.
@@ -62,10 +68,22 @@ export const KNOWN_TEMPLATE_VARIABLES = [
 
 const TOKEN_PATTERN = /\{\{\s*([\w.]+)\s*\}\}/g;
 
-function renderText(text: string, variables: Map<string, string>, unknownTokens: Set<string>): string {
+const HTML_ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]!);
+}
+
+function renderText(text: string, variables: Map<string, string>, unknownTokens: Set<string>, escape: boolean): string {
   return text.replace(TOKEN_PATTERN, (match, key: string) => {
     const value = variables.get(key);
-    if (value !== undefined) return value;
+    if (value !== undefined) return escape ? escapeHtml(value) : value;
     unknownTokens.add(key);
     return match;
   });
@@ -74,8 +92,10 @@ function renderText(text: string, variables: Map<string, string>, unknownTokens:
 export function renderTemplate(template: RenderableTemplate, lead: TemplateRenderLead): RenderedTemplate {
   const variables = buildVariableMap(lead);
   const unknownTokens = new Set<string>();
-  const body = renderText(template.body, variables, unknownTokens);
-  const subject = template.subject != null ? renderText(template.subject, variables, unknownTokens) : null;
+  // body is HTML (see module doc-comment above) — escape substituted values.
+  // subject is a plain-text email header — substitute as-is, never escaped.
+  const body = renderText(template.body, variables, unknownTokens, true);
+  const subject = template.subject != null ? renderText(template.subject, variables, unknownTokens, false) : null;
   return { subject, body, unknownTokens: [...unknownTokens] };
 }
 
