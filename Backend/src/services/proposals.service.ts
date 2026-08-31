@@ -1,9 +1,9 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
-import type { ProposalStatus } from "../domain/enums.js";
+import type { EmailSendStatus, ProposalStatus, WhatsappSendStatus } from "../domain/enums.js";
 import { routeProposalStatus } from "../domain/proposalRouting.js";
-import { addTimelineEvent, actorEvent } from "./timeline.service.js";
+import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { cancelOpenTasksForLead, createTask } from "./tasks.service.js";
 import { getLeadRowOr404, markWon, moveToLongTermNurture, updateLead } from "./leads.service.js";
 import { autoEnroll } from "./runs.service.js";
@@ -16,6 +16,10 @@ export interface ProposalRow {
   owner_name: string | null;
   title: string;
   document_reference: string | null;
+  document_storage_path: string | null;
+  document_file_name: string | null;
+  document_mime_type: string | null;
+  document_size_bytes: number | null;
   amount: string | null;
   currency: string;
   status: ProposalStatus;
@@ -23,6 +27,16 @@ export interface ProposalRow {
   follow_up_at: Date | null;
   next_action: string | null;
   notes: string | null;
+  email_template_id: string | null;
+  whatsapp_template_id: string | null;
+  email_send_status: EmailSendStatus;
+  email_sent_at: Date | null;
+  email_send_error: string | null;
+  whatsapp_send_status: WhatsappSendStatus;
+  whatsapp_sent_at: Date | null;
+  whatsapp_send_error: string | null;
+  whatsapp_next_attempt_at: Date | null;
+  whatsapp_attempt_count: number;
   created_by: string | null;
   created_by_name: string | null;
   created_at: Date;
@@ -36,7 +50,9 @@ function proposalToDto(row: ProposalRow) {
     ownerId: row.owner_id ?? undefined,
     ownerName: row.owner_name ?? undefined,
     title: row.title,
-    fileName: row.document_reference ?? undefined,
+    fileName: row.document_file_name ?? row.document_reference ?? undefined,
+    documentMimeType: row.document_mime_type ?? undefined,
+    documentSizeBytes: row.document_size_bytes ?? undefined,
     amount: row.amount ? Number(row.amount) : undefined,
     currency: row.currency,
     status: row.status,
@@ -44,6 +60,14 @@ function proposalToDto(row: ProposalRow) {
     followUpDate: row.follow_up_at?.toISOString(),
     nextAction: row.next_action ?? undefined,
     notes: row.notes ?? undefined,
+    emailTemplateId: row.email_template_id ?? undefined,
+    whatsappTemplateId: row.whatsapp_template_id ?? undefined,
+    emailSendStatus: row.email_send_status,
+    emailSentAt: row.email_sent_at?.toISOString(),
+    emailSendError: row.email_send_error ?? undefined,
+    whatsappSendStatus: row.whatsapp_send_status,
+    whatsappSentAt: row.whatsapp_sent_at?.toISOString(),
+    whatsappSendError: row.whatsapp_send_error ?? undefined,
     updatedAt: row.updated_at.toISOString(),
     createdAt: row.created_at.toISOString(),
   };
@@ -55,6 +79,14 @@ export interface CreateProposalInput {
   fileName?: string;
   amount?: number;
   notes?: string;
+  documentStoragePath?: string;
+  documentFileName?: string;
+  documentMimeType?: string;
+  documentSizeBytes?: number;
+  emailTemplateId?: string;
+  whatsappTemplateId?: string;
+  emailSendStatus?: EmailSendStatus;
+  whatsappSendStatus?: WhatsappSendStatus;
 }
 
 export async function createProposal(db: Queryable, actor: Actor, input: CreateProposalInput) {
@@ -63,9 +95,30 @@ export async function createProposal(db: Queryable, actor: Actor, input: CreateP
   if (lead.lifecycle_state === "do_not_contact") throw new DoNotContactError();
 
   const result = await db.query<{ id: string }>(
-    `insert into public.proposals (lead_id, owner_id, title, document_reference, amount, status, notes, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,'draft',$6,$7,$8) returning id`,
-    [input.leadId, lead.owner_id, input.title.trim(), input.fileName ?? null, input.amount ?? null, input.notes ?? null, actor.id, actor.fullName],
+    `insert into public.proposals
+      (lead_id, owner_id, title, document_reference, document_storage_path, document_file_name,
+       document_mime_type, document_size_bytes, amount, status, notes,
+       email_template_id, whatsapp_template_id, email_send_status, whatsapp_send_status,
+       created_by, created_by_name)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'draft',$10,$11,$12,$13,$14,$15,$16) returning id`,
+    [
+      input.leadId,
+      lead.owner_id,
+      input.title.trim(),
+      input.fileName ?? null,
+      input.documentStoragePath ?? null,
+      input.documentFileName ?? null,
+      input.documentMimeType ?? null,
+      input.documentSizeBytes ?? null,
+      input.amount ?? null,
+      input.notes ?? null,
+      input.emailTemplateId ?? null,
+      input.whatsappTemplateId ?? null,
+      input.emailSendStatus ?? "not_applicable",
+      input.whatsappSendStatus ?? "not_applicable",
+      actor.id,
+      actor.fullName,
+    ],
   );
   const id = result.rows[0]!.id;
 
@@ -75,7 +128,7 @@ export async function createProposal(db: Queryable, actor: Actor, input: CreateP
   return getProposalOr404(db, id);
 }
 
-async function getProposalRowOr404(db: Queryable, id: string): Promise<ProposalRow> {
+export async function getProposalRowOr404(db: Queryable, id: string): Promise<ProposalRow> {
   const result = await db.query<ProposalRow>(`select * from public.proposals where id = $1`, [id]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Proposal");
@@ -155,7 +208,7 @@ const TERMINAL_PROPOSAL_STATUSES: ProposalStatus[] = ["accepted", "rejected", "w
  * lead-state cascade (Rule 16), so status changes only ever go through
  * here.
  */
-export async function updateProposalStatus(db: Queryable, actor: Actor, id: string, status: ProposalStatus) {
+export async function updateProposalStatus(db: Queryable, actor: Actor | null, id: string, status: ProposalStatus) {
   const proposal = await getProposalRowOr404(db, id);
   if (proposal.status === status) return proposalToDto(proposal);
   if (TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)) {
@@ -173,7 +226,7 @@ export async function updateProposalStatus(db: Queryable, actor: Actor, id: stri
   }
   await db.query(`update public.proposals set ${sets.join(", ")} where id = $1`, params);
 
-  await addTimelineEvent(db, { leadId: proposal.lead_id, kind: "proposal", title: `Proposal ${status}`, detail: proposal.title, ...actorEvent(actor), relatedProposalId: id });
+  await addTimelineEvent(db, { leadId: proposal.lead_id, kind: "proposal", title: `Proposal ${status}`, detail: proposal.title, ...(actor ? actorEvent(actor) : AUTOMATION_ACTOR), relatedProposalId: id });
 
   const routing = routeProposalStatus(status);
 

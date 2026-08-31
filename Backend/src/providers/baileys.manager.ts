@@ -21,6 +21,24 @@ export interface WhatsAppAttachment {
   storagePath: string;
   fileName: string;
   mimeType: string;
+  bucket: string;
+}
+
+/**
+ * What this send is for. `scheduled_action` is the original workflow-driven
+ * path (idempotency/eligibility keyed off a real `scheduled_actions` row).
+ * `proposal` is a human-initiated "Send" click with no scheduled action
+ * behind it (a proposal needs a per-send, user-chosen template, unlike a
+ * workflow step whose template is fixed at definition time) — its outbound
+ * row is keyed off `whatsapp_outbound_messages.proposal_id` instead. Every
+ * shared safety mechanism below (emergency switch, daily cap, spacing,
+ * connection checks) stays computed generically across the whole table
+ * regardless of which source a row came from.
+ */
+export type WhatsAppSendSource = { type: "scheduled_action"; id: string } | { type: "proposal"; id: string };
+
+function sourceColumn(source: WhatsAppSendSource): "scheduled_action_id" | "proposal_id" {
+  return source.type === "scheduled_action" ? "scheduled_action_id" : "proposal_id";
 }
 
 const WORKER_LOCK_ID = 8_726_149_211;
@@ -285,7 +303,7 @@ export class BaileysManager {
   }
 
   sendAction(input: {
-    actionId: string;
+    source: WhatsAppSendSource;
     phoneE164: string;
     body: string;
     attachment?: WhatsAppAttachment;
@@ -295,20 +313,22 @@ export class BaileysManager {
     return task;
   }
 
-  private async performSend(input: { actionId: string; phoneE164: string; body: string; attachment?: WhatsAppAttachment }) {
+  private async performSend(input: { source: WhatsAppSendSource; phoneE164: string; body: string; attachment?: WhatsAppAttachment }) {
     if (!this.socket || !this.connected) throw new ProviderDeferredError("WhatsApp is disconnected or awaiting QR pairing.");
     const jid = phoneE164ToJid(input.phoneE164);
+    const column = sourceColumn(input.source);
+    const sourceId = input.source.id;
     const proposedMessageId = generateMessageIDV2(this.socket.user?.id);
     const prepared = await withTransaction(async (db) => {
       await db.query(
-        `insert into public.whatsapp_outbound_messages (scheduled_action_id, message_id, remote_jid)
+        `insert into public.whatsapp_outbound_messages (${column}, message_id, remote_jid)
          values ($1,$2,$3)
-         on conflict (scheduled_action_id) do nothing`,
-        [input.actionId, proposedMessageId, jid],
+         on conflict (${column}) do nothing`,
+        [sourceId, proposedMessageId, jid],
       );
       const result = await db.query<OutboundRow>(
-        `select message_id, remote_jid, status from public.whatsapp_outbound_messages where scheduled_action_id = $1`,
-        [input.actionId],
+        `select message_id, remote_jid, status from public.whatsapp_outbound_messages where ${column} = $1`,
+        [sourceId],
       );
       const row = result.rows[0]!;
       // Text-only placeholder even when this send carries an attachment: if a
@@ -323,8 +343,8 @@ export class BaileysManager {
       await db.query(
         `update public.whatsapp_outbound_messages
             set payload_ciphertext = $2, payload_iv = $3, payload_tag = $4, key_version = $5, updated_at = now()
-          where scheduled_action_id = $1 and payload_ciphertext is null`,
-        [input.actionId, encrypted.ciphertext, encrypted.iv, encrypted.tag, encrypted.keyVersion],
+          where ${column} = $1 and payload_ciphertext is null`,
+        [sourceId, encrypted.ciphertext, encrypted.iv, encrypted.tag, encrypted.keyVersion],
       );
       return row;
     });
@@ -352,17 +372,32 @@ export class BaileysManager {
       ]);
       if (isOutboundRestricted(liveReachout, liveCap))
         throw new ProviderDeferredError("WhatsApp has applied a reachout or new-chat restriction.", 300_000);
-      const eligible = await db.query<{ phone_e164: string | null }>(
-        `select l.phone_e164
-           from public.scheduled_actions a
-           join public.leads l on l.id = a.lead_id
-           join public.workflow_runs r on r.id = a.workflow_run_id
-          where a.id = $1 and a.status = 'executing'
-            and l.lifecycle_state = 'active' and l.automation_mode not in ('manual','paused','stopped')
-            and r.status in ('running','waiting')
-          for update of a, l, r`,
-        [input.actionId],
-      );
+      const eligible =
+        input.source.type === "scheduled_action"
+          ? await db.query<{ phone_e164: string | null }>(
+              `select l.phone_e164
+                 from public.scheduled_actions a
+                 join public.leads l on l.id = a.lead_id
+                 join public.workflow_runs r on r.id = a.workflow_run_id
+                where a.id = $1 and a.status = 'executing'
+                  and l.lifecycle_state = 'active' and l.automation_mode not in ('manual','paused','stopped')
+                  and r.status in ('running','waiting')
+                for update of a, l, r`,
+              [sourceId],
+            )
+          : await db.query<{ phone_e164: string | null }>(
+              // A human clicked "Send" on this proposal — no automation_mode
+              // gate (that gate restrains the automation engine, not a
+              // person), only the DNC safety check every customer-facing
+              // action must honor.
+              `select l.phone_e164
+                 from public.proposals p
+                 join public.leads l on l.id = p.lead_id
+                where p.id = $1 and p.whatsapp_send_status = 'sending'
+                  and l.lifecycle_state != 'do_not_contact'
+                for update of p, l`,
+              [sourceId],
+            );
       if (eligible.rows[0]?.phone_e164 !== input.phoneE164) {
         throw new PermanentProviderError("The lead is no longer eligible for this WhatsApp action.");
       }
@@ -375,8 +410,8 @@ export class BaileysManager {
         throw new ProviderDeferredError("The Asia/Kolkata WhatsApp daily cap has been reached.", 300_000);
       }
       const existing = await db.query<OutboundRow>(
-        `select message_id, remote_jid, status from public.whatsapp_outbound_messages where scheduled_action_id = $1`,
-        [input.actionId],
+        `select message_id, remote_jid, status from public.whatsapp_outbound_messages where ${column} = $1`,
+        [sourceId],
       );
       if (existing.rows[0]?.status === "sent") {
         return { alreadySent: true as const, messageId: existing.rows[0].message_id, waitMs: 0 };
@@ -385,16 +420,17 @@ export class BaileysManager {
       const registered = await this.socket.onWhatsApp(input.phoneE164.slice(1));
       if (!registered?.some((entry) => entry.exists)) {
         await db.query(
-          `update public.whatsapp_outbound_messages set status = 'failed', last_error = 'Recipient is not on WhatsApp' where scheduled_action_id = $1`,
-          [input.actionId],
+          `update public.whatsapp_outbound_messages set status = 'failed', last_error = 'Recipient is not on WhatsApp' where ${column} = $1`,
+          [sourceId],
         );
+        const leadIdSource = input.source.type === "scheduled_action" ? "public.scheduled_actions" : "public.proposals";
         await db.query(
           `insert into public.lead_contact_channels (lead_id, channel, status, reason, updated_by_name)
            select lead_id, 'whatsapp', 'invalid', 'Number is not registered on WhatsApp', 'Automation'
-             from public.scheduled_actions where id = $1
+             from ${leadIdSource} where id = $1
            on conflict (lead_id, channel) do update
              set status = 'invalid', reason = excluded.reason, updated_at = now(), updated_by = null, updated_by_name = 'Automation'`,
-          [input.actionId],
+          [sourceId],
         );
         throw new PermanentProviderError("Recipient is not registered on WhatsApp.");
       }
@@ -422,7 +458,7 @@ export class BaileysManager {
     let messageContent: AnyMessageContent = { text: input.body };
     if (input.attachment) {
       const { data, error } = await supabaseAdmin.storage
-        .from("template-attachments")
+        .from(input.attachment.bucket)
         .download(input.attachment.storagePath);
       if (error || !data) throw new Error(`Failed to download WhatsApp attachment: ${error?.message ?? "no data"}`);
       const buffer = Buffer.from(await data.arrayBuffer());
@@ -440,8 +476,8 @@ export class BaileysManager {
         `update public.whatsapp_outbound_messages
             set status = 'sent', payload_ciphertext = $2, payload_iv = $3, payload_tag = $4,
                 key_version = $5, sent_at = now(), last_error = null, updated_at = now()
-          where scheduled_action_id = $1`,
-        [input.actionId, encrypted.ciphertext, encrypted.iv, encrypted.tag, encrypted.keyVersion],
+          where ${column} = $1`,
+        [sourceId, encrypted.ciphertext, encrypted.iv, encrypted.tag, encrypted.keyVersion],
       );
       return { providerMessageId: claim.messageId };
     });

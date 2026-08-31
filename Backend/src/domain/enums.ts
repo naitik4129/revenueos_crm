@@ -209,5 +209,11 @@ export type ScheduledActionStatus = (typeof SCHEDULED_ACTION_STATUSES)[number];
 export const TEMPLATE_CHANNELS = ["email", "whatsapp"] as const;
 export type TemplateChannel = (typeof TEMPLATE_CHANNELS)[number];
 
+export const PROPOSAL_EMAIL_SEND_STATUSES = ["not_applicable", "pending", "skipped", "sent", "failed"] as const;
+export type EmailSendStatus = (typeof PROPOSAL_EMAIL_SEND_STATUSES)[number];
+
+export const PROPOSAL_WHATSAPP_SEND_STATUSES = ["not_applicable", "skipped", "queued", "sending", "sent", "failed"] as const;
+export type WhatsappSendStatus = (typeof PROPOSAL_WHATSAPP_SEND_STATUSES)[number];
+
 export const NOTIFICATION_KINDS = ["info", "warning", "success", "danger"] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];

@@ -211,9 +211,11 @@ export interface UpdateMeetingInput {
 export interface CreateProposalInput {
   leadId: string;
   title: string;
-  fileName?: string | undefined;
   amount?: number | undefined;
   notes?: string | undefined;
+  emailTemplateId: string;
+  whatsappTemplateId: string;
+  document: File;
 }
 export interface UpdateProposalInput {
   title?: string | undefined;
@@ -431,7 +433,17 @@ export const backend = {
   proposals: {
     list: (params?: Record<string, string | undefined>, signal?: AbortSignal) =>
       get<{ data: Proposal[] }>(query("/proposals", params), signal),
-    create: (input: CreateProposalInput) => send<Proposal>("POST", "/proposals", input),
+    create: (input: CreateProposalInput) => {
+      const formData = new FormData();
+      formData.append("leadId", input.leadId);
+      formData.append("title", input.title);
+      if (input.amount !== undefined) formData.append("amount", String(input.amount));
+      if (input.notes) formData.append("notes", input.notes);
+      formData.append("emailTemplateId", input.emailTemplateId);
+      formData.append("whatsappTemplateId", input.whatsappTemplateId);
+      formData.append("document", input.document);
+      return uploadFile<Proposal>("/proposals", formData);
+    },
     update: (id: string, input: UpdateProposalInput) =>
       send<Proposal>("PATCH", `/proposals/${id}`, input),
     setStatus: (id: string, status: ProposalStatus) =>

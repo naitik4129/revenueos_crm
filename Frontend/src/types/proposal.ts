@@ -11,6 +11,26 @@ export const PROPOSAL_STATUSES = [
   "expired",
 ] as const;
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
+
+export const PROPOSAL_EMAIL_SEND_STATUSES = [
+  "not_applicable",
+  "pending",
+  "skipped",
+  "sent",
+  "failed",
+] as const;
+export type EmailSendStatus = (typeof PROPOSAL_EMAIL_SEND_STATUSES)[number];
+
+export const PROPOSAL_WHATSAPP_SEND_STATUSES = [
+  "not_applicable",
+  "skipped",
+  "queued",
+  "sending",
+  "sent",
+  "failed",
+] as const;
+export type WhatsappSendStatus = (typeof PROPOSAL_WHATSAPP_SEND_STATUSES)[number];
+
 export interface Proposal {
   id: string;
   leadId: string;
@@ -18,6 +38,8 @@ export interface Proposal {
   ownerName?: string;
   title: string;
   fileName?: string;
+  documentMimeType?: string;
+  documentSizeBytes?: number;
   amount?: number;
   currency: string;
   status: ProposalStatus;
@@ -25,6 +47,14 @@ export interface Proposal {
   followUpDate?: string;
   nextAction?: string;
   notes?: string;
+  emailTemplateId?: string;
+  whatsappTemplateId?: string;
+  emailSendStatus: EmailSendStatus;
+  emailSentAt?: string;
+  emailSendError?: string;
+  whatsappSendStatus: WhatsappSendStatus;
+  whatsappSentAt?: string;
+  whatsappSendError?: string;
   updatedAt: string;
   createdAt: string;
 }

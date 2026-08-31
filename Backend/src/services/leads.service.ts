@@ -4,7 +4,7 @@ import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from
 import { assertPipelineStageEditable, assertValidLifecycleState, assertValidPipelineStage, isTerminalLifecycle } from "../domain/pipeline.js";
 import type { AutomationMode, ContactChannel, LeadSource, LifecycleState, PipelineStage, ResponseState } from "../domain/enums.js";
 import { CONTACT_CHANNEL_STATUS } from "../domain/enums.js";
-import { addTimelineEvent, actorEvent } from "./timeline.service.js";
+import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { cancelOpenTasksForLead, getLeadNextAction } from "./tasks.service.js";
 import { applyAutomationModeToRuns } from "./runs.service.js";
 import { normalizePhoneE164 } from "../domain/phone.js";
@@ -262,7 +262,7 @@ export interface UpdateLeadInput {
  */
 export async function updateLead(
   db: Queryable,
-  actor: Actor,
+  actor: Actor | null,
   id: string,
   patch: UpdateLeadInput,
 ): Promise<LeadRow> {
@@ -313,7 +313,7 @@ export async function updateLead(
       leadId: id,
       kind: "stage",
       title: `Stage changed to ${patch.pipelineStage}`,
-      ...actorEvent(actor),
+      ...(actor ? actorEvent(actor) : AUTOMATION_ACTOR),
     });
   }
   if (patch.ownerId && patch.ownerId !== current.owner_id) {
@@ -323,7 +323,7 @@ export async function updateLead(
       kind: "system",
       title: "Lead Assigned",
       detail: `Owner: ${owner.rows[0]?.full_name ?? "Unassigned"}`,
-      ...actorEvent(actor),
+      ...(actor ? actorEvent(actor) : AUTOMATION_ACTOR),
     });
   }
 
@@ -455,7 +455,7 @@ export async function reactivateFromDnc(db: Queryable, actor: Actor, leadId: str
 
 async function setTerminalLifecycle(
   db: Queryable,
-  actor: Actor,
+  actor: Actor | null,
   leadId: string,
   lifecycle: Exclude<LifecycleState, "active" | "do_not_contact" | "merged">,
   timelineTitle: string,
@@ -467,11 +467,11 @@ async function setTerminalLifecycle(
 
   await db.query(`update public.leads set lifecycle_state = $2, last_activity_at = now() where id = $1`, [leadId, lifecycle]);
   await cancelOpenTasksForLead(db, actor, leadId, `Lead ${timelineTitle}`);
-  await addTimelineEvent(db, { leadId, kind: "system", title: timelineTitle, detail: reason, ...actorEvent(actor) });
+  await addTimelineEvent(db, { leadId, kind: "system", title: timelineTitle, detail: reason, ...(actor ? actorEvent(actor) : AUTOMATION_ACTOR) });
   return getLeadRowOr404(db, leadId);
 }
 
-export const markWon = (db: Queryable, actor: Actor, leadId: string, reason?: string) =>
+export const markWon = (db: Queryable, actor: Actor | null, leadId: string, reason?: string) =>
   setTerminalLifecycle(db, actor, leadId, "won", "Won", reason);
 
 export const markLost = (db: Queryable, actor: Actor, leadId: string, reason?: string) =>
@@ -480,11 +480,11 @@ export const markLost = (db: Queryable, actor: Actor, leadId: string, reason?: s
 export const markDiscarded = (db: Queryable, actor: Actor, leadId: string, reason?: string) =>
   setTerminalLifecycle(db, actor, leadId, "discarded", "Discarded", reason);
 
-export async function moveToLongTermNurture(db: Queryable, actor: Actor, leadId: string, reason?: string) {
+export async function moveToLongTermNurture(db: Queryable, actor: Actor | null, leadId: string, reason?: string) {
   const current = await getLeadRowOr404(db, leadId);
   if (current.lifecycle_state === "long_term_nurture") return current;
   await db.query(`update public.leads set lifecycle_state = 'long_term_nurture', last_activity_at = now() where id = $1`, [leadId]);
-  await addTimelineEvent(db, { leadId, kind: "system", title: "Moved to Long-Term Nurture", detail: reason, ...actorEvent(actor) });
+  await addTimelineEvent(db, { leadId, kind: "system", title: "Moved to Long-Term Nurture", detail: reason, ...(actor ? actorEvent(actor) : AUTOMATION_ACTOR) });
   return getLeadRowOr404(db, leadId);
 }
 

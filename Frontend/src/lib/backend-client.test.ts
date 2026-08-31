@@ -61,12 +61,6 @@ describe("backend client", () => {
       "/api/v1/meetings",
     ],
     [
-      "proposal",
-      () => backend.proposals.create({ leadId: "lead-1", title: "Proposal" }),
-      "POST",
-      "/api/v1/proposals",
-    ],
-    [
       "workflow publish",
       () => backend.workflows.publish("workflow-1", 3),
       "POST",
@@ -102,6 +96,33 @@ describe("backend client", () => {
       method,
       headers: { Authorization: "Bearer session-token", "Content-Type": "application/json" },
     });
+  });
+
+  it("uploads a proposal document with its multipart fields", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => response({ id: "proposal-1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const document = new File(["proposal contents"], "proposal.pdf", { type: "application/pdf" });
+    await backend.proposals.create({
+      leadId: "lead-1",
+      title: "Proposal",
+      emailTemplateId: "template-email-1",
+      whatsappTemplateId: "template-whatsapp-1",
+      document,
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("https://api.example.test/api/v1/proposals");
+    expect(init?.method).toBe("POST");
+    expect(init?.headers).toMatchObject({ Authorization: "Bearer session-token" });
+    expect(init?.headers).not.toHaveProperty("Content-Type");
+    const body = init?.body as FormData;
+    expect(body.get("leadId")).toBe("lead-1");
+    expect(body.get("title")).toBe("Proposal");
+    expect(body.get("emailTemplateId")).toBe("template-email-1");
+    expect(body.get("whatsappTemplateId")).toBe("template-whatsapp-1");
+    expect(body.get("document")).toBe(document);
   });
 
   it("omits retained email secrets from an admin connection update", async () => {

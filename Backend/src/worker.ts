@@ -1,6 +1,7 @@
 import { pool, withTransaction } from "./db.js";
 import { workerEnv as env } from "./workerEnv.js";
 import * as automationService from "./services/automation.service.js";
+import { claimQueuedProposalWhatsappSends, processQueuedProposalWhatsappSend } from "./services/proposalSending.service.js";
 import { renderTemplate } from "./domain/templateRenderer.js";
 import { htmlToWhatsAppText } from "./domain/htmlToWhatsAppText.js";
 import { sendEmail } from "./providers/email.provider.js";
@@ -70,10 +71,12 @@ async function dispatchMessage(ctx: automationService.ActionContext): Promise<Se
   const whatsappText = htmlToWhatsAppText(rendered.body);
   const attachment = ctx.template.attachments[0];
   const result = await sendWhatsApp({
-    actionId: ctx.action.id,
+    source: { type: "scheduled_action", id: ctx.action.id },
     to: ctx.lead.phoneE164,
     body: whatsappText,
-    ...(attachment ? { attachment: { storagePath: attachment.storagePath, fileName: attachment.fileName, mimeType: attachment.mimeType } } : {}),
+    ...(attachment
+      ? { attachment: { storagePath: attachment.storagePath, fileName: attachment.fileName, mimeType: attachment.mimeType, bucket: "template-attachments" } }
+      : {}),
   });
   return { outcome: "success", providerMessageId: result.providerMessageId };
 }
@@ -117,21 +120,33 @@ async function processAction(ctx: automationService.ActionContext): Promise<void
 
 async function tick(): Promise<void> {
   const claimed = await withTransaction((client) => automationService.claimDueActions(client, env.WORKER_BATCH_SIZE));
-  if (claimed.length === 0) return;
+  if (claimed.length > 0) {
+    console.log(`[worker] Claimed ${claimed.length} due action(s).`);
+    // Each claimed action owns its own DB transaction and provider call, with
+    // no shared mutable state between them, so processing the batch
+    // concurrently is safe — and avoids one slow/hung send stalling the rest
+    // of the batch behind it (a real risk now that email.provider.ts has a
+    // bounded but non-trivial socket timeout).
+    await Promise.allSettled(
+      claimed.map((ctx) =>
+        processAction(ctx).catch((err) => {
+          console.error(`[worker] Unexpected error processing action ${ctx.action.id}:`, err);
+        }),
+      ),
+    );
+  }
 
-  console.log(`[worker] Claimed ${claimed.length} due action(s).`);
-  // Each claimed action owns its own DB transaction and provider call, with
-  // no shared mutable state between them, so processing the batch
-  // concurrently is safe — and avoids one slow/hung send stalling the rest
-  // of the batch behind it (a real risk now that email.provider.ts has a
-  // bounded but non-trivial socket timeout).
-  await Promise.allSettled(
-    claimed.map((ctx) =>
-      processAction(ctx).catch((err) => {
-        console.error(`[worker] Unexpected error processing action ${ctx.action.id}:`, err);
-      }),
-    ),
-  );
+  const queuedProposals = await withTransaction((client) => claimQueuedProposalWhatsappSends(client, env.WORKER_BATCH_SIZE));
+  if (queuedProposals.length > 0) {
+    console.log(`[worker] Claimed ${queuedProposals.length} queued proposal WhatsApp send(s).`);
+    await Promise.allSettled(
+      queuedProposals.map((row) =>
+        processQueuedProposalWhatsappSend(row).catch((err) => {
+          console.error(`[worker] Unexpected error processing proposal WhatsApp send ${row.id}:`, err);
+        }),
+      ),
+    );
+  }
 }
 
 let stopped = false;

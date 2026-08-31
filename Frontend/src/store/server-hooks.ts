@@ -285,6 +285,14 @@ export function useProposals() {
   const query = useQuery({
     queryKey: keys.proposals,
     queryFn: ({ signal }) => backend.proposals.list(undefined, signal),
+    // Keeps polling while any proposal's WhatsApp send is still in flight on
+    // the worker (email resolves synchronously, but WhatsApp can only be
+    // sent from the automation worker process — see Backend/src/worker.ts —
+    // so its status flips a few seconds after this list first loads).
+    refetchInterval: (q) =>
+      q.state.data?.data.some((p) => ["queued", "sending"].includes(p.whatsappSendStatus))
+        ? 8000
+        : false,
   });
   const refresh = (leadId: string) => refreshLead(client, leadId);
   const create = useMutation({
