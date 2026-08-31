@@ -102,3 +102,27 @@ for (const command of ["connect", "restart", "logout"] as const) {
     asyncHandler(async (req, res) => res.json(await connections.commandWhatsApp(req.actor!, command))),
   );
 }
+
+adminRouter.get(
+  "/connections/google-calendar",
+  asyncHandler(async (_req, res) => res.json(await connections.getGoogleCalendarConnection())),
+);
+const googleCalendarCredentialsSchema = z.object({
+  clientId: z.string().trim().min(1),
+  clientSecret: z.string().optional(),
+  redirectUri: z.string().trim().url(),
+});
+adminRouter.put(
+  "/connections/google-calendar/credentials",
+  asyncHandler(async (req, res) =>
+    res.json(await connections.updateGoogleCalendarCredentials(req.actor!, parseBody(googleCalendarCredentialsSchema, req.body))),
+  ),
+);
+adminRouter.post(
+  "/connections/google-calendar/oauth/start",
+  asyncHandler(async (req, res) => res.json(await connections.startGoogleCalendarOAuth(req.actor!))),
+);
+adminRouter.post(
+  "/connections/google-calendar/disconnect",
+  asyncHandler(async (req, res) => res.json(await connections.disconnectGoogleCalendar(req.actor!))),
+);

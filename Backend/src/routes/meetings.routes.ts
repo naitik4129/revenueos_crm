@@ -5,7 +5,9 @@ import { requireAuth } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
 import { parseBody, parseQuery } from "../validation/parse.js";
 import { MEETING_OUTCOMES, MEETING_STATUSES } from "../domain/enums.js";
-import { listMeetings, recordMeetingOutcome, scheduleMeeting, updateMeeting } from "../services/meetings.service.js";
+import { getMeetingOr404, listMeetings, recordMeetingOutcome, scheduleMeeting, updateMeeting } from "../services/meetings.service.js";
+import { syncMeetingCancelled, syncMeetingCreated, syncMeetingRescheduled } from "../services/meeting-calendar-sync.service.js";
+import { notifyMeetingScheduled } from "../services/meetingScheduledNotification.service.js";
 
 export const meetingsRouter = Router();
 meetingsRouter.use(requireAuth);
@@ -24,13 +26,19 @@ meetingsRouter.get(
   }),
 );
 
+const participantSchema = z.object({
+  name: z.string().trim().min(1).optional(),
+  email: z.string().trim().email(),
+});
+
 const createSchema = z.object({
   leadId: z.string().uuid(),
   ownerId: z.string().uuid().optional(),
   title: z.string().min(1),
   at: z.string().datetime({ offset: true }),
   durationMin: z.number().int().positive().optional(),
-  url: z.string().optional(),
+  url: z.string().url().optional(),
+  participants: z.array(participantSchema).optional(),
 });
 
 meetingsRouter.post(
@@ -38,7 +46,13 @@ meetingsRouter.post(
   asyncHandler(async (req, res) => {
     const input = parseBody(createSchema, req.body);
     const meeting = await withTransaction((client) => scheduleMeeting(client, req.actor!, input));
-    res.status(201).json(meeting);
+    // Best-effort, outside the transaction — Calendar being disconnected or
+    // erroring must not roll back or block the meeting that's already saved.
+    await syncMeetingCreated(meeting.id);
+    // Also best-effort: sends the email inline and queues WhatsApp for the
+    // worker; a notification failure must not undo the booking either.
+    await notifyMeetingScheduled(meeting.id);
+    res.status(201).json(await getMeetingOr404(pool, meeting.id));
   }),
 );
 
@@ -46,7 +60,7 @@ const updateSchema = z.object({
   title: z.string().min(1).optional(),
   at: z.string().datetime({ offset: true }).optional(),
   durationMin: z.number().int().positive().optional(),
-  url: z.string().optional(),
+  url: z.string().url().optional(),
   status: z.enum(MEETING_STATUSES).optional(),
   notes: z.string().optional(),
 });
@@ -56,7 +70,13 @@ meetingsRouter.patch(
   asyncHandler(async (req, res) => {
     const patch = parseBody(updateSchema, req.body);
     const meeting = await withTransaction((client) => updateMeeting(client, req.actor!, req.params.id!, patch));
-    res.json(meeting);
+    // Same best-effort, non-transactional sync split as the create route.
+    if (patch.status === "cancelled") {
+      await syncMeetingCancelled(meeting.id);
+    } else if (patch.at !== undefined || patch.title !== undefined || patch.durationMin !== undefined) {
+      await syncMeetingRescheduled(meeting.id);
+    }
+    res.json(await getMeetingOr404(pool, meeting.id));
   }),
 );
 

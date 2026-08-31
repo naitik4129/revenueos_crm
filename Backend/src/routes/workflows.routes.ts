@@ -155,6 +155,7 @@ const updateTemplateSchema = z.object({
   subject: z.string().optional(),
   body: z.string().min(1).optional(),
   active: z.boolean().optional(),
+  isDefaultMeetingScheduled: z.boolean().optional(),
 });
 
 templatesRouter.patch(

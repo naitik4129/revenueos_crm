@@ -96,6 +96,11 @@ export function TemplatesPage() {
                 </CardHeader>
                 <CardContent className="flex flex-1 flex-col gap-3">
                   {t.subject && <div className="text-xs font-medium">{t.subject}</div>}
+                  {t.isDefaultMeetingScheduled && (
+                    <div className="w-fit rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                      Default: Meeting Scheduled
+                    </div>
+                  )}
                   <p className="line-clamp-4 text-xs text-muted-foreground">{stripHtml(t.body)}</p>
                   {t.attachments.length > 0 && (
                     <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -194,7 +199,13 @@ function TemplateDialog({
   }) => Promise<Template>;
   updateTemplate: (
     id: string,
-    input: { name?: string; subject?: string; body?: string; active?: boolean },
+    input: {
+      name?: string;
+      subject?: string;
+      body?: string;
+      active?: boolean;
+      isDefaultMeetingScheduled?: boolean;
+    },
   ) => Promise<Template>;
   uploadTemplateAttachment: (templateId: string, file: File) => Promise<TemplateAttachment>;
   deleteTemplateAttachment: (templateId: string, attachmentId: string) => Promise<void>;
@@ -206,6 +217,7 @@ function TemplateDialog({
   const [existingAttachments, setExistingAttachments] = useState<TemplateAttachment[]>([]);
   const [removedAttachmentIds, setRemovedAttachmentIds] = useState<string[]>([]);
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
+  const [isDefaultMeetingScheduled, setIsDefaultMeetingScheduled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
@@ -219,6 +231,7 @@ function TemplateDialog({
     setExistingAttachments(template?.attachments ?? []);
     setRemovedAttachmentIds([]);
     setStagedFiles([]);
+    setIsDefaultMeetingScheduled(template?.isDefaultMeetingScheduled ?? false);
   }
   if (!open && loadedFor !== null) setLoadedFor(null);
 
@@ -242,9 +255,19 @@ function TemplateDialog({
     setSaving(true);
     let saved: Template;
     try {
-      saved = template
-        ? await updateTemplate(template.id, { name: name.trim(), subject: effectiveSubject, body })
-        : await addTemplate({ name: name.trim(), type, subject: effectiveSubject, body });
+      if (template) {
+        saved = await updateTemplate(template.id, {
+          name: name.trim(),
+          subject: effectiveSubject,
+          body,
+          isDefaultMeetingScheduled,
+        });
+      } else {
+        saved = await addTemplate({ name: name.trim(), type, subject: effectiveSubject, body });
+        if (isDefaultMeetingScheduled) {
+          saved = await updateTemplate(saved.id, { isDefaultMeetingScheduled: true });
+        }
+      }
     } catch (err) {
       toast.error(messageFromError(err));
       setSaving(false);
@@ -307,6 +330,22 @@ function TemplateDialog({
               <Input value={subject} onChange={(e) => setSubject(e.target.value)} />
             </div>
           )}
+
+          <div className="flex items-center gap-2 rounded-md border px-3 py-2">
+            <Switch
+              checked={isDefaultMeetingScheduled}
+              onCheckedChange={setIsDefaultMeetingScheduled}
+            />
+            <div>
+              <div className="text-sm font-medium">
+                Use as default &quot;Meeting Scheduled&quot; {type} template
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Automatically sent to the lead whenever a meeting is scheduled. Only one {type}{" "}
+                template can hold this at a time — enabling it here disables it on any other.
+              </p>
+            </div>
+          </div>
 
           <div>
             <Label className="mb-1.5 block text-xs">Body</Label>

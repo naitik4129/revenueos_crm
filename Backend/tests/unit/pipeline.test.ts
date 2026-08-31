@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { assertPipelineStageEditable, assertValidPipelineStage, isTerminalLifecycle } from "../../src/domain/pipeline.js";
+import {
+  assertPipelineStageEditable,
+  assertValidPipelineStage,
+  isTerminalLifecycle,
+  pipelineStageIndex,
+} from "../../src/domain/pipeline.js";
 import { InvalidTransitionError } from "../../src/errors.js";
 
 describe("isTerminalLifecycle", () => {
@@ -30,5 +35,13 @@ describe("assertPipelineStageEditable", () => {
   it("blocks editing once a lead has left active (frozen stage)", () => {
     expect(() => assertPipelineStageEditable("won")).toThrow(InvalidTransitionError);
     expect(() => assertPipelineStageEditable("do_not_contact")).toThrow(InvalidTransitionError);
+  });
+});
+
+describe("pipelineStageIndex", () => {
+  it("reflects funnel order", () => {
+    expect(pipelineStageIndex("new")).toBe(0);
+    expect(pipelineStageIndex("meeting_scheduled")).toBeGreaterThan(pipelineStageIndex("meeting_scheduling"));
+    expect(pipelineStageIndex("proposal_sent")).toBeGreaterThan(pipelineStageIndex("meeting_scheduled"));
   });
 });

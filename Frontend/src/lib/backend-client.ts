@@ -199,6 +199,7 @@ export interface CreateMeetingInput {
   at: string;
   durationMin?: number | undefined;
   url?: string | undefined;
+  participants?: { name?: string | undefined; email: string }[] | undefined;
 }
 export interface UpdateMeetingInput {
   title?: string | undefined;
@@ -247,6 +248,7 @@ export interface UpdateTemplateInput {
   subject?: string | undefined;
   body?: string | undefined;
   active?: boolean | undefined;
+  isDefaultMeetingScheduled?: boolean | undefined;
 }
 
 export interface DashboardSummary {
@@ -324,6 +326,20 @@ export interface WhatsAppConnection {
   }[];
 }
 
+export interface GoogleCalendarConnection {
+  configured: boolean;
+  enabled: boolean;
+  status: "disconnected" | "connected" | "error";
+  clientId: string | null;
+  redirectUri: string | null;
+  clientSecretConfigured: boolean;
+  connectedEmail: string | null;
+  connectedCalendarId: string;
+  lastError: string | null;
+  lastSyncedAt: string | null;
+  updatedAt: string;
+}
+
 export const backend = {
   me: (signal?: AbortSignal) =>
     get<{ id: string; name: string; email: string; role: "admin" | "salesperson" }>("/me", signal),
@@ -364,6 +380,24 @@ export const backend = {
         send<WhatsAppConnection>("PUT", "/admin/connections/whatsapp/settings", input),
       command: (command: "connect" | "restart" | "logout") =>
         send<WhatsAppConnection>("POST", `/admin/connections/whatsapp/${command}`),
+    },
+    googleCalendar: {
+      get: (signal?: AbortSignal) =>
+        get<GoogleCalendarConnection>("/admin/connections/google-calendar", signal),
+      updateCredentials: (input: {
+        clientId: string;
+        clientSecret?: string;
+        redirectUri: string;
+      }) =>
+        send<GoogleCalendarConnection>(
+          "PUT",
+          "/admin/connections/google-calendar/credentials",
+          input,
+        ),
+      oauthStart: () =>
+        send<{ url: string }>("POST", "/admin/connections/google-calendar/oauth/start"),
+      disconnect: () =>
+        send<GoogleCalendarConnection>("POST", "/admin/connections/google-calendar/disconnect"),
     },
   },
   leads: {

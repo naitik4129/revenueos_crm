@@ -2,6 +2,7 @@ import { pool, withTransaction } from "./db.js";
 import { workerEnv as env } from "./workerEnv.js";
 import * as automationService from "./services/automation.service.js";
 import { claimQueuedProposalWhatsappSends, processQueuedProposalWhatsappSend } from "./services/proposalSending.service.js";
+import { claimQueuedMeetingWhatsappSends, processQueuedMeetingWhatsappSend } from "./services/meetingScheduledNotification.service.js";
 import { renderTemplate } from "./domain/templateRenderer.js";
 import { htmlToWhatsAppText } from "./domain/htmlToWhatsAppText.js";
 import { sendEmail } from "./providers/email.provider.js";
@@ -143,6 +144,18 @@ async function tick(): Promise<void> {
       queuedProposals.map((row) =>
         processQueuedProposalWhatsappSend(row).catch((err) => {
           console.error(`[worker] Unexpected error processing proposal WhatsApp send ${row.id}:`, err);
+        }),
+      ),
+    );
+  }
+
+  const queuedMeetings = await withTransaction((client) => claimQueuedMeetingWhatsappSends(client, env.WORKER_BATCH_SIZE));
+  if (queuedMeetings.length > 0) {
+    console.log(`[worker] Claimed ${queuedMeetings.length} queued meeting WhatsApp send(s).`);
+    await Promise.allSettled(
+      queuedMeetings.map((row) =>
+        processQueuedMeetingWhatsappSend(row).catch((err) => {
+          console.error(`[worker] Unexpected error processing meeting WhatsApp send ${row.id}:`, err);
         }),
       ),
     );

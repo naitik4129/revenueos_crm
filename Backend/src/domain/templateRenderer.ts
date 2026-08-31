@@ -28,6 +28,15 @@ export interface TemplateRenderLead {
   ownerName: string | null;
 }
 
+/** Meeting context for a "meeting scheduled" notification — see meetingScheduledNotification.service.ts. Optional on renderTemplate since most templates render without one. */
+export interface TemplateRenderMeeting {
+  title: string;
+  /** ISO instant — formatted into date/time tokens in Asia/Kolkata, matching this app's single-tenant timezone (Frontend/src/lib/dates.ts). */
+  at: string;
+  durationMin: number;
+  link: string | null;
+}
+
 export interface RenderableTemplate {
   subject: string | null;
   body: string;
@@ -39,7 +48,17 @@ export interface RenderedTemplate {
   unknownTokens: string[];
 }
 
-function buildVariableMap(lead: TemplateRenderLead): Map<string, string> {
+const MEETING_TIME_ZONE = "Asia/Kolkata";
+
+function formatMeetingDate(at: string): string {
+  return new Intl.DateTimeFormat("en-IN", { timeZone: MEETING_TIME_ZONE, dateStyle: "medium" }).format(new Date(at));
+}
+
+function formatMeetingTime(at: string): string {
+  return new Intl.DateTimeFormat("en-IN", { timeZone: MEETING_TIME_ZONE, timeStyle: "short" }).format(new Date(at));
+}
+
+function buildVariableMap(lead: TemplateRenderLead, meeting?: TemplateRenderMeeting): Map<string, string> {
   const fullName = [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim();
   // A Map (not a plain object) so a token like "constructor" or "toString"
   // can't accidentally resolve via JS's Object.prototype chain instead of
@@ -52,10 +71,32 @@ function buildVariableMap(lead: TemplateRenderLead): Map<string, string> {
     ["lead.email", lead.email ?? ""],
     ["lead.phone", lead.phone ?? ""],
     ["owner.name", lead.ownerName ?? ""],
+    ...(meeting
+      ? ([
+          ["meeting.title", meeting.title],
+          ["meeting.date", formatMeetingDate(meeting.at)],
+          ["meeting.time", formatMeetingTime(meeting.at)],
+          ["meeting.duration", `${meeting.durationMin} minutes`],
+          ["meeting.link", meeting.link ?? ""],
+        ] as const)
+      : []),
   ]);
 }
 
-/** The full set of `{{...}}` tokens this renderer understands — the source of truth for UI variable pickers and publish-time validation. */
+/**
+ * The full set of `{{...}}` tokens this renderer understands — the source
+ * of truth for UI variable pickers and publish-time validation (see
+ * findUnknownTemplateTokens/workflows.service.ts publishVersion).
+ *
+ * Caveat: `meeting.*` only actually resolves when renderTemplate is called
+ * with a meeting (the "meeting scheduled" notification path — see
+ * meetingScheduledNotification.service.ts). A workflow-step template is
+ * always rendered without one, so if such a template references
+ * `{{meeting.*}}` it will still pass publish validation here but render as
+ * literal, unresolved text at send time (logged as an unknown-token
+ * warning in worker.ts). Accepted as a narrow, non-crashing edge case
+ * rather than adding a per-render-context variable allowlist.
+ */
 export const KNOWN_TEMPLATE_VARIABLES = [
   "lead.firstName",
   "lead.lastName",
@@ -64,6 +105,11 @@ export const KNOWN_TEMPLATE_VARIABLES = [
   "lead.email",
   "lead.phone",
   "owner.name",
+  "meeting.title",
+  "meeting.date",
+  "meeting.time",
+  "meeting.duration",
+  "meeting.link",
 ] as const;
 
 const TOKEN_PATTERN = /\{\{\s*([\w.]+)\s*\}\}/g;
@@ -89,8 +135,8 @@ function renderText(text: string, variables: Map<string, string>, unknownTokens:
   });
 }
 
-export function renderTemplate(template: RenderableTemplate, lead: TemplateRenderLead): RenderedTemplate {
-  const variables = buildVariableMap(lead);
+export function renderTemplate(template: RenderableTemplate, lead: TemplateRenderLead, meeting?: TemplateRenderMeeting): RenderedTemplate {
+  const variables = buildVariableMap(lead, meeting);
   const unknownTokens = new Set<string>();
   // body is HTML (see module doc-comment above) — escape substituted values.
   // subject is a plain-text email header — substitute as-is, never escaped.

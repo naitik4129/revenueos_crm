@@ -5,9 +5,10 @@ import type { MeetingOutcome, MeetingStatus } from "../domain/enums.js";
 import { routeMeetingOutcome } from "../domain/meetingRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
 import { cancelOpenTasksForLead, createTask } from "./tasks.service.js";
-import { getLeadRowOr404, moveToLongTermNurture, updateLead } from "./leads.service.js";
+import { getLeadRowOr404, moveToLongTermNurture, updateLead, type LeadRow } from "./leads.service.js";
 import { cancelRunsForLead } from "./runs.service.js";
 import { addDaysIso } from "../dto.js";
+import { pipelineStageIndex } from "../domain/pipeline.js";
 
 export interface MeetingRow {
   id: string;
@@ -21,6 +22,18 @@ export interface MeetingRow {
   status: MeetingStatus;
   outcome: MeetingOutcome | null;
   notes: string | null;
+  calendar_event_id: string | null;
+  meet_link: string | null;
+  calendar_sync_status: "not_applicable" | "pending" | "synced" | "failed";
+  calendar_sync_error: string | null;
+  notify_email_status: "not_applicable" | "pending" | "skipped" | "sent" | "failed";
+  notify_email_sent_at: Date | null;
+  notify_email_error: string | null;
+  notify_whatsapp_status: "not_applicable" | "skipped" | "queued" | "sending" | "sent" | "failed";
+  notify_whatsapp_sent_at: Date | null;
+  notify_whatsapp_error: string | null;
+  notify_whatsapp_next_attempt_at: Date | null;
+  notify_whatsapp_attempt_count: number;
   created_by: string | null;
   created_by_name: string | null;
   created_at: Date;
@@ -40,9 +53,21 @@ function meetingToDto(row: MeetingRow) {
     status: row.status,
     outcome: row.outcome ?? undefined,
     notes: row.notes ?? undefined,
+    meetLink: row.meet_link ?? undefined,
+    calendarSyncStatus: row.calendar_sync_status,
+    calendarSyncError: row.calendar_sync_error ?? undefined,
+    notifyEmailStatus: row.notify_email_status,
+    notifyEmailError: row.notify_email_error ?? undefined,
+    notifyWhatsappStatus: row.notify_whatsapp_status,
+    notifyWhatsappError: row.notify_whatsapp_error ?? undefined,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+export interface ScheduleMeetingParticipant {
+  name?: string;
+  email: string;
 }
 
 export interface ScheduleMeetingInput {
@@ -52,6 +77,15 @@ export interface ScheduleMeetingInput {
   at: string;
   durationMin?: number;
   url?: string;
+  participants?: ScheduleMeetingParticipant[];
+}
+
+/** The meeting's owner is usually the lead's owner or the acting salesperson — both names are already on hand; only an explicit cross-assignment (input.ownerId pointing at someone else) needs a lookup. */
+async function resolveOwnerName(db: Queryable, ownerId: string, lead: LeadRow, actor: Actor): Promise<string | null> {
+  if (ownerId === lead.owner_id) return lead.owner_name;
+  if (ownerId === actor.id) return actor.fullName;
+  const result = await db.query<{ full_name: string }>(`select full_name from public.profiles where id = $1`, [ownerId]);
+  return result.rows[0]?.full_name ?? null;
 }
 
 export async function scheduleMeeting(db: Queryable, actor: Actor, input: ScheduleMeetingInput) {
@@ -60,16 +94,35 @@ export async function scheduleMeeting(db: Queryable, actor: Actor, input: Schedu
   if (lead.lifecycle_state === "do_not_contact") throw new DoNotContactError();
 
   const ownerId = input.ownerId ?? lead.owner_id ?? actor.id;
+  const ownerName = await resolveOwnerName(db, ownerId, lead, actor);
+
+  // A booked meeting has a confirmed date/time, so it starts life as
+  // 'scheduled' rather than the DB default 'tentative' (which is reserved
+  // for a not-yet-implemented "propose a time" flow) — intentional, not a bug.
   const result = await db.query<{ id: string }>(
-    `insert into public.meetings (lead_id, owner_id, title, scheduled_at, duration_minutes, meeting_url, status, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6,'scheduled',$7,$8) returning id`,
-    [input.leadId, ownerId, input.title.trim(), input.at, input.durationMin ?? 30, input.url ?? null, actor.id, actor.fullName],
+    `insert into public.meetings (lead_id, owner_id, owner_name, title, scheduled_at, duration_minutes, meeting_url, status, created_by, created_by_name)
+     values ($1,$2,$3,$4,$5,$6,$7,'scheduled',$8,$9) returning id`,
+    [input.leadId, ownerId, ownerName, input.title.trim(), input.at, input.durationMin ?? 30, input.url ?? null, actor.id, actor.fullName],
   );
   const id = result.rows[0]!.id;
 
+  const participants = (input.participants ?? []).filter((p) => p.email.trim());
+  for (const participant of participants) {
+    await db.query(`insert into public.meeting_participants (meeting_id, name, email) values ($1,$2,$3)`, [
+      id,
+      participant.name?.trim() || null,
+      participant.email.trim(),
+    ]);
+  }
+
   await addTimelineEvent(db, { leadId: input.leadId, kind: "meeting", title: "Meeting Scheduled", detail: input.title.trim(), ...actorEvent(actor) });
 
-  await updateLead(db, actor, input.leadId, { pipelineStage: "meeting_scheduled" });
+  // Only advance the funnel forward — a lead already past meeting_scheduled
+  // (e.g. proposal_sent) must not be regressed by booking an additional
+  // meeting on it.
+  if (pipelineStageIndex(lead.pipeline_stage) < pipelineStageIndex("meeting_scheduled")) {
+    await updateLead(db, actor, input.leadId, { pipelineStage: "meeting_scheduled" });
+  }
 
   // Edge case ("Meeting Booked During Nurture"): the objective of any
   // in-flight nurture was to get a meeting booked — now that it has been,
@@ -101,7 +154,7 @@ export async function getMeetingOr404(db: Queryable, id: string) {
   return meetingToDto(row);
 }
 
-async function getMeetingRowOr404(db: Queryable, id: string): Promise<MeetingRow> {
+export async function getMeetingRowOr404(db: Queryable, id: string): Promise<MeetingRow> {
   const result = await db.query<MeetingRow>(`select * from public.meetings where id = $1`, [id]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Meeting");
@@ -175,6 +228,13 @@ export async function updateMeeting(db: Queryable, actor: Actor, id: string, pat
   if (patch.status && patch.status !== current.status) {
     const title = patch.status === "rescheduled" ? "Meeting Rescheduled" : patch.status === "cancelled" ? "Meeting Cancelled" : `Meeting ${patch.status}`;
     await addTimelineEvent(db, { leadId: current.lead_id, kind: "meeting", title, ...actorEvent(actor), relatedMeetingId: id });
+
+    // The auto-created "Prepare for the meeting" task is only meaningful
+    // while the meeting is still going to happen — without this, cancelling
+    // or no-showing a meeting leaves a stale prep task behind.
+    if (patch.status === "cancelled" || patch.status === "no_show" || patch.status === "failed") {
+      await cancelOpenTasksForLead(db, actor, current.lead_id, "Meeting was cancelled", ["confirm_meeting"]);
+    }
   }
 
   return getMeetingOr404(db, id);

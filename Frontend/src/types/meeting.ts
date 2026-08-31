@@ -17,6 +17,7 @@ export const MEETING_OUTCOMES = [
   "no_proposal_required",
 ] as const;
 export type MeetingOutcome = (typeof MEETING_OUTCOMES)[number];
+export type CalendarSyncStatus = "not_applicable" | "pending" | "synced" | "failed";
 export interface Meeting {
   id: string;
   leadId: string;
@@ -29,6 +30,9 @@ export interface Meeting {
   status: MeetingStatus;
   outcome?: MeetingOutcome;
   notes?: string;
+  meetLink?: string;
+  calendarSyncStatus: CalendarSyncStatus;
+  calendarSyncError?: string;
   createdAt: string;
   updatedAt: string;
 }

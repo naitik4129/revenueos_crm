@@ -1,9 +1,11 @@
+import { randomBytes } from "node:crypto";
 import type { Actor } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
 import type { Queryable } from "../dto.js";
 import { ValidationError } from "../errors.js";
-import { decryptJson, decryptText, encryptJson, type EncryptedValue } from "../security/encryption.js";
+import { decryptJson, decryptText, encryptJson, encryptText, type EncryptedValue } from "../security/encryption.js";
 import { recordAdminAudit } from "./admin-audit.service.js";
+import { exchangeCodeForTokens, getAuthorizationUrl, type GoogleOAuthClientConfig } from "../providers/google-calendar.provider.js";
 
 export interface EmailSettings {
   senderName?: string;
@@ -239,4 +241,221 @@ export async function commandWhatsApp(actor: Actor, command: "connect" | "restar
     await recordAdminAudit(db, actor, `connection.whatsapp.${command}`, "whatsapp_connection", "shared");
   });
   return getWhatsAppConnection();
+}
+
+interface GoogleCalendarRow {
+  enabled: boolean;
+  status: "disconnected" | "connected" | "error";
+  client_id: string | null;
+  redirect_uri: string | null;
+  client_secret_ciphertext: Buffer | null;
+  client_secret_iv: Buffer | null;
+  client_secret_tag: Buffer | null;
+  client_secret_key_version: number;
+  connected_email: string | null;
+  connected_calendar_id: string;
+  refresh_token_ciphertext: Buffer | null;
+  refresh_token_iv: Buffer | null;
+  refresh_token_tag: Buffer | null;
+  refresh_token_key_version: number;
+  pending_oauth_state: string | null;
+  pending_oauth_state_expires_at: Date | null;
+  updated_by: string | null;
+  last_error: string | null;
+  last_synced_at: Date | null;
+  updated_at: Date;
+}
+
+async function loadGoogleCalendarRow(db: Queryable = pool): Promise<GoogleCalendarRow> {
+  const result = await db.query<GoogleCalendarRow>(`select * from public.google_calendar_connection where id = true`);
+  return result.rows[0]!;
+}
+
+function decryptClientSecret(row: GoogleCalendarRow): string | null {
+  if (!row.client_secret_ciphertext || !row.client_secret_iv || !row.client_secret_tag) return null;
+  return decryptText(
+    { ciphertext: row.client_secret_ciphertext, iv: row.client_secret_iv, tag: row.client_secret_tag, keyVersion: row.client_secret_key_version },
+    "integration:google_calendar:client_secret",
+  );
+}
+
+/**
+ * Used by meeting-calendar sync (Backend/src/services/meeting-calendar-sync.service.ts)
+ * to get both the connected account (refreshToken) and the OAuth app to
+ * authenticate as (oauthConfig) — both admin-entered and DB-stored, never
+ * from environment variables. `oauthConfig` is null whenever the admin
+ * hasn't (yet, or no longer) fully entered client_id/client_secret/redirect_uri.
+ */
+export async function loadGoogleCalendarConnection(db: Queryable = pool) {
+  const row = await loadGoogleCalendarRow(db);
+  const refreshToken =
+    row.refresh_token_ciphertext && row.refresh_token_iv && row.refresh_token_tag
+      ? decryptText(
+          { ciphertext: row.refresh_token_ciphertext, iv: row.refresh_token_iv, tag: row.refresh_token_tag, keyVersion: row.refresh_token_key_version },
+          "integration:google_calendar:refresh_token",
+        )
+      : null;
+  const clientSecret = decryptClientSecret(row);
+  const oauthConfig: GoogleOAuthClientConfig | null =
+    row.client_id && clientSecret && row.redirect_uri
+      ? { clientId: row.client_id, clientSecret, redirectUri: row.redirect_uri }
+      : null;
+  return { row, refreshToken, oauthConfig };
+}
+
+export async function getGoogleCalendarConnection() {
+  const row = await loadGoogleCalendarRow();
+  const clientSecretConfigured = Boolean(row.client_secret_ciphertext);
+  return {
+    configured: Boolean(row.client_id && clientSecretConfigured && row.redirect_uri),
+    enabled: row.enabled,
+    status: row.status,
+    clientId: row.client_id,
+    redirectUri: row.redirect_uri,
+    clientSecretConfigured,
+    connectedEmail: row.connected_email,
+    connectedCalendarId: row.connected_calendar_id,
+    lastError: row.last_error,
+    lastSyncedAt: row.last_synced_at?.toISOString() ?? null,
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+export interface UpdateGoogleCalendarCredentialsInput {
+  clientId: string;
+  clientSecret?: string;
+  redirectUri: string;
+}
+
+/** Saves the OAuth app's own credentials, entered by an admin — mirrors updateEmailConnection's write-only-secret pattern (an empty clientSecret retains whatever's already saved). */
+export async function updateGoogleCalendarCredentials(actor: Actor, input: UpdateGoogleCalendarCredentialsInput) {
+  if (!input.clientId.trim() || !input.redirectUri.trim()) {
+    throw new ValidationError("Client ID and redirect URI are required.");
+  }
+  const current = await loadGoogleCalendarRow();
+  const hasExistingSecret = Boolean(current.client_secret_ciphertext);
+  if (!input.clientSecret && !hasExistingSecret) {
+    throw new ValidationError("A client secret is required.");
+  }
+
+  await withTransaction(async (db) => {
+    if (input.clientSecret) {
+      const encrypted = encryptText(input.clientSecret, "integration:google_calendar:client_secret");
+      await db.query(
+        `update public.google_calendar_connection
+            set client_id = $1, redirect_uri = $2,
+                client_secret_ciphertext = $3, client_secret_iv = $4, client_secret_tag = $5, client_secret_key_version = $6,
+                updated_by = $7
+          where id = true`,
+        [input.clientId.trim(), input.redirectUri.trim(), encrypted.ciphertext, encrypted.iv, encrypted.tag, encrypted.keyVersion, actor.id],
+      );
+    } else {
+      await db.query(
+        `update public.google_calendar_connection set client_id = $1, redirect_uri = $2, updated_by = $3 where id = true`,
+        [input.clientId.trim(), input.redirectUri.trim(), actor.id],
+      );
+    }
+    await recordAdminAudit(db, actor, "connection.google_calendar.credentials_updated", "google_calendar_connection", "shared", {
+      clientId: input.clientId.trim(),
+    });
+  });
+  return getGoogleCalendarConnection();
+}
+
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+export async function startGoogleCalendarOAuth(actor: Actor) {
+  const { oauthConfig } = await loadGoogleCalendarConnection();
+  if (!oauthConfig) {
+    throw new ValidationError("Enter and save the Google OAuth client ID, secret, and redirect URI first.");
+  }
+  const state = randomBytes(24).toString("hex");
+  const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL_MS);
+  await pool.query(
+    `update public.google_calendar_connection
+        set pending_oauth_state = $1, pending_oauth_state_expires_at = $2, updated_by = $3
+      where id = true`,
+    [state, expiresAt, actor.id],
+  );
+  return { url: getAuthorizationUrl(oauthConfig, state) };
+}
+
+/**
+ * Handles Google's OAuth redirect. Unauthenticated by necessity (Google's
+ * browser redirect carries no bearer token) — the signed-nonce `state`
+ * round-tripped through Google is this call's only proof the request
+ * belongs to an admin-initiated connect flow (see startGoogleCalendarOAuth).
+ */
+export async function completeGoogleCalendarOAuth(code: string, state: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { row, oauthConfig } = await loadGoogleCalendarConnection();
+  if (!row.pending_oauth_state || row.pending_oauth_state !== state) {
+    return { ok: false, error: "Invalid or already-used connection request. Please try connecting again." };
+  }
+  if (!row.pending_oauth_state_expires_at || row.pending_oauth_state_expires_at.getTime() < Date.now()) {
+    return { ok: false, error: "This connection request expired. Please try connecting again." };
+  }
+  if (!oauthConfig) {
+    return { ok: false, error: "Google OAuth client credentials are no longer configured." };
+  }
+
+  try {
+    const { refreshToken, email } = await exchangeCodeForTokens(oauthConfig, code);
+    const encrypted = encryptText(refreshToken, "integration:google_calendar:refresh_token");
+    await withTransaction(async (db) => {
+      await db.query(
+        `update public.google_calendar_connection
+            set status = 'connected', enabled = true, connected_email = $1,
+                refresh_token_ciphertext = $2, refresh_token_iv = $3, refresh_token_tag = $4, refresh_token_key_version = $5,
+                pending_oauth_state = null, pending_oauth_state_expires_at = null,
+                last_error = null, last_synced_at = now()
+          where id = true`,
+        [email, encrypted.ciphertext, encrypted.iv, encrypted.tag, encrypted.keyVersion],
+      );
+      await recordGoogleCalendarAudit(db, row.updated_by, "connection.google_calendar.connected", { email });
+    });
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to connect Google Calendar.";
+    await withTransaction(async (db) => {
+      await db.query(
+        `update public.google_calendar_connection
+            set status = 'error', last_error = $1, pending_oauth_state = null, pending_oauth_state_expires_at = null
+          where id = true`,
+        [message],
+      );
+      await recordGoogleCalendarAudit(db, row.updated_by, "connection.google_calendar.connect_failed", { error: message });
+    });
+    return { ok: false, error: message };
+  }
+}
+
+/** Revokes the connected account only — the OAuth app's own client_id/client_secret/redirect_uri stay saved so reconnecting doesn't require re-entering them. */
+export async function disconnectGoogleCalendar(actor: Actor) {
+  await withTransaction(async (db) => {
+    await db.query(
+      `update public.google_calendar_connection
+          set status = 'disconnected', enabled = false, connected_email = null,
+              refresh_token_ciphertext = null, refresh_token_iv = null, refresh_token_tag = null,
+              pending_oauth_state = null, pending_oauth_state_expires_at = null, last_error = null,
+              updated_by = $1
+        where id = true`,
+      [actor.id],
+    );
+    await recordAdminAudit(db, actor, "connection.google_calendar.disconnected", "google_calendar_connection", "shared");
+  });
+  return getGoogleCalendarConnection();
+}
+
+/** recordAdminAudit needs a full Actor, but the OAuth callback that completes the connect flow has none — only the admin id captured when the flow started. */
+async function recordGoogleCalendarAudit(db: Queryable, adminId: string | null, action: string, metadata: Record<string, unknown>) {
+  let actorEmail = "unknown";
+  if (adminId) {
+    const result = await db.query<{ email: string }>(`select email from public.profiles where id = $1`, [adminId]);
+    actorEmail = result.rows[0]?.email ?? actorEmail;
+  }
+  await db.query(
+    `insert into public.admin_audit_events (actor_id, actor_email, action, target_type, target_id, metadata)
+     values ($1, $2, $3, 'google_calendar_connection', 'shared', $4)`,
+    [adminId, actorEmail, action, metadata],
+  );
 }

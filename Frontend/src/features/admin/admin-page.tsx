@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
-import { Bot, Cable, LogOut, Mail, RefreshCw, Shield, Users } from "lucide-react";
+import { Bot, Cable, CalendarDays, LogOut, Mail, RefreshCw, Shield, Users } from "lucide-react";
 import { toast } from "sonner";
 import { backend, type AdminUser, type EmailConnection } from "@/lib/backend-client";
-import { supabase } from "@/lib/supabase-client";
+import { backendBaseUrl, supabase } from "@/lib/supabase-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -196,6 +196,7 @@ function ConnectionsPanel() {
     <div className="space-y-6">
       <EmailPanel />
       <WhatsAppPanel />
+      <GoogleCalendarPanel />
     </div>
   );
 }
@@ -524,6 +525,184 @@ function WhatsAppPanel() {
         confirmLabel="Log out"
         disabled={command.isPending}
         onConfirm={() => command.mutate("logout")}
+      />
+    </Card>
+  );
+}
+
+function GoogleCalendarPanel() {
+  const client = useQueryClient();
+  const query = useQuery({
+    queryKey: ["admin", "google-calendar"],
+    queryFn: ({ signal }) => backend.admin.googleCalendar.get(signal),
+    refetchInterval: 5_000,
+  });
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [redirectUri, setRedirectUri] = useState("");
+  const refresh = () => void client.invalidateQueries({ queryKey: ["admin", "google-calendar"] });
+
+  const suggestedRedirectUri = backendBaseUrl
+    ? `${backendBaseUrl}/api/v1/admin/connections/google-calendar/oauth/callback`
+    : "";
+  useEffect(() => {
+    if (query.data && !dirty) {
+      setClientId(query.data.clientId ?? "");
+      setRedirectUri(query.data.redirectUri ?? suggestedRedirectUri);
+    }
+    // Only re-sync from freshly-fetched server data, not on every keystroke
+    // recomputing suggestedRedirectUri.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query.data, dirty]);
+
+  // Google's OAuth redirect lands back here as ?calendar=connected|error —
+  // surface it once as a toast, then strip it so a page refresh doesn't
+  // re-show it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const calendarResult = params.get("calendar");
+    if (!calendarResult) return;
+    if (calendarResult === "connected") toast.success("Google Calendar connected.");
+    else toast.error(params.get("message") || "Failed to connect Google Calendar.");
+    params.delete("calendar");
+    params.delete("message");
+    const rest = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+    refresh();
+    // Only meant to run once, on the redirect landing — not a live dependency loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const saveCredentials = useMutation({
+    mutationFn: () =>
+      backend.admin.googleCalendar.updateCredentials({
+        clientId,
+        redirectUri,
+        ...(clientSecret ? { clientSecret } : {}),
+      }),
+    onSuccess: () => {
+      setDirty(false);
+      setClientSecret("");
+      refresh();
+      toast.success("Google OAuth credentials saved.");
+    },
+    onError: (error) => toast.error(message(error)),
+  });
+  const start = useMutation({
+    mutationFn: backend.admin.googleCalendar.oauthStart,
+    onSuccess: (data) => {
+      window.location.href = data.url;
+    },
+    onError: (error) => toast.error(message(error)),
+  });
+  const disconnect = useMutation({
+    mutationFn: backend.admin.googleCalendar.disconnect,
+    onSuccess: () => {
+      setDisconnectOpen(false);
+      refresh();
+      toast.success("Google Calendar disconnected.");
+    },
+    onError: (error) => toast.error(message(error)),
+  });
+  const data = query.data;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <CalendarDays /> Google Calendar
+        </CardTitle>
+        <CardDescription>
+          A meeting scheduled in the CRM creates an event with an auto-generated Meet link on this
+          shared calendar and invites its participants.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {!data ? (
+          <p className="text-sm text-muted-foreground">Loading Google Calendar status…</p>
+        ) : (
+          <>
+            <Notice>
+              Register an OAuth 2.0 client (Web application) in Google Cloud Console with the
+              Calendar API enabled, then paste its credentials below. Nothing here is ever stored in
+              an env file — the client secret is encrypted in the database, same as the Resend API
+              key.
+            </Notice>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Client ID">
+                <Input
+                  value={clientId}
+                  onChange={(e) => {
+                    setDirty(true);
+                    setClientId(e.target.value);
+                  }}
+                />
+              </Field>
+              <Field label={`Client secret${data.clientSecretConfigured ? " (configured)" : ""}`}>
+                <Input
+                  type="password"
+                  value={clientSecret}
+                  placeholder={
+                    data.clientSecretConfigured ? "•••••••• — retain current" : "GOCSPX-…"
+                  }
+                  onChange={(e) => {
+                    setDirty(true);
+                    setClientSecret(e.target.value);
+                  }}
+                />
+              </Field>
+            </div>
+            <Field label="Redirect URI">
+              <Input
+                value={redirectUri}
+                onChange={(e) => {
+                  setDirty(true);
+                  setRedirectUri(e.target.value);
+                }}
+              />
+            </Field>
+            <p className="-mt-3 text-xs text-muted-foreground">
+              Add this exact URL as an authorized redirect URI on the OAuth client in Google Cloud
+              Console.
+            </p>
+            <div className="flex justify-end border-b pb-4">
+              <Button onClick={() => saveCredentials.mutate()} disabled={saveCredentials.isPending}>
+                Save credentials
+              </Button>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Metric label="Status" value={data.status.replaceAll("_", " ")} />
+              <Metric label="Connected account" value={data.connectedEmail || "Not connected"} />
+            </div>
+            {data.lastError && <Notice danger>{data.lastError}</Notice>}
+            <div className="flex flex-wrap gap-2 border-t pt-4">
+              <Button onClick={() => start.mutate()} disabled={!data.configured || start.isPending}>
+                {data.status === "connected" ? "Reconnect" : "Connect Google Calendar"}
+              </Button>
+              {data.status === "connected" && (
+                <Button
+                  variant="destructive"
+                  className="ml-auto"
+                  onClick={() => setDisconnectOpen(true)}
+                >
+                  Disconnect
+                </Button>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+      <ConfirmDialog
+        open={disconnectOpen}
+        onOpenChange={setDisconnectOpen}
+        title="Disconnect Google Calendar?"
+        description="Meetings will no longer sync to Google Calendar or generate Meet links automatically until reconnected. The saved OAuth client credentials are kept, so reconnecting won't require re-entering them."
+        confirmLabel="Disconnect"
+        disabled={disconnect.isPending}
+        onConfirm={() => disconnect.mutate()}
       />
     </Card>
   );

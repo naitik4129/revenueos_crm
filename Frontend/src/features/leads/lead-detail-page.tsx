@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { ArrowLeft, Bot, CalendarPlus, Check, ShieldBan } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, CalendarPlus, Check, ShieldBan, Video } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -77,6 +77,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
     undefined,
   );
   const [scheduleMeetingOpen, setScheduleMeetingOpen] = useState(false);
+  const [schedulingMeeting, setSchedulingMeeting] = useState(false);
   const [note, setNote] = useState("");
   const openEnroll = (trigger?: WorkflowTrigger) => {
     setEnrollTriggerFilter(trigger);
@@ -395,6 +396,24 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                           Outcome: {label(meeting.outcome)}
                         </div>
                       )}
+                      {meeting.meetLink && (
+                        <a
+                          href={meeting.meetLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1 flex items-center gap-1 text-xs text-primary hover:underline"
+                        >
+                          <Video className="size-3" /> Join Meet
+                        </a>
+                      )}
+                      {meeting.calendarSyncStatus === "failed" && (
+                        <div
+                          className="mt-1 flex items-center gap-1 text-xs text-destructive"
+                          title={meeting.calendarSyncError}
+                        >
+                          <AlertTriangle className="size-3" /> Calendar sync failed
+                        </div>
+                      )}
                     </div>
                     <StatusBadge value={meeting.status} />
                   </CardContent>
@@ -698,8 +717,18 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
         leadId={leadId}
         meeting={null}
         open={scheduleMeetingOpen}
+        isSaving={schedulingMeeting}
         onOpenChange={setScheduleMeetingOpen}
-        onSave={(value) => void mutate(() => meetingStore.addMeeting(value), "Meeting scheduled")}
+        onSave={(value) =>
+          void (async () => {
+            setSchedulingMeeting(true);
+            try {
+              await mutate(() => meetingStore.addMeeting(value), "Meeting scheduled");
+            } finally {
+              setSchedulingMeeting(false);
+            }
+          })()
+        }
       />
       <EnrollWorkflowDialog
         leadId={leadId}

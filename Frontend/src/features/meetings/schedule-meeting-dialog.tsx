@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -35,12 +36,14 @@ export function ScheduleMeetingDialog({
   leadId,
   open,
   meeting,
+  isSaving,
   onOpenChange,
   onSave,
 }: {
   leadId?: string;
   open: boolean;
   meeting: Meeting | null;
+  isSaving?: boolean;
   onOpenChange: (value: boolean) => void;
   onSave: (value: {
     leadId: string;
@@ -49,6 +52,7 @@ export function ScheduleMeetingDialog({
     at: string;
     durationMin: number;
     url?: string | undefined;
+    participants?: { name?: string | undefined; email: string }[] | undefined;
   }) => void;
 }) {
   const { leads } = useLeads();
@@ -59,6 +63,7 @@ export function ScheduleMeetingDialog({
   const [time, setTime] = useState("11:00");
   const [duration, setDuration] = useState("30");
   const [url, setUrl] = useState("");
+  const [participants, setParticipants] = useState<{ name: string; email: string }[]>([]);
   const key = meeting?.id ?? "new";
   if (open && loadedFor !== key) {
     setLoadedFor(key);
@@ -82,10 +87,16 @@ export function ScheduleMeetingDialog({
     );
     setDuration(String(meeting?.durationMin ?? 30));
     setUrl(meeting?.url ?? "");
+    setParticipants([]);
   }
   if (!open && loadedFor !== null) setLoadedFor(null);
 
   const effectiveLeadId = leadId ?? pickedLeadId;
+  const addParticipant = () => setParticipants((prev) => [...prev, { name: "", email: "" }]);
+  const updateParticipant = (index: number, patch: Partial<{ name: string; email: string }>) =>
+    setParticipants((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
+  const removeParticipant = (index: number) =>
+    setParticipants((prev) => prev.filter((_, i) => i !== index));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -141,14 +152,47 @@ export function ScheduleMeetingDialog({
           <div>
             <Label className="mb-1.5 block text-xs">Meeting URL</Label>
             <Input value={url} onChange={(event) => setUrl(event.target.value)} />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Only used if Google Calendar isn&apos;t connected — otherwise a Meet link is generated
+              automatically.
+            </p>
           </div>
+          {!meeting && (
+            <div>
+              <Label className="mb-1.5 block text-xs">Participants (optional)</Label>
+              <div className="space-y-2">
+                {participants.map((participant, index) => (
+                  <div key={index} className="flex gap-2">
+                    <Input
+                      placeholder="Name"
+                      className="w-28"
+                      value={participant.name}
+                      onChange={(event) => updateParticipant(index, { name: event.target.value })}
+                    />
+                    <Input
+                      placeholder="email@example.com"
+                      type="email"
+                      value={participant.email}
+                      onChange={(event) => updateParticipant(index, { email: event.target.value })}
+                    />
+                    <Button variant="ghost" size="icon" onClick={() => removeParticipant(index)}>
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                ))}
+                <Button variant="outline" size="sm" onClick={addParticipant}>
+                  <Plus className="size-4" /> Add participant
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
-            disabled={!effectiveLeadId || !title.trim()}
+            disabled={!effectiveLeadId || !title.trim() || isSaving}
             onClick={() => {
               onSave({
                 leadId: effectiveLeadId,
@@ -156,6 +200,11 @@ export function ScheduleMeetingDialog({
                 at: toIsoFromIst(date, `${time}:00`),
                 durationMin: Number(duration),
                 url: url || undefined,
+                participants: meeting
+                  ? undefined
+                  : participants
+                      .filter((p) => p.email.trim())
+                      .map((p) => ({ name: p.name.trim() || undefined, email: p.email.trim() })),
               });
               onOpenChange(false);
             }}

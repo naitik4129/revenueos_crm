@@ -9,11 +9,17 @@ import { dashboardRouter } from "./dashboard.routes.js";
 import { notificationsRouter } from "./notifications.routes.js";
 import { meRouter, profilesRouter } from "./me.routes.js";
 import { adminRouter } from "./admin.routes.js";
+import { googleCalendarOAuthRouter } from "./googleCalendarOAuth.routes.js";
 import { requireAuth, requireSalesperson } from "../authMiddleware.js";
 
 export const apiRouter = Router();
 
 apiRouter.use("/me", meRouter);
+// Mounted before adminRouter so Google's unauthenticated OAuth redirect
+// reaches this specific, unauthenticated route rather than being rejected
+// by adminRouter's blanket requireAuth — every other /admin/... path falls
+// through untouched since this router only defines /oauth/callback.
+apiRouter.use("/admin/connections/google-calendar", googleCalendarOAuthRouter);
 apiRouter.use("/admin", adminRouter);
 
 const crmRouter = Router();

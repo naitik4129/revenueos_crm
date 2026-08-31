@@ -27,18 +27,20 @@ export interface WhatsAppAttachment {
 /**
  * What this send is for. `scheduled_action` is the original workflow-driven
  * path (idempotency/eligibility keyed off a real `scheduled_actions` row).
- * `proposal` is a human-initiated "Send" click with no scheduled action
- * behind it (a proposal needs a per-send, user-chosen template, unlike a
- * workflow step whose template is fixed at definition time) — its outbound
- * row is keyed off `whatsapp_outbound_messages.proposal_id` instead. Every
+ * `proposal` and `meeting` are human-initiated sends with no scheduled
+ * action behind them (each needs a template resolved at send time rather
+ * than fixed at workflow-definition time) — their outbound rows are keyed
+ * off `whatsapp_outbound_messages.proposal_id`/`meeting_id` instead. Every
  * shared safety mechanism below (emergency switch, daily cap, spacing,
  * connection checks) stays computed generically across the whole table
  * regardless of which source a row came from.
  */
-export type WhatsAppSendSource = { type: "scheduled_action"; id: string } | { type: "proposal"; id: string };
+export type WhatsAppSendSource = { type: "scheduled_action"; id: string } | { type: "proposal"; id: string } | { type: "meeting"; id: string };
 
-function sourceColumn(source: WhatsAppSendSource): "scheduled_action_id" | "proposal_id" {
-  return source.type === "scheduled_action" ? "scheduled_action_id" : "proposal_id";
+function sourceColumn(source: WhatsAppSendSource): "scheduled_action_id" | "proposal_id" | "meeting_id" {
+  if (source.type === "scheduled_action") return "scheduled_action_id";
+  if (source.type === "proposal") return "proposal_id";
+  return "meeting_id";
 }
 
 const WORKER_LOCK_ID = 8_726_149_211;

@@ -85,6 +85,7 @@ export interface Template {
   body: string;
   attachments: TemplateAttachment[];
   active: boolean;
+  isDefaultMeetingScheduled: boolean;
 }
 export const SCHEDULED_ACTION_STATUSES = [
   "pending",

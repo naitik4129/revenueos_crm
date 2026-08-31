@@ -13,6 +13,11 @@ export function assertValidPipelineStage(value: string): asserts value is Pipeli
   }
 }
 
+/** Funnel position of a pipeline stage — PIPELINE_STAGES is ordered, so index comparison tells us forward vs backward movement. */
+export function pipelineStageIndex(stage: PipelineStage): number {
+  return PIPELINE_STAGES.indexOf(stage);
+}
+
 export function assertValidLifecycleState(value: string): asserts value is LifecycleState {
   if (!(LIFECYCLE_STATES as readonly string[]).includes(value)) {
     throw new InvalidTransitionError(`"${value}" is not a valid lifecycle state.`, {

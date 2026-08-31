@@ -457,6 +457,8 @@ export interface TemplateRow {
   subject: string | null;
   body: string;
   is_active: boolean;
+  is_default_meeting_scheduled_email: boolean;
+  is_default_meeting_scheduled_whatsapp: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -479,6 +481,7 @@ function templateToDto(row: TemplateRow) {
     subject: row.subject ?? "",
     body: row.body,
     active: row.is_active,
+    isDefaultMeetingScheduled: row.channel === "email" ? row.is_default_meeting_scheduled_email : row.is_default_meeting_scheduled_whatsapp,
   };
 }
 
@@ -526,9 +529,14 @@ export async function createTemplate(db: Queryable, actor: Actor, input: { name:
   return templateToDto(result.rows[0]!);
 }
 
-export async function updateTemplate(db: Queryable, id: string, patch: { name?: string; subject?: string; body?: string; active?: boolean }) {
+export async function updateTemplate(
+  db: Queryable,
+  id: string,
+  patch: { name?: string; subject?: string; body?: string; active?: boolean; isDefaultMeetingScheduled?: boolean },
+) {
   const existing = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [id]);
-  if (!existing.rows[0]) throw new NotFoundError("Template");
+  const current = existing.rows[0];
+  if (!current) throw new NotFoundError("Template");
 
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -548,6 +556,17 @@ export async function updateTemplate(db: Queryable, id: string, patch: { name?: 
   if (patch.active !== undefined) {
     sets.push(`is_active = $${i++}`);
     params.push(patch.active);
+  }
+  if (patch.isDefaultMeetingScheduled !== undefined) {
+    // Only one template per channel may hold this flag — clear the
+    // previous default (if any) before setting this one, matching the
+    // partial unique index in 006_google_calendar_meeting_sync.sql.
+    const column = current.channel === "email" ? "is_default_meeting_scheduled_email" : "is_default_meeting_scheduled_whatsapp";
+    if (patch.isDefaultMeetingScheduled) {
+      await db.query(`update public.message_templates set ${column} = false where ${column} = true and id != $1`, [id]);
+    }
+    sets.push(`${column} = $${i++}`);
+    params.push(patch.isDefaultMeetingScheduled);
   }
   if (sets.length) {
     params.push(id);

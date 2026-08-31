@@ -167,6 +167,42 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     expect(summary.proposalFollowUps).toBeGreaterThan(0);
   });
 
+  it("does not regress a lead's pipeline stage when a second meeting is booked past meeting_scheduled", async () => {
+    const { createLead, getLeadRowOr404, updateLead } = await import("../../src/services/leads.service.js");
+    const { scheduleMeeting } = await import("../../src/services/meetings.service.js");
+    const lead = await withTestTransaction((client) =>
+      createLead(client, actor, { firstName: "Farid", company: "Foxtrot Inc", source: "event", email: "farid@example.com" }),
+    );
+    await withTestTransaction((client) => updateLead(client, actor, lead.id, { pipelineStage: "proposal_sent" }));
+
+    const meeting = await withTestTransaction((client) =>
+      scheduleMeeting(client, actor, { leadId: lead.id, title: "Follow-up call", at: "2030-01-04T04:30:00.000Z", durationMin: 30 }),
+    );
+    expect(meeting.ownerName).toBe(actor.fullName);
+
+    const routedLead = await getLeadRowOr404(pool, lead.id);
+    expect(routedLead.pipeline_stage).toBe("proposal_sent");
+  });
+
+  it("cancels the auto-created prep task when a meeting is cancelled", async () => {
+    const { createLead } = await import("../../src/services/leads.service.js");
+    const { scheduleMeeting, updateMeeting } = await import("../../src/services/meetings.service.js");
+    const { listTasks } = await import("../../src/services/tasks.service.js");
+    const lead = await withTestTransaction((client) =>
+      createLead(client, actor, { firstName: "Gita", company: "Golf Co", source: "event", email: "gita@example.com" }),
+    );
+    const meeting = await withTestTransaction((client) =>
+      scheduleMeeting(client, actor, { leadId: lead.id, title: "Discovery", at: "2030-01-05T04:30:00.000Z", durationMin: 30 }),
+    );
+    const openBefore = await listTasks(pool, { leadId: lead.id, status: "open" });
+    expect(openBefore.some((t) => t.type === "confirm_meeting")).toBe(true);
+
+    await withTestTransaction((client) => updateMeeting(client, actor, meeting.id, { status: "cancelled" }));
+
+    const openAfter = await listTasks(pool, { leadId: lead.id, status: "open" });
+    expect(openAfter.some((t) => t.type === "confirm_meeting")).toBe(false);
+  });
+
   it("keeps published workflow versions immutable while drafts remain editable", async () => {
     const { createWorkflow, updateDraftSteps, publishVersion, createDraft } = await import("../../src/services/workflows.service.js");
     const workflow = await withTestTransaction((client) =>

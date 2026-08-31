@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
+import { AlertTriangle, Video } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
@@ -41,14 +42,18 @@ export function MeetingsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Meeting | null>(null);
   const [outcomeFor, setOutcomeFor] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const sorted = store.meetings.slice().sort((a, b) => a.at.localeCompare(b.at));
   const today = sorted.filter((meeting) => isToday(meeting.at));
   const mutate = async (work: () => Promise<unknown>, success: string) => {
+    setSaving(true);
     try {
       await work();
       toast.success(success);
     } catch (error) {
       toast.error(messageFromError(error));
+    } finally {
+      setSaving(false);
     }
   };
   const setStatus = (meeting: Meeting, status: MeetingStatus) =>
@@ -90,7 +95,27 @@ export function MeetingsPage() {
                     const lead = leads.find((item) => item.id === meeting.leadId);
                     return (
                       <tr key={meeting.id} className="border-t hover:bg-accent/40">
-                        <td className="px-3 py-2">{meeting.title}</td>
+                        <td className="px-3 py-2">
+                          <div>{meeting.title}</div>
+                          {meeting.meetLink && (
+                            <a
+                              href={meeting.meetLink}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-0.5 flex items-center gap-1 text-xs text-primary hover:underline"
+                            >
+                              <Video className="size-3" /> Join Meet
+                            </a>
+                          )}
+                          {meeting.calendarSyncStatus === "failed" && (
+                            <div
+                              className="mt-0.5 flex items-center gap-1 text-xs text-destructive"
+                              title={meeting.calendarSyncError}
+                            >
+                              <AlertTriangle className="size-3" /> Calendar sync failed
+                            </div>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-xs">
                           {lead && (
                             <Link
@@ -199,6 +224,7 @@ export function MeetingsPage() {
       <ScheduleMeetingDialog
         open={createOpen || Boolean(editing)}
         meeting={editing}
+        isSaving={saving}
         onOpenChange={(open) => {
           if (!open) {
             setCreateOpen(false);

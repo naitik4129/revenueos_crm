@@ -22,8 +22,10 @@ const EnvSchema = z.object({
 });
 
 // WORKER_* tuning is validated separately in workerEnv.ts. Provider secrets
-// are loaded from encrypted database configuration, with optional legacy
-// Resend environment values used only as a read-only fallback.
+// (Resend, Google Calendar OAuth client, etc.) are loaded from encrypted
+// database configuration, entered by an admin in Admin -> Connections —
+// never from environment variables — with only email having an optional
+// legacy Resend environment fallback.
 
 function loadEnv() {
   const parsed = EnvSchema.safeParse(process.env);
