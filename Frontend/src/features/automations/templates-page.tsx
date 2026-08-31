@@ -274,11 +274,11 @@ function TemplateDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+        <DialogHeader className="shrink-0 border-b px-6 py-4">
           <DialogTitle>{template ? "Edit template" : "New template"}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="mb-1.5 block text-xs">Name</Label>
@@ -400,7 +400,7 @@ function TemplateDialog({
             )}
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t px-6 py-4">
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
