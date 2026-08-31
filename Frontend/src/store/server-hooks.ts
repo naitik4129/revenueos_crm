@@ -81,6 +81,10 @@ export function useLeads() {
     mutationFn: ({ id, body }: { id: string; body: string }) => backend.leads.addNote(id, body),
     onSuccess: (_, vars) => refresh(vars.id),
   });
+  const remove = useMutation({
+    mutationFn: (id: string) => backend.leads.delete(id),
+    onSuccess: (_, id) => refresh(id),
+  });
   const automation = useMutation({
     mutationFn: ({
       id,
@@ -143,6 +147,7 @@ export function useLeads() {
   const isPending = [
     create,
     update,
+    remove,
     note,
     automation,
     dnc,
@@ -159,6 +164,7 @@ export function useLeads() {
     isPending,
     addLead: (input: CreateLeadInput) => create.mutateAsync(input),
     updateLead: (id: string, input: UpdateLeadInput) => update.mutateAsync({ id, input }),
+    deleteLead: (id: string) => remove.mutateAsync(id),
     addNote: (id: string, body: string) => note.mutateAsync({ id, body }),
     setAutomation: (id: string, mode: AutomationMode, reason?: string) =>
       automation.mutateAsync({ id, mode, reason }),

@@ -1,10 +1,21 @@
 import { useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowLeft, Bot, CalendarPlus, Check, ShieldBan, Video } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Bot,
+  CalendarPlus,
+  Check,
+  Pencil,
+  ShieldBan,
+  Trash2,
+  Video,
+} from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -25,6 +36,7 @@ import {
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
+import { EditLeadDialog } from "./edit-lead-dialog";
 import { LogCallDialog } from "./log-call-dialog";
 import { EnrollWorkflowDialog } from "./scheduled-followups";
 import { LeadJourneyCard } from "./lead-journey-card";
@@ -61,6 +73,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
   const detail = useLead(leadId);
   const leadActions = useLeads();
   const taskStore = useTasks();
+  const navigate = useNavigate();
   const { userName, users } = useSession();
   const meetingStore = useMeetings();
   const proposalStore = useProposals();
@@ -69,6 +82,9 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
   const lead = detail.lead;
   const [callOpen, setCallOpen] = useState(false);
   const [callTaskId, setCallTaskId] = useState<string | undefined>(undefined);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [dncOpen, setDncOpen] = useState(false);
   const [reactivateOpen, setReactivateOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -150,6 +166,9 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                 <ArrowLeft className="mr-1 size-4" /> Leads
               </Link>
             </Button>
+            <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+              <Pencil className="mr-1 size-4" /> Edit
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -157,6 +176,14 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
               disabled={lead.doNotContact}
             >
               <ShieldBan className="mr-1 size-4" /> Do not contact
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="mr-1 size-4" /> Delete forever
             </Button>
           </>
         }
@@ -720,6 +747,30 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
         </div>
       </div>
 
+      <EditLeadDialog lead={lead} open={editOpen} onOpenChange={setEditOpen} />
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`Delete ${lead.firstName} ${lead.lastName} forever?`}
+        description="This permanently deletes the lead and everything attached to it — calls, tasks, meetings, proposals, notes and the activity timeline. This cannot be undone."
+        confirmLabel="Delete forever"
+        disabled={deleting}
+        onConfirm={() =>
+          void (async () => {
+            setDeleting(true);
+            try {
+              await leadActions.deleteLead(leadId);
+              toast.success("Lead deleted");
+              setDeleteOpen(false);
+              void navigate({ to: "/leads" });
+            } catch (error) {
+              toast.error(messageFromError(error));
+            } finally {
+              setDeleting(false);
+            }
+          })()
+        }
+      />
       <LogCallDialog
         leadId={leadId}
         taskId={callTaskId}

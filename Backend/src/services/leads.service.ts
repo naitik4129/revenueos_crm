@@ -330,6 +330,27 @@ export async function updateLead(
   return getLeadRowOr404(db, id);
 }
 
+/**
+ * Permanent, irreversible delete (product decision overriding this schema's
+ * original "leads are never hard-deleted" stance -- see
+ * 007_lead_hard_delete.sql). Every related table cascades via its FK to
+ * leads.id, so the DELETE below is sufficient to remove all of a lead's
+ * data. A JSON snapshot is written to deleted_leads_audit first -- that
+ * table has no FK to leads, so it survives the cascade and gives an
+ * investigation trail (not an undo mechanism) for who deleted what.
+ */
+export async function deleteLead(db: Queryable, actor: Actor, id: string): Promise<void> {
+  const lead = await getLeadRowOr404(db, id);
+
+  await db.query(
+    `insert into public.deleted_leads_audit (lead_id, snapshot, deleted_by, deleted_by_name)
+     values ($1,$2,$3,$4)`,
+    [id, JSON.stringify(leadToDto(lead)), actor.id, actor.fullName],
+  );
+
+  await db.query(`delete from public.leads where id = $1`, [id]);
+}
+
 export async function addNote(db: Queryable, actor: Actor, leadId: string, body: string) {
   if (!body.trim()) throw new ValidationError("Note body is required.");
   await getLeadRowOr404(db, leadId);

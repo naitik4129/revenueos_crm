@@ -410,6 +410,7 @@ export const backend = {
     get: (id: string, signal?: AbortSignal) => get<Lead>(`/leads/${id}`, signal),
     create: (input: CreateLeadInput) => send<Lead>("POST", "/leads", input),
     update: (id: string, fields: UpdateLeadInput) => send<Lead>("PATCH", `/leads/${id}`, fields),
+    delete: (id: string) => del(`/leads/${id}`),
     addNote: (id: string, body: string) => send<LeadNote>("POST", `/leads/${id}/notes`, { body }),
     notes: (id: string, signal?: AbortSignal) =>
       get<{ data: LeadNote[] }>(`/leads/${id}/notes`, signal),
