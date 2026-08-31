@@ -9,11 +9,36 @@ services:
     environment:
       PORT: 8787
       NODE_ENV: production
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
+      INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:?INTEGRATION_ENCRYPTION_KEY is required}
     restart: unless-stopped
+
+  worker:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    init: true
+    command: ["node", "dist/src/worker.js"]
+    healthcheck:
+      disable: true
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
+      INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:?INTEGRATION_ENCRYPTION_KEY is required}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-MOTM Technologies}
+      SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-}
+      WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-10000}
+      WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-20}
+      WORKER_DRY_RUN: ${WORKER_DRY_RUN:-false}
+    restart: unless-stopped
+    depends_on:
+      - backend
 
   frontend:
     build:

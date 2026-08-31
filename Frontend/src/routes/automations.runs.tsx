@@ -11,7 +11,10 @@ export const Route = createFileRoute("/automations/runs")({
           "Every workflow run per lead: current step, next scheduled action, failures and retries.",
       },
       { property: "og:title", content: "Automation runs — Northbeam CRM" },
-      { property: "og:description", content: "Monitor what the automation worker is doing for each lead." },
+      {
+        property: "og:description",
+        content: "Monitor what the automation worker is doing for each lead.",
+      },
     ],
   }),
   component: RunsPage,

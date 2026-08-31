@@ -90,7 +90,7 @@ function computeEligibility(
   }
 
   if (action.action_type === "send_whatsapp") {
-    if (!lead.phone) return { ok: false, reason: "Lead has no phone number." };
+    if (!lead.phone_e164) return { ok: false, reason: "Lead has no valid normalized phone number." };
     if (contactStatus && ["invalid", "opted_out", "do_not_contact"].includes(contactStatus)) {
       return { ok: false, reason: `WhatsApp contactability is "${contactStatus}".` };
     }
@@ -118,6 +118,7 @@ export interface ActionContext {
     company: string;
     email: string | null;
     phone: string | null;
+    phoneE164: string | null;
     ownerId: string | null;
     ownerName: string | null;
     pipelineStage: string;
@@ -181,6 +182,7 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
       company: lead.company,
       email: lead.email,
       phone: lead.phone,
+      phoneE164: lead.phone_e164,
       ownerId: lead.owner_id,
       ownerName: lead.owner_name ?? null,
       pipelineStage: lead.pipeline_stage,
@@ -236,6 +238,19 @@ export async function skipAction(db: Queryable, actionId: string, reason: string
   if (action.status !== "executing") {
     throw new ConflictError(`Scheduled action is "${action.status}", expected "executing".`);
   }
+  const run = await getRunRowOr404(db, action.workflow_run_id);
+  if (run.status === "paused") {
+    await db.query(`update public.scheduled_actions set status = 'paused', last_error = $2 where id = $1`, [actionId, reason]);
+    await addTimelineEvent(db, {
+      leadId: action.lead_id,
+      kind: "automation",
+      title: "Automation Step Paused",
+      detail: reason,
+      ...AUTOMATION_ACTOR,
+      relatedWorkflowRunId: action.workflow_run_id,
+    });
+    return getActionContext(db, actionId);
+  }
   await db.query(`update public.scheduled_actions set status = 'skipped', last_error = $2 where id = $1`, [actionId, reason]);
   await addTimelineEvent(db, {
     leadId: action.lead_id,
@@ -245,7 +260,24 @@ export async function skipAction(db: Queryable, actionId: string, reason: string
     ...AUTOMATION_ACTOR,
     relatedWorkflowRunId: action.workflow_run_id,
   });
+  if (["running", "waiting"].includes(run.status)) {
+    await advanceRun(db, run);
+  }
   return getActionContext(db, actionId);
+}
+
+/** Return a provider-blocked action to the queue without consuming a retry. */
+export async function deferAction(db: Queryable, actionId: string, reason: string, retryAt: Date) {
+  const action = await getActionRowOr404(db, actionId);
+  if (action.status !== "executing") {
+    throw new ConflictError(`Scheduled action is "${action.status}", expected "executing".`);
+  }
+  await db.query(
+    `update public.scheduled_actions
+        set status = 'pending', scheduled_for = $2, last_error = $3, last_attempt_at = null
+      where id = $1`,
+    [actionId, retryAt.toISOString(), reason],
+  );
 }
 
 /** Shared progression step: advance `run` past its current step to the next enabled one, or complete it. */
@@ -345,11 +377,12 @@ export async function executeInternalAction(db: Queryable, actionId: string) {
 }
 
 export interface RecordResultInput {
-  outcome: "success" | "failure";
+  outcome: "success" | "failure" | "deferred";
   providerMessageId?: string;
   providerResponse?: unknown;
   error?: string;
   retryable?: boolean;
+  retryAt?: Date;
 }
 
 /**
@@ -368,6 +401,11 @@ export async function recordActionResult(db: Queryable, actionId: string, input:
   }
 
   const run = await getRunRowOr404(db, action.workflow_run_id);
+
+  if (input.outcome === "deferred") {
+    await deferAction(db, actionId, input.error ?? "Provider is temporarily unavailable.", input.retryAt ?? new Date(Date.now() + 60_000));
+    return { action: (await getActionContext(db, actionId)).action, run };
+  }
 
   if (input.outcome === "success") {
     await db.query(`update public.scheduled_actions set status = 'completed', executed_at = now(), last_error = null where id = $1`, [actionId]);

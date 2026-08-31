@@ -48,7 +48,7 @@ export function useSession() {
         email: me.data.email,
         initials: initials(me.data.name),
         active: true,
-        role: "Salesperson",
+        role: me.data.role === "admin" ? "Admin" : "Salesperson",
       }
     : null;
   return {

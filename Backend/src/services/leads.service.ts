@@ -7,6 +7,7 @@ import { CONTACT_CHANNEL_STATUS } from "../domain/enums.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
 import { cancelOpenTasksForLead, getLeadNextAction } from "./tasks.service.js";
 import { applyAutomationModeToRuns } from "./runs.service.js";
+import { normalizePhoneE164 } from "../domain/phone.js";
 
 export interface LeadRow {
   id: string;
@@ -17,6 +18,7 @@ export interface LeadRow {
   industry: string | null;
   email: string | null;
   phone: string | null;
+  phone_e164: string | null;
   source: LeadSource;
   service_interest: string | null;
   owner_id: string | null;
@@ -93,13 +95,18 @@ export async function createLead(db: Queryable, actor: Actor, input: CreateLeadI
   if (!input.email?.trim() && !input.phone?.trim()) {
     throw new ValidationError("Provide at least an email or a phone number.");
   }
+  const phone = input.phone?.trim() || null;
+  const phoneE164 = phone ? normalizePhoneE164(phone) : null;
+  if (phone && !phoneE164) {
+    throw new ValidationError("Enter a valid phone number. Indian local numbers default to +91; international numbers must include their country code.");
+  }
 
   const ownerId = input.ownerId ?? actor.id;
   const result = await db.query<{ id: string }>(
     `insert into public.leads
-      (first_name, last_name, company, job_title, industry, email, phone, source,
+      (first_name, last_name, company, job_title, industry, email, phone, phone_e164, source,
        service_interest, owner_id, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      returning id`,
     [
       input.firstName.trim(),
@@ -108,7 +115,8 @@ export async function createLead(db: Queryable, actor: Actor, input: CreateLeadI
       input.jobTitle?.trim() ?? null,
       input.industry?.trim() ?? null,
       input.email?.trim() ?? null,
-      input.phone?.trim() ?? null,
+      phone,
+      phoneE164,
       input.source,
       input.serviceInterest?.trim() ?? null,
       ownerId,
@@ -279,7 +287,15 @@ export async function updateLead(
   if (patch.jobTitle !== undefined) push("job_title", patch.jobTitle.trim() || null);
   if (patch.industry !== undefined) push("industry", patch.industry.trim() || null);
   if (patch.email !== undefined) push("email", patch.email.trim() || null);
-  if (patch.phone !== undefined) push("phone", patch.phone.trim() || null);
+  if (patch.phone !== undefined) {
+    const phone = patch.phone.trim() || null;
+    const phoneE164 = phone ? normalizePhoneE164(phone) : null;
+    if (phone && !phoneE164) {
+      throw new ValidationError("Enter a valid phone number. Indian local numbers default to +91; international numbers must include their country code.");
+    }
+    push("phone", phone);
+    push("phone_e164", phoneE164);
+  }
   if (patch.source !== undefined) push("source", patch.source);
   if (patch.serviceInterest !== undefined) push("service_interest", patch.serviceInterest.trim() || null);
   if (patch.ownerId !== undefined) push("owner_id", patch.ownerId);

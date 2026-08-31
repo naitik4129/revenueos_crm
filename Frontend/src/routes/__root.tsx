@@ -2,11 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
   Link,
+  Navigate,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
   HeadContent,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { reportError } from "@/lib/telemetry";
 import { AppShell } from "@/app/app-shell";
@@ -15,6 +18,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { configurationError } from "@/lib/supabase-client";
 import { useSupabaseSession } from "@/lib/use-supabase-session";
 import { LoginPage } from "@/features/auth/login-page";
+import { backend } from "@/lib/backend-client";
 
 function NotFoundComponent() {
   return (
@@ -107,14 +111,9 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       <HeadContent />
       <AuthGate queryClient={queryClient}>
-        <StoreProvider>
-          <AppShell>
-            {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-            <Outlet />
-          </AppShell>
-          <Toaster richColors position="top-right" />
-        </StoreProvider>
+        <Outlet />
       </AuthGate>
+      <Toaster richColors position="top-right" />
     </QueryClientProvider>
   );
 }
@@ -122,6 +121,14 @@ function RootComponent() {
 /** Gates the application behind required Supabase authentication. */
 function AuthGate({ children, queryClient }: { children: ReactNode; queryClient: QueryClient }) {
   const { loading, session } = useSupabaseSession();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const me = useQuery({
+    queryKey: ["auth", "role", session?.user.id],
+    queryFn: ({ signal }) => backend.me(signal),
+    enabled: Boolean(session),
+    staleTime: 60_000,
+  });
+  const adminPath = pathname.startsWith("/admin");
 
   useEffect(() => {
     if (!loading && !session) queryClient.clear();
@@ -148,6 +155,23 @@ function AuthGate({ children, queryClient }: { children: ReactNode; queryClient:
       </div>
     );
   }
-  if (!session) return <LoginPage />;
-  return <>{children}</>;
+  if (!session) return <LoginPage adminMode={adminPath} />;
+  if (me.isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+        Checking access…
+      </div>
+    );
+  }
+  if (me.isError || !me.data) throw me.error;
+  if (me.data.role === "admin") {
+    if (!adminPath) return <Navigate to="/admin" replace />;
+    return <>{children}</>;
+  }
+  if (adminPath) return <Navigate to="/" replace />;
+  return (
+    <StoreProvider>
+      <AppShell>{children}</AppShell>
+    </StoreProvider>
+  );
 }

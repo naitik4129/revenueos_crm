@@ -108,13 +108,31 @@ function Builder({ workflow }: { workflow: Workflow }) {
   // Refs (kept current every render) let this true-unmount-only cleanup see
   // the latest buffer/store, flushing any still-dirty edit instead of
   // dropping it.
-  const flushOnUnmountRef = useRef({ buffer, editable, bufferKey, store, workflowId: workflow.id, versionNumber: version.version });
-  flushOnUnmountRef.current = { buffer, editable, bufferKey, store, workflowId: workflow.id, versionNumber: version.version };
+  const flushOnUnmountRef = useRef({
+    buffer,
+    editable,
+    bufferKey,
+    store,
+    workflowId: workflow.id,
+    versionNumber: version.version,
+  });
+  flushOnUnmountRef.current = {
+    buffer,
+    editable,
+    bufferKey,
+    store,
+    workflowId: workflow.id,
+    versionNumber: version.version,
+  };
   useEffect(() => {
     return () => {
       const current = flushOnUnmountRef.current;
       if (current.editable && current.buffer.dirty && current.buffer.key === current.bufferKey) {
-        void current.store.updateDraftSteps(current.workflowId, current.versionNumber, current.buffer.steps);
+        void current.store.updateDraftSteps(
+          current.workflowId,
+          current.versionNumber,
+          current.buffer.steps,
+        );
       }
     };
   }, []);

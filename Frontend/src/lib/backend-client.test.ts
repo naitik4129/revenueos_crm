@@ -72,6 +72,23 @@ describe("backend client", () => {
       "POST",
       "/api/v1/workflows/workflow-1/versions/3/publish",
     ],
+    [
+      "admin user",
+      () =>
+        backend.admin.users.create({
+          name: "Ada Administered",
+          email: "ada@example.com",
+          password: "permanent-password",
+        }),
+      "POST",
+      "/api/v1/admin/users",
+    ],
+    [
+      "WhatsApp connect",
+      () => backend.admin.whatsapp.command("connect"),
+      "POST",
+      "/api/v1/admin/connections/whatsapp/connect",
+    ],
   ])("sends an authenticated %s request", async (_name, invoke, method, pathname) => {
     const fetchMock = vi.fn<typeof fetch>(async () => response({ id: "result-1" }));
     vi.stubGlobal("fetch", fetchMock);
@@ -85,6 +102,22 @@ describe("backend client", () => {
       method,
       headers: { Authorization: "Bearer session-token", "Content-Type": "application/json" },
     });
+  });
+
+  it("omits retained email secrets from an admin connection update", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => response({ provider: "resend" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await backend.admin.email.update({
+      provider: "resend",
+      enabled: true,
+      senderName: "Northbeam",
+      senderAddress: "sales@example.com",
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("resendApiKey");
+    expect(body).not.toHaveProperty("smtpPassword");
   });
 
   it("normalizes API errors and clears an unauthorized local session", async () => {

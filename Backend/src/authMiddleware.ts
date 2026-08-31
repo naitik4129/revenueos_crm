@@ -10,6 +10,7 @@ export interface Actor {
   fullName: string;
   email: string;
   isActive: boolean;
+  role: "admin" | "salesperson";
 }
 
 declare module "express-serve-static-core" {
@@ -32,6 +33,11 @@ declare module "express-serve-static-core" {
  * uses it for ownership/attribution — never a client-supplied "userId".
  */
 export const requireAuth = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (req.actor) {
+    next();
+    return;
+  }
+
   const header = req.header("authorization") ?? req.header("Authorization");
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : undefined;
   if (!token) {
@@ -48,14 +54,15 @@ export const requireAuth = asyncHandler(async (req: Request, _res: Response, nex
     full_name: string;
     email: string;
     is_active: boolean;
-  }>(`select id, full_name, email, is_active from public.profiles where id = $1`, [data.user.id]);
+    role: "admin" | "salesperson";
+  }>(`select id, full_name, email, is_active, role from public.profiles where id = $1`, [data.user.id]);
 
   const profile = result.rows[0];
   if (!profile) {
     throw new AuthenticationError("No CRM profile for this account.");
   }
   if (!profile.is_active) {
-    throw new ForbiddenError("This salesperson account has been deactivated.");
+    throw new ForbiddenError("This account has been deactivated.");
   }
 
   req.actor = {
@@ -63,6 +70,23 @@ export const requireAuth = asyncHandler(async (req: Request, _res: Response, nex
     fullName: profile.full_name,
     email: profile.email,
     isActive: profile.is_active,
+    role: profile.role,
   };
   next();
 });
+
+export function requireAdmin(req: Request, _res: Response, next: NextFunction) {
+  if (req.actor?.role !== "admin") {
+    next(new ForbiddenError("Administrator access is required."));
+    return;
+  }
+  next();
+}
+
+export function requireSalesperson(req: Request, _res: Response, next: NextFunction) {
+  if (req.actor?.role !== "salesperson") {
+    next(new ForbiddenError("Administrator accounts cannot access CRM business routes."));
+    return;
+  }
+  next();
+}

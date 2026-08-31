@@ -13,7 +13,8 @@ export const Route = createFileRoute("/automations/")({
       { property: "og:title", content: "Automations — Northbeam CRM" },
       {
         property: "og:description",
-        content: "Edit nurture behaviour in the CRM; the automation worker executes what you publish.",
+        content:
+          "Edit nurture behaviour in the CRM; the automation worker executes what you publish.",
       },
     ],
   }),

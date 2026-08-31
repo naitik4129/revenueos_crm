@@ -5,6 +5,8 @@ import { renderTemplate } from "./domain/templateRenderer.js";
 import { sendEmail } from "./providers/email.provider.js";
 import { sendWhatsApp } from "./providers/whatsapp.provider.js";
 import type { WorkflowStepAction } from "./domain/enums.js";
+import { baileysManager } from "./providers/baileys.manager.js";
+import { PermanentProviderError, ProviderDeferredError } from "./providers/provider-errors.js";
 
 /**
  * The automation executor: polls for due scheduled_actions and dispatches
@@ -49,8 +51,8 @@ async function dispatchMessage(ctx: automationService.ActionContext): Promise<Se
     return { outcome: "success", providerMessageId: result.providerMessageId };
   }
 
-  if (!ctx.lead.phone) throw new Error("Eligible send_whatsapp action has no lead phone (invariant violation).");
-  const result = await sendWhatsApp({ to: ctx.lead.phone, body: rendered.body });
+  if (!ctx.lead.phoneE164) throw new PermanentProviderError("Eligible WhatsApp action has no normalized phone number.");
+  const result = await sendWhatsApp({ actionId: ctx.action.id, to: ctx.lead.phoneE164, body: rendered.body });
   return { outcome: "success", providerMessageId: result.providerMessageId };
 }
 
@@ -70,9 +72,23 @@ async function processAction(ctx: automationService.ActionContext): Promise<void
     await withTransaction((client) => automationService.recordActionResult(client, ctx.action.id, result));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof ProviderDeferredError) {
+      await withTransaction((client) =>
+        automationService.recordActionResult(client, ctx.action.id, {
+          outcome: "deferred",
+          error: message,
+          retryAt: new Date(Date.now() + err.retryAfterMs),
+        }),
+      );
+      return;
+    }
     console.error(`[worker] Send failed for action ${ctx.action.id} (${ctx.action.actionType}): ${message}`);
     await withTransaction((client) =>
-      automationService.recordActionResult(client, ctx.action.id, { outcome: "failure", error: message, retryable: true }),
+      automationService.recordActionResult(client, ctx.action.id, {
+        outcome: "failure",
+        error: message,
+        retryable: !(err instanceof PermanentProviderError),
+      }),
     );
   }
 }
@@ -109,12 +125,21 @@ async function loop(): Promise<void> {
 console.log(
   `Northbeam CRM automation worker starting (poll interval ${env.WORKER_POLL_INTERVAL_MS}ms, batch size ${env.WORKER_BATCH_SIZE}, dry run ${env.WORKER_DRY_RUN}).`,
 );
-void loop();
+void baileysManager
+  .start()
+  .then(() => loop())
+  .catch(async (error) => {
+    console.error("Automation worker failed to acquire or initialize its singleton messaging session:", error);
+    await baileysManager.stop().catch(() => undefined);
+    await pool.end().catch(() => undefined);
+    process.exit(1);
+  });
 
 async function shutdown(signal: string): Promise<void> {
   console.log(`Received ${signal}, shutting down worker...`);
   stopped = true;
   try {
+    await baileysManager.stop();
     await pool.end();
   } catch (err) {
     console.error("[worker] Error closing database pool during shutdown:", err);

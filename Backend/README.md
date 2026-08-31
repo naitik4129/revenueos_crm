@@ -1,7 +1,7 @@
 # Northbeam CRM — Backend
 
 The trusted business layer between the existing frontend and the Supabase
-foundation (`Supabase/migrations/001_initial_migration.sql`):
+foundation (`Supabase/migrations/*.sql`, applied in order):
 
 ```
 Frontend  →  Backend (this)  →  Supabase Postgres + Auth
@@ -20,8 +20,8 @@ something PostgREST-style REST calls can't give you.
 src/
   env.ts                 zod-validated environment config
   db.ts                  pg Pool + withTransaction() helper
-  supabaseAdmin.ts        Supabase client used ONLY to verify bearer tokens
-  authMiddleware.ts        requireAuth: verifies token, loads active profile
+  supabaseAdmin.ts        server-only Supabase Auth verification/admin client
+  authMiddleware.ts        verifies token, active profile, and role
   errors.ts / errorMiddleware.ts   typed AppError taxonomy -> JSON responses
   domain/                 pure business-rule modules (no I/O, unit-tested)
     enums.ts               mirrors the migration's Postgres enums
@@ -56,12 +56,12 @@ land or not at all). `@supabase/supabase-js` is used for exactly one thing:
 cd Backend
 npm install
 cp .env.example .env
-# fill in DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+# fill in DATABASE_URL, Supabase values, and INTEGRATION_ENCRYPTION_KEY
 npm run dev
 ```
 
 `DATABASE_URL` must point at the same Supabase Postgres database the
-`Supabase/migrations/001_initial_migration.sql` migration has been applied
+all `Supabase/migrations/*.sql` migrations have been applied in order
 to, using a role that bypasses RLS (the Supabase dashboard's `postgres`
 connection string, or a dedicated backend role you grant `BYPASSRLS`).
 
@@ -141,6 +141,12 @@ GET        /scheduled-actions                     (read/cancel only, salesperson
 GET        /dashboard/summary
 GET/POST   /notifications                          POST /notifications/:id/read
 GET        /me | /profiles
+
+GET/POST/PATCH /admin/users
+GET/PUT        /admin/connections/email
+POST           /admin/connections/email/test
+GET/PUT        /admin/connections/whatsapp/settings
+POST           /admin/connections/whatsapp/connect|restart|logout
 ```
 
 ### Automation execution
@@ -151,16 +157,47 @@ There is no external executor and no separate service-auth API surface —
 `src/services/automation.service.ts` in-process: claim due actions
 (concurrency-safe `SKIP LOCKED` claim), recheck eligibility
 (lifecycle/DNC/automation-mode/contactability/response-state), render the
-template, send via SMTP (`src/providers/email.provider.ts`) or the Meta
-WhatsApp Cloud API (`src/providers/whatsapp.provider.ts`), and record the
+template, send through the admin-selected Resend/TLS SMTP connection or the
+single shared Baileys socket, and record the
 result — which advances the run to the next step or applies backend-owned
 retry/backoff on failure. All business logic (next-step selection, delay
 calculation, template/stage resolution, retry/backoff, eligibility) lives
 in `automation.service.ts`; `worker.ts` is deliberately thin and just calls
-it on a poll loop (see `SMTP_*` / `META_WHATSAPP_*` / `WORKER_*` in
+it on a poll loop (see `INTEGRATION_ENCRYPTION_KEY` / `WORKER_*` in
 `.env.example`).
 
-## What this backend deliberately does NOT do
+The worker owns the only Baileys socket and holds a PostgreSQL advisory lock
+for its lifetime. Baileys credentials and individual Signal keys are stored
+encrypted in Postgres; QR values are admin-only and short-lived. Inbound
+direct replies retain metadata only and atomically stop all matching lead
+automation. Baileys is an unofficial WhatsApp Web client, so protocol and
+account-enforcement risk remains even with conservative throttling.
 
-- Manager/Admin roles or RBAC — one user type, Salesperson, per the product
-  brief.
+## Initial administrator
+
+Create the first identity in Supabase Auth, then promote it after migration:
+
+```sql
+update public.profiles set role = 'admin' where email = 'admin@example.com';
+```
+
+Admin identities are restricted to `/admin`; salesperson identities are
+restricted to CRM business routes.
+
+## Safe production rollout
+
+1. Apply migrations in filename order and set one stable
+   `INTEGRATION_ENCRYPTION_KEY` on both API and worker.
+2. Promote the first admin with the SQL above, then deploy with Email and
+   WhatsApp outbound disabled.
+3. Configure and test Resend or encrypted SMTP in Admin → Connections.
+4. Pair a disposable, dedicated WhatsApp account and verify worker restart
+   reconnects without a second QR.
+5. Send one opted-in internal message, reply, and confirm the matching run
+   and future actions are cancelled without reply content being stored.
+6. Enable WhatsApp outbound only after the cap, heartbeat, restriction state,
+   and pending counts look healthy.
+
+Rollback starts by switching WhatsApp outbound off. The migration is
+additive and scheduled actions remain in Postgres; restoring a prior provider
+image is an explicit manual deployment decision, not an automatic fallback.

@@ -10,7 +10,12 @@ meRouter.use(requireAuth);
 meRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    res.json({ id: req.actor!.id, name: req.actor!.fullName, email: req.actor!.email });
+    res.json({
+      id: req.actor!.id,
+      name: req.actor!.fullName,
+      email: req.actor!.email,
+      role: req.actor!.role,
+    });
   }),
 );
 

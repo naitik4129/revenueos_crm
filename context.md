@@ -7,7 +7,7 @@ Northbeam is a React CRM backed by an authenticated Express/Postgres API. The pr
 The repository contains:
 
 - `Frontend/`: React 19, TanStack Router, TanStack Query, Tailwind, and Radix UI.
-- `Backend/`: Express, Zod validation, PostgreSQL services, Supabase JWT authentication, and an in-process automation worker (`Backend/src/worker.ts`) that sends workflow emails/WhatsApp messages directly via SMTP and the Meta WhatsApp Cloud API.
+- `Backend/`: Express, Zod validation, PostgreSQL services, Supabase authentication/RBAC, and a singleton automation worker (`Backend/src/worker.ts`) that sends through database-selected Resend/TLS SMTP and an encrypted PostgreSQL-backed Baileys session.
 - `Supabase/migrations/001_initial_migration.sql`: the existing database schema.
 
 ## Frontend data boundary

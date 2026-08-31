@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdminRouteImport } from './routes/admin'
 import { Route as MeetingsRouteImport } from './routes/meetings'
 import { Route as TasksRouteImport } from './routes/tasks'
 import { Route as AutomationsIndexRouteImport } from './routes/automations.index'
@@ -23,6 +24,11 @@ import { Route as AutomationsWorkflowsWorkflowIdRouteImport } from './routes/aut
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MeetingsRoute = MeetingsRouteImport.update({
@@ -74,6 +80,7 @@ const AutomationsWorkflowsWorkflowIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/meetings': typeof MeetingsRoute
   '/tasks': typeof TasksRoute
   '/automations/runs': typeof AutomationsRunsRoute
@@ -86,6 +93,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/meetings': typeof MeetingsRoute
   '/tasks': typeof TasksRoute
   '/automations/runs': typeof AutomationsRunsRoute
@@ -99,6 +107,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/meetings': typeof MeetingsRoute
   '/tasks': typeof TasksRoute
   '/automations/runs': typeof AutomationsRunsRoute
@@ -113,6 +122,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/admin'
     | '/meetings'
     | '/tasks'
     | '/automations/runs'
@@ -125,6 +135,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/admin'
     | '/meetings'
     | '/tasks'
     | '/automations/runs'
@@ -137,6 +148,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/admin'
     | '/meetings'
     | '/tasks'
     | '/automations/runs'
@@ -150,6 +162,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRoute: typeof AdminRoute
   MeetingsRoute: typeof MeetingsRoute
   TasksRoute: typeof TasksRoute
   AutomationsRunsRoute: typeof AutomationsRunsRoute
@@ -168,6 +181,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/meetings': {
@@ -238,6 +258,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRoute: AdminRoute,
   MeetingsRoute: MeetingsRoute,
   TasksRoute: TasksRoute,
   AutomationsRunsRoute: AutomationsRunsRoute,

@@ -228,9 +228,104 @@ export interface DashboardSummary {
   }[];
 }
 
+export interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  initials: string;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface EmailConnection {
+  provider: "resend" | "smtp" | null;
+  enabled: boolean;
+  senderName: string;
+  senderAddress: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecurity: "tls" | "starttls";
+  resendApiKeyConfigured: boolean;
+  smtpUsernameConfigured: boolean;
+  smtpPasswordConfigured: boolean;
+  environmentFallbackConfigured: boolean;
+  source: "database" | "environment" | "unconfigured";
+  updatedAt: string;
+}
+
+export interface WhatsAppConnection {
+  enabled: boolean;
+  desiredState: string;
+  status: string;
+  connectedPhone: string | null;
+  displayName: string | null;
+  qr: string | null;
+  qrExpiresAt: string | null;
+  lastError: string | null;
+  reachoutLock: unknown;
+  newChatCap: unknown;
+  workerHeartbeatAt: string | null;
+  lastConnectedAt: string | null;
+  lastDisconnectedAt: string | null;
+  dailyCap: number;
+  minDelaySeconds: number;
+  maxDelaySeconds: number;
+  todayCount: number;
+  pendingCount: number;
+  invalidPhoneCount: number;
+  outboundRestricted: boolean;
+  inboundReview: {
+    messageId: string;
+    senderPhoneE164: string | null;
+    messageType: string;
+    receivedAt: string;
+    matchCount: number;
+    disposition: "unmatched" | "ambiguous";
+  }[];
+}
+
 export const backend = {
-  me: (signal?: AbortSignal) => get<{ id: string; name: string; email: string }>("/me", signal),
+  me: (signal?: AbortSignal) =>
+    get<{ id: string; name: string; email: string; role: "admin" | "salesperson" }>("/me", signal),
   profiles: (signal?: AbortSignal) => get<{ data: Omit<User, "role">[] }>("/profiles", signal),
+  admin: {
+    users: {
+      list: (signal?: AbortSignal) => get<{ data: AdminUser[] }>("/admin/users", signal),
+      create: (input: { name: string; email: string; password: string }) =>
+        send<AdminUser>("POST", "/admin/users", input),
+      update: (
+        id: string,
+        input: { name?: string; email?: string; password?: string; active?: boolean },
+      ) => send<AdminUser>("PATCH", `/admin/users/${id}`, input),
+    },
+    email: {
+      get: (signal?: AbortSignal) => get<EmailConnection>("/admin/connections/email", signal),
+      update: (input: {
+        provider: "resend" | "smtp";
+        enabled: boolean;
+        senderName: string;
+        senderAddress: string;
+        resendApiKey?: string;
+        smtpHost?: string;
+        smtpPort?: number;
+        smtpSecurity?: "tls" | "starttls";
+        smtpUsername?: string;
+        smtpPassword?: string;
+      }) => send<EmailConnection>("PUT", "/admin/connections/email", input),
+      test: (to: string) =>
+        send<{ ok: boolean; providerMessageId: string }>("POST", "/admin/connections/email/test", {
+          to,
+        }),
+    },
+    whatsapp: {
+      get: (signal?: AbortSignal) =>
+        get<WhatsAppConnection>("/admin/connections/whatsapp/settings", signal),
+      update: (input: { enabled: boolean; dailyCap: number }) =>
+        send<WhatsAppConnection>("PUT", "/admin/connections/whatsapp/settings", input),
+      command: (command: "connect" | "restart" | "logout") =>
+        send<WhatsAppConnection>("POST", `/admin/connections/whatsapp/${command}`),
+    },
+  },
   leads: {
     list: (params?: LeadFilters, signal?: AbortSignal) =>
       get<{ data: Lead[] }>(

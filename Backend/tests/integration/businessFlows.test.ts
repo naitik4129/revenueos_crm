@@ -1,6 +1,6 @@
 /**
  * End-to-end business-flow tests against a REAL Postgres database running
- * the Supabase migration (Supabase/migrations/001_initial_migration.sql).
+ * all Supabase migrations (Supabase/migrations/*.sql, in order).
  *
  * These are skipped automatically unless TEST_DATABASE_URL is set, so
  * `npm test` stays green in any environment without a live database (e.g.
@@ -50,7 +50,13 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
       `select id, full_name, email from public.profiles where id = $1`,
       [userId],
     );
-    actor = { id: profile.rows[0].id, fullName: profile.rows[0].full_name, email: profile.rows[0].email, isActive: true };
+    actor = {
+      id: profile.rows[0].id,
+      fullName: profile.rows[0].full_name,
+      email: profile.rows[0].email,
+      isActive: true,
+      role: "salesperson",
+    };
   });
 
   afterAll(async () => {
