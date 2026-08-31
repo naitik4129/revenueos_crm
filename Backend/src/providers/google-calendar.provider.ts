@@ -9,7 +9,12 @@ export class CalendarSyncError extends Error {
   }
 }
 
-const SCOPES = ["https://www.googleapis.com/auth/calendar.events"];
+// calendar.events is the actual permission we need; userinfo.email is only
+// so exchangeCodeForTokens can show the admin *which* Google account got
+// connected — without it, Google rejects the userinfo lookup below with an
+// insufficient-scope error and connected_email silently stays null even
+// though the connection itself succeeded.
+const SCOPES = ["https://www.googleapis.com/auth/calendar.events", "https://www.googleapis.com/auth/userinfo.email"];
 
 /**
  * The app's own OAuth client registration (client_id/client_secret/redirect_uri).
@@ -57,7 +62,14 @@ export async function exchangeCodeForTokens(
   }
   client.setCredentials(tokens);
   const oauth2 = google.oauth2({ version: "v2", auth: client });
-  const userinfo = await oauth2.userinfo.get().catch(() => null);
+  const userinfo = await oauth2.userinfo.get().catch((err) => {
+    // Non-fatal — the Calendar connection itself still succeeded (we have a
+    // refresh token). Losing just the display email shouldn't fail the
+    // whole connect flow, but silently swallowing it makes a real scope
+    // problem look identical to "worked fine, nothing to show" — log it.
+    console.warn("[google-calendar] Failed to look up the connected account's email:", err instanceof Error ? err.message : err);
+    return null;
+  });
   return { refreshToken: tokens.refresh_token, email: userinfo?.data.email ?? null };
 }
 
