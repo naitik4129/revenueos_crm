@@ -53,7 +53,7 @@ export function SendProposalDialog({
   const { templates } = useAutomations();
   const [leadId, setLeadId] = useState("");
   const [title, setTitle] = useState("Sales Automation Proposal");
-  const [amount, setAmount] = useState("450000");
+  const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [emailTemplateId, setEmailTemplateId] = useState("");
   const [whatsappTemplateId, setWhatsappTemplateId] = useState("");
@@ -67,7 +67,7 @@ export function SendProposalDialog({
     setLoadedFor(true);
     setLeadId("");
     setTitle("Sales Automation Proposal");
-    setAmount("450000");
+    setAmount("");
     setNotes("");
     setEmailTemplateId("");
     setWhatsappTemplateId("");
@@ -219,10 +219,11 @@ export function SendProposalDialog({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="mb-1.5 block text-xs">Amount (₹)</Label>
+              <Label className="mb-1.5 block text-xs">Amount (₹) (optional)</Label>
               <Input
                 type="number"
                 min={0}
+                placeholder="0"
                 value={amount}
                 onChange={(event) => setAmount(event.target.value)}
               />
