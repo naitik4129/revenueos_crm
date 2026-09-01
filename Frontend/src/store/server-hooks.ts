@@ -7,6 +7,7 @@ import {
   type CreateTaskInput,
   type CreateTemplateInput,
   type CreateWorkflowInput,
+  type ImportLeadRow,
   type LogCallInput,
   type UpdateLeadInput,
   type UpdateMeetingInput,
@@ -71,6 +72,15 @@ export function useLeads() {
   const create = useMutation({
     mutationFn: (input: CreateLeadInput) => backend.leads.create(input),
     onSuccess: (lead) => refresh(lead.id),
+  });
+  const importCsv = useMutation({
+    mutationFn: (rows: ImportLeadRow[]) => backend.leads.importCsv(rows),
+    onSuccess: () =>
+      Promise.all([
+        client.invalidateQueries({ queryKey: keys.leads }),
+        client.invalidateQueries({ queryKey: keys.dashboard }),
+        client.invalidateQueries({ queryKey: keys.notifications }),
+      ]),
   });
   const update = useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateLeadInput }) =>
@@ -146,6 +156,7 @@ export function useLeads() {
   const leads = query.data?.data ?? [];
   const isPending = [
     create,
+    importCsv,
     update,
     remove,
     note,
@@ -163,6 +174,7 @@ export function useLeads() {
     error: query.error,
     isPending,
     addLead: (input: CreateLeadInput) => create.mutateAsync(input),
+    importLeadsCsv: (rows: ImportLeadRow[]) => importCsv.mutateAsync(rows),
     updateLead: (id: string, input: UpdateLeadInput) => update.mutateAsync({ id, input }),
     deleteLead: (id: string) => remove.mutateAsync(id),
     addNote: (id: string, body: string) => note.mutateAsync({ id, body }),

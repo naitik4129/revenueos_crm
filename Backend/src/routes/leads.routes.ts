@@ -48,6 +48,49 @@ leadsRouter.post(
   }),
 );
 
+// --- Bulk CSV import ---------------------------------------------------------
+
+const importRowSchema = z.object({
+  rowNumber: z.number().int().positive(),
+  firstName: z.string(),
+  lastName: z.string().optional(),
+  company: z.string(),
+  jobTitle: z.string().optional(),
+  industry: z.string().optional(),
+  email: z.string().optional(),
+  phone: z.string().optional(),
+  // Left as a bare string (not z.enum(LEAD_SOURCES)) so an unrecognized
+  // value fails only that row, with leadsService.validateLeadFields's
+  // friendly message, instead of rejecting the whole batch at the schema
+  // layer -- partial import is the product decision here, not
+  // all-or-nothing.
+  source: z.string(),
+  serviceInterest: z.string().optional(),
+});
+
+const importLeadsSchema = z.object({
+  rows: z
+    .array(importRowSchema)
+    .min(1, "The file has no data rows to import.")
+    .max(2000, "This file has more than 2000 rows — split it and import in batches."),
+});
+
+leadsRouter.post(
+  "/import",
+  asyncHandler(async (req, res) => {
+    const input = parseBody(importLeadsSchema, req.body);
+    const result = await withTransaction((client) => leadsService.importLeads(client, req.actor!, input.rows));
+    res.status(201).json({
+      data: {
+        created: result.created.map((row) => leadToDto(row)),
+        duplicates: result.duplicates,
+        failed: result.failed,
+        totalRows: result.totalRows,
+      },
+    });
+  }),
+);
+
 const listLeadsQuerySchema = z.object({
   stage: z.enum(PIPELINE_STAGES).optional(),
   lifecycle: z.enum(LIFECYCLE_STATES).optional(),

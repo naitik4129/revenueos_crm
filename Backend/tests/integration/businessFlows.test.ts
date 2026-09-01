@@ -66,6 +66,7 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
   it("Scenario 1 — create lead: ownership, initial state, activity", async () => {
     const { createLead } = await import("../../src/services/leads.service.js");
     const { listTimelineForLead } = await import("../../src/services/timeline.service.js");
+    const { listTasks } = await import("../../src/services/tasks.service.js");
 
     const lead = await withTestTransaction((client) =>
       createLead(client, actor, { firstName: "Ada", company: "Analytics Co", source: "website", email: "ada@example.com" }),
@@ -79,6 +80,11 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const timeline = await listTimelineForLead(pool, lead.id);
     expect(timeline.some((e) => e.title === "Lead Created")).toBe(true);
     expect(timeline.some((e) => e.title === "Lead Assigned")).toBe(true);
+
+    // A brand-new lead must never sit with no next action assigned.
+    const tasks = await listTasks(pool, { leadId: lead.id, status: "open" });
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ type: "call", title: "First call", ownerId: actor.id, origin: "manual" });
   });
 
   it("Scenario 2 — call not connected: stage, task, nurture enrollment", async () => {
@@ -250,5 +256,43 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     // Re-enrolling while the run is still active is a no-op (no duplicate enrollment), not an error.
     const duplicate = await withTestTransaction((client) => enrollLeadInWorkflow(client, lead.id, workflow.id, "Second attempt"));
     expect(duplicate).toBeNull();
+  });
+
+  it("importLeads: partial import — valid rows created, existing-lead duplicates and invalid rows reported with reasons", async () => {
+    const { createLead, importLeads } = await import("../../src/services/leads.service.js");
+    const { listTimelineForLead } = await import("../../src/services/timeline.service.js");
+    const { listTasks } = await import("../../src/services/tasks.service.js");
+
+    const existing = await withTestTransaction((client) =>
+      createLead(client, actor, { firstName: "Dup", company: "Existing Co", source: "website", email: "dup-import@example.com" }),
+    );
+
+    const result = await withTestTransaction((client) =>
+      importLeads(client, actor, [
+        { rowNumber: 2, firstName: "Grace", company: "Compiler Co", source: "cold_call", email: "grace-import@example.com" },
+        { rowNumber: 3, firstName: "Dup2", company: "Whoever", source: "website", email: existing.email! },
+        { rowNumber: 4, firstName: "", company: "No First Name Ltd", source: "website", email: "noone@example.com" },
+        { rowNumber: 5, firstName: "Bad", company: "Source Ltd", source: "made_up_source", email: "bad-source@example.com" },
+      ]),
+    );
+
+    expect(result.totalRows).toBe(4);
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0]?.first_name).toBe("Grace");
+
+    expect(result.duplicates).toHaveLength(1);
+    expect(result.duplicates[0]).toMatchObject({ rowNumber: 3, reason: expect.stringContaining("existing lead") });
+
+    expect(result.failed).toHaveLength(2);
+    expect(result.failed.find((f) => f.rowNumber === 4)?.reason).toBe("First name is required.");
+    expect(result.failed.find((f) => f.rowNumber === 5)?.reason).toContain('Unknown source "made_up_source"');
+
+    const timeline = await listTimelineForLead(pool, result.created[0]!.id);
+    expect(timeline.some((e) => e.title === "Lead Created" && e.detail?.includes("CSV import"))).toBe(true);
+
+    // Imported leads need a next action too, same as a manually created lead.
+    const tasks = await listTasks(pool, { leadId: result.created[0]!.id, status: "open" });
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ type: "call", title: "First call", ownerId: actor.id });
   });
 });

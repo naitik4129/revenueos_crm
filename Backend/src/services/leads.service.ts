@@ -1,11 +1,12 @@
 import type { Queryable } from "../dto.js";
+import { addDaysIso } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import { assertPipelineStageEditable, assertValidLifecycleState, assertValidPipelineStage, isTerminalLifecycle } from "../domain/pipeline.js";
 import type { AutomationMode, ContactChannel, LeadSource, LifecycleState, PipelineStage, ResponseState } from "../domain/enums.js";
-import { CONTACT_CHANNEL_STATUS } from "../domain/enums.js";
+import { CONTACT_CHANNEL_STATUS, LEAD_SOURCES } from "../domain/enums.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
-import { cancelOpenTasksForLead, getLeadNextAction } from "./tasks.service.js";
+import { cancelOpenTasksForLead, createTask, getLeadNextAction } from "./tasks.service.js";
 import { applyAutomationModeToRuns } from "./runs.service.js";
 import { normalizePhoneE164 } from "../domain/phone.js";
 
@@ -89,9 +90,43 @@ export interface CreateLeadInput {
   ownerId?: string;
 }
 
-export async function createLead(db: Queryable, actor: Actor, input: CreateLeadInput): Promise<LeadRow> {
-  if (!input.firstName.trim()) throw new ValidationError("First name is required.");
-  if (!input.company.trim()) throw new ValidationError("Company is required.");
+/** Field shape both createLead (single) and importLeads (bulk CSV) validate against. `source` is a bare string here so a bulk-import row with an unrecognized value fails with a friendly per-row message instead of being rejected at the type/schema layer. */
+export interface LeadFieldsInput {
+  firstName: string;
+  lastName?: string;
+  company: string;
+  jobTitle?: string;
+  industry?: string;
+  email?: string;
+  phone?: string;
+  source: string;
+  serviceInterest?: string;
+}
+
+export interface ValidatedLeadFields {
+  firstName: string;
+  lastName: string;
+  company: string;
+  jobTitle: string | null;
+  industry: string | null;
+  email: string | null;
+  phone: string | null;
+  phoneE164: string | null;
+  source: LeadSource;
+  serviceInterest: string | null;
+}
+
+/**
+ * Single source of truth for lead field business rules, shared by createLead
+ * (single-create) and importLeads (bulk CSV import) so the two paths can
+ * never silently diverge. Throws the same ValidationError messages
+ * createLead has always thrown.
+ */
+export function validateLeadFields(input: LeadFieldsInput): ValidatedLeadFields {
+  const firstName = input.firstName.trim();
+  if (!firstName) throw new ValidationError("First name is required.");
+  const company = input.company.trim();
+  if (!company) throw new ValidationError("Company is required.");
   if (!input.email?.trim() && !input.phone?.trim()) {
     throw new ValidationError("Provide at least an email or a phone number.");
   }
@@ -100,6 +135,26 @@ export async function createLead(db: Queryable, actor: Actor, input: CreateLeadI
   if (phone && !phoneE164) {
     throw new ValidationError("Enter a valid phone number. Indian local numbers default to +91; international numbers must include their country code.");
   }
+  if (!(LEAD_SOURCES as readonly string[]).includes(input.source)) {
+    throw new ValidationError(`Unknown source "${input.source}" — must be one of: ${LEAD_SOURCES.join(", ")}.`);
+  }
+
+  return {
+    firstName,
+    lastName: input.lastName?.trim() ?? "",
+    company,
+    jobTitle: input.jobTitle?.trim() || null,
+    industry: input.industry?.trim() || null,
+    email: input.email?.trim() || null,
+    phone,
+    phoneE164,
+    source: input.source as LeadSource,
+    serviceInterest: input.serviceInterest?.trim() || null,
+  };
+}
+
+export async function createLead(db: Queryable, actor: Actor, input: CreateLeadInput): Promise<LeadRow> {
+  const fields = validateLeadFields(input);
 
   const ownerId = input.ownerId ?? actor.id;
   const result = await db.query<{ id: string }>(
@@ -109,16 +164,16 @@ export async function createLead(db: Queryable, actor: Actor, input: CreateLeadI
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      returning id`,
     [
-      input.firstName.trim(),
-      input.lastName?.trim() ?? "",
-      input.company.trim(),
-      input.jobTitle?.trim() ?? null,
-      input.industry?.trim() ?? null,
-      input.email?.trim() ?? null,
-      phone,
-      phoneE164,
-      input.source,
-      input.serviceInterest?.trim() ?? null,
+      fields.firstName,
+      fields.lastName,
+      fields.company,
+      fields.jobTitle,
+      fields.industry,
+      fields.email,
+      fields.phone,
+      fields.phoneE164,
+      fields.source,
+      fields.serviceInterest,
       ownerId,
       actor.id,
       actor.fullName,
@@ -133,7 +188,7 @@ export async function createLead(db: Queryable, actor: Actor, input: CreateLeadI
     leadId: id,
     kind: "system",
     title: "Lead Created",
-    detail: `Source: ${input.source}`,
+    detail: `Source: ${fields.source}`,
     ...actorEvent(actor),
   });
   await addTimelineEvent(db, {
@@ -144,6 +199,19 @@ export async function createLead(db: Queryable, actor: Actor, input: CreateLeadI
     ...actorEvent(actor),
   });
 
+  // Every new lead needs a next action from the moment it exists (Rule: an
+  // active lead should never sit with nothing assigned — see the leads list
+  // page's "no next action" warning) rather than waiting for a rep to
+  // remember to add one manually.
+  await createTask(db, actor, {
+    leadId: id,
+    ownerId,
+    type: "call",
+    title: "First call",
+    dueAt: addDaysIso(0),
+    origin: "manual",
+  });
+
   return getLeadRowOr404(db, id);
 }
 
@@ -152,6 +220,136 @@ export async function getLeadRowOr404(db: Queryable, id: string): Promise<LeadRo
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Lead");
   return row;
+}
+
+export interface ImportLeadRowInput extends LeadFieldsInput {
+  rowNumber: number;
+}
+
+export interface ImportRowOutcome {
+  rowNumber: number;
+  reason: string;
+}
+
+export interface ImportLeadsResult {
+  created: LeadRow[];
+  duplicates: ImportRowOutcome[];
+  failed: ImportRowOutcome[];
+  totalRows: number;
+}
+
+/**
+ * Bulk CSV import. Authoritative: re-validates every row with the exact same
+ * rules as createLead (validateLeadFields) rather than trusting the client's
+ * own parse-time checks. Invalid rows are skipped and reported (partial
+ * import, not all-or-nothing -- product decision). A row whose email or
+ * phone matches an EXISTING lead, or another row earlier in the same file,
+ * is skipped and reported as a duplicate rather than overwriting anything.
+ * Every created lead gets the same "Lead Created"/"Lead Assigned" timeline
+ * events and the same automatic "First call" task createLead writes, so
+ * it's traceable from the lead's own history and immediately actionable --
+ * no separate audit table, since importing (unlike hard-delete) isn't
+ * irreversible and a bad import can just be deleted normally.
+ */
+export async function importLeads(db: Queryable, actor: Actor, rows: ImportLeadRowInput[]): Promise<ImportLeadsResult> {
+  const created: LeadRow[] = [];
+  const duplicates: ImportRowOutcome[] = [];
+  const failed: ImportRowOutcome[] = [];
+
+  const validRows: { rowNumber: number; fields: ValidatedLeadFields }[] = [];
+  for (const row of rows) {
+    try {
+      validRows.push({ rowNumber: row.rowNumber, fields: validateLeadFields(row) });
+    } catch (err) {
+      failed.push({ rowNumber: row.rowNumber, reason: err instanceof ValidationError ? err.message : "Invalid row." });
+    }
+  }
+
+  const emailKeys = [...new Set(validRows.flatMap((r) => (r.fields.email ? [r.fields.email.toLowerCase()] : [])))];
+  const phoneKeys = [...new Set(validRows.flatMap((r) => (r.fields.phoneE164 ? [r.fields.phoneE164] : [])))];
+  const existing = await db.query<{ email: string | null; phone_e164: string | null }>(
+    `select lower(email) as email, phone_e164
+       from public.leads
+      where (email is not null and lower(email) = any($1::text[]))
+         or (phone_e164 is not null and phone_e164 = any($2::text[]))`,
+    [emailKeys, phoneKeys],
+  );
+  const existingEmails = new Set(existing.rows.flatMap((r) => (r.email ? [r.email] : [])));
+  const existingPhones = new Set(existing.rows.flatMap((r) => (r.phone_e164 ? [r.phone_e164] : [])));
+
+  const ownerRow = await db.query<{ full_name: string }>(`select full_name from public.profiles where id = $1`, [actor.id]);
+  const ownerName = ownerRow.rows[0]?.full_name ?? actor.fullName;
+
+  const seenEmails = new Set<string>();
+  const seenPhones = new Set<string>();
+
+  for (const { rowNumber, fields } of validRows) {
+    const emailKey = fields.email?.toLowerCase() ?? null;
+    const phoneKey = fields.phoneE164;
+
+    const isDbDup = (!!emailKey && existingEmails.has(emailKey)) || (!!phoneKey && existingPhones.has(phoneKey));
+    const isBatchDup = (!!emailKey && seenEmails.has(emailKey)) || (!!phoneKey && seenPhones.has(phoneKey));
+    if (isDbDup || isBatchDup) {
+      duplicates.push({
+        rowNumber,
+        reason: isDbDup ? "Matches an existing lead by email or phone." : "Duplicate of another row earlier in this file.",
+      });
+      continue;
+    }
+    if (emailKey) seenEmails.add(emailKey);
+    if (phoneKey) seenPhones.add(phoneKey);
+
+    const result = await db.query<{ id: string }>(
+      `insert into public.leads
+        (first_name, last_name, company, job_title, industry, email, phone, phone_e164, source,
+         service_interest, owner_id, created_by, created_by_name)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       returning id`,
+      [
+        fields.firstName,
+        fields.lastName,
+        fields.company,
+        fields.jobTitle,
+        fields.industry,
+        fields.email,
+        fields.phone,
+        fields.phoneE164,
+        fields.source,
+        fields.serviceInterest,
+        actor.id,
+        actor.id,
+        actor.fullName,
+      ],
+    );
+    const id = result.rows[0]!.id;
+
+    await addTimelineEvent(db, {
+      leadId: id,
+      kind: "system",
+      title: "Lead Created",
+      detail: `Source: ${fields.source} (CSV import)`,
+      ...actorEvent(actor),
+    });
+    await addTimelineEvent(db, {
+      leadId: id,
+      kind: "system",
+      title: "Lead Assigned",
+      detail: `Owner: ${ownerName}`,
+      ...actorEvent(actor),
+    });
+    await createTask(db, actor, {
+      leadId: id,
+      ownerId: actor.id,
+      type: "call",
+      title: "First call",
+      dueAt: addDaysIso(0),
+      origin: "manual",
+    });
+
+    created.push(await getLeadRowOr404(db, id));
+  }
+
+  return { created, duplicates, failed, totalRows: rows.length };
 }
 
 export interface ListLeadsFilters {

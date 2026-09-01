@@ -148,6 +148,24 @@ export interface CreateLeadInput {
   serviceInterest?: string | undefined;
   ownerId?: string | undefined;
 }
+export interface ImportLeadRow {
+  rowNumber: number;
+  firstName: string;
+  lastName?: string | undefined;
+  company: string;
+  jobTitle?: string | undefined;
+  industry?: string | undefined;
+  email?: string | undefined;
+  phone?: string | undefined;
+  source: string;
+  serviceInterest?: string | undefined;
+}
+export interface ImportLeadsResult {
+  created: Lead[];
+  duplicates: { rowNumber: number; reason: string }[];
+  failed: { rowNumber: number; reason: string }[];
+  totalRows: number;
+}
 export interface UpdateLeadInput {
   firstName?: string | undefined;
   lastName?: string | undefined;
@@ -409,6 +427,8 @@ export const backend = {
       ),
     get: (id: string, signal?: AbortSignal) => get<Lead>(`/leads/${id}`, signal),
     create: (input: CreateLeadInput) => send<Lead>("POST", "/leads", input),
+    importCsv: (rows: ImportLeadRow[]) =>
+      send<{ data: ImportLeadsResult }>("POST", "/leads/import", { rows }),
     update: (id: string, fields: UpdateLeadInput) => send<Lead>("PATCH", `/leads/${id}`, fields),
     delete: (id: string) => del(`/leads/${id}`),
     addNote: (id: string, body: string) => send<LeadNote>("POST", `/leads/${id}/notes`, { body }),

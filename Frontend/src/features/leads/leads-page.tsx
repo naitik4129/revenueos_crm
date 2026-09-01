@@ -19,6 +19,7 @@ import { useAutomations, useLeads, useSession } from "@/store";
 import { PIPELINE_STAGES } from "@/types";
 import { label } from "@/lib/labels";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
+import { ImportLeadsDialog } from "./import-leads-dialog";
 
 export function LeadsPage() {
   const { leads, isLoading, error } = useLeads();
@@ -29,6 +30,7 @@ export function LeadsPage() {
   const [owner, setOwner] = useState("all");
   const [stage, setStage] = useState("all");
   const [auto, setAuto] = useState("all");
+  const [importOpen, setImportOpen] = useState(false);
 
   // Same blind spot as the lead detail page's "Next action" card: a lead
   // whose active workflow's next step is send_email/send_whatsapp has no
@@ -65,11 +67,17 @@ export function LeadsPage() {
         title="Leads"
         description="One row per lead. Stage, next action and automation state tell you what happens next."
         actions={
-          <Button size="sm" onClick={addLead.open}>
-            Add lead
-          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+              Import from CSV
+            </Button>
+            <Button size="sm" onClick={addLead.open}>
+              Add lead
+            </Button>
+          </div>
         }
       />
+      <ImportLeadsDialog open={importOpen} onOpenChange={setImportOpen} />
 
       <div className="space-y-4 p-6">
         <div className="flex flex-wrap items-center gap-2">
