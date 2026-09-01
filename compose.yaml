@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     init: true
     ports:
-      - "${BACKEND_PORT:-8787}:8787"
+      - "127.0.0.1:${BACKEND_PORT:-8787}:8787"
     environment:
       PORT: 8787
       NODE_ENV: production
@@ -56,7 +56,7 @@ services:
       # nginx.conf hardcodes `listen 8080` inside the container (the
       # nginx-unprivileged base image's default) — only the host side of this
       # mapping is configurable.
-      - "${FRONTEND_PORT:-8080}:8080"
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:8080"
     restart: unless-stopped
     depends_on:
       - backend
