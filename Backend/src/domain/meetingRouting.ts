@@ -16,6 +16,11 @@ export interface MeetingRoutingResult {
  */
 export function routeMeetingOutcome(outcome: MeetingOutcome): MeetingRoutingResult {
   switch (outcome) {
+    case "won":
+      // Lifecycle-level outcome, not a pipeline stage -- mirrors the
+      // proposal-accepted -> lifecycle_state = 'won' path exactly (no stage
+      // change, no follow-up task; markWon cancels open tasks itself).
+      return { lifecycle: "won" };
     case "proposal_required":
       return {
         stage: "proposal_preparation",

@@ -138,6 +138,7 @@ export type MeetingStatus = (typeof MEETING_STATUSES)[number];
 
 export const MEETING_OUTCOMES = [
   "proposal_required",
+  "won",
   "follow_up_required",
   "second_meeting",
   "not_interested",

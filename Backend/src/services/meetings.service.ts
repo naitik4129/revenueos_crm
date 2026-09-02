@@ -5,7 +5,7 @@ import type { MeetingOutcome, MeetingStatus } from "../domain/enums.js";
 import { routeMeetingOutcome } from "../domain/meetingRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
 import { cancelOpenTasksForLead, createTask } from "./tasks.service.js";
-import { getLeadRowOr404, moveToLongTermNurture, updateLead, type LeadRow } from "./leads.service.js";
+import { getLeadRowOr404, markWon, moveToLongTermNurture, updateLead, type LeadRow } from "./leads.service.js";
 import { cancelRunsForLead } from "./runs.service.js";
 import { addDaysIso } from "../dto.js";
 import { pipelineStageIndex } from "../domain/pipeline.js";
@@ -272,6 +272,7 @@ export async function recordMeetingOutcome(db: Queryable, actor: Actor, id: stri
   const routing = routeMeetingOutcome(outcome);
   if (routing.stage) await updateLead(db, actor, meeting.lead_id, { pipelineStage: routing.stage });
   if (routing.lifecycle === "long_term_nurture") await moveToLongTermNurture(db, actor, meeting.lead_id, `Meeting outcome: ${outcome}`);
+  if (routing.lifecycle === "won") await markWon(db, actor, meeting.lead_id, `Meeting outcome: ${outcome}`);
   if (routing.task) {
     await createTask(db, actor, {
       leadId: meeting.lead_id,

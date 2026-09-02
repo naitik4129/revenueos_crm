@@ -173,6 +173,30 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     expect(summary.proposalFollowUps).toBeGreaterThan(0);
   });
 
+  it("routes a Won meeting outcome to lifecycle_state = won and cancels open tasks", async () => {
+    const { createLead, getLeadRowOr404 } = await import("../../src/services/leads.service.js");
+    const { scheduleMeeting, recordMeetingOutcome } = await import("../../src/services/meetings.service.js");
+    const { listTasks } = await import("../../src/services/tasks.service.js");
+    const { listTimelineForLead } = await import("../../src/services/timeline.service.js");
+    const lead = await withTestTransaction((client) =>
+      createLead(client, actor, { firstName: "Gita", company: "Gamma Corp", source: "event", email: "gita@example.com" }),
+    );
+    const meeting = await withTestTransaction((client) =>
+      scheduleMeeting(client, actor, { leadId: lead.id, title: "Closing call", at: "2030-01-05T04:30:00.000Z", durationMin: 30 }),
+    );
+    await withTestTransaction((client) => recordMeetingOutcome(client, actor, meeting.id, "won", "Signed the deal"));
+
+    const routedLead = await getLeadRowOr404(pool, lead.id);
+    expect(routedLead.lifecycle_state).toBe("won");
+    expect(routedLead.automation_mode).toBe("stopped");
+
+    const tasks = await listTasks(pool, { leadId: lead.id });
+    expect(tasks.every((task) => task.status !== "open")).toBe(true);
+
+    const timeline = await listTimelineForLead(pool, lead.id);
+    expect(timeline.some((event) => event.title === "Won")).toBe(true);
+  });
+
   it("does not regress a lead's pipeline stage when a second meeting is booked past meeting_scheduled", async () => {
     const { createLead, getLeadRowOr404, updateLead } = await import("../../src/services/leads.service.js");
     const { scheduleMeeting } = await import("../../src/services/meetings.service.js");

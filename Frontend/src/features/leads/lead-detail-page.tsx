@@ -196,7 +196,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
             pipelineStage={lead.pipelineStage}
             doNotContact={lead.doNotContact}
             onCallClick={() => {
-              setCallTaskId(undefined);
+              setCallTaskId(lead.nextAction?.type === "call" ? lead.nextAction.taskId : undefined);
               setCallOpen(true);
             }}
             onEnrollClick={() => openEnroll(nurtureTriggerForStage(lead.pipelineStage))}

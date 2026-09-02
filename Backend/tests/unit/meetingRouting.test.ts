@@ -25,4 +25,11 @@ describe("routeMeetingOutcome", () => {
     expect(r.stage).toBeUndefined();
     expect(r.task).toMatchObject({ dueInDays: 45 });
   });
+
+  it("Won -> lifecycle Won, no stage change, no task", () => {
+    const r = routeMeetingOutcome("won");
+    expect(r.lifecycle).toBe("won");
+    expect(r.stage).toBeUndefined();
+    expect(r.task).toBeUndefined();
+  });
 });
