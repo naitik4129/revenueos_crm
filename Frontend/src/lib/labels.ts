@@ -8,6 +8,7 @@ const SPECIAL: Record<string, string> = {
   call_not_connected: "Call Not Connected",
   proposal_pending: "Proposal Pending",
   manual_enrollment: "Manual Enrollment",
+  lead_created: "New Lead Created",
 };
 export function label(value?: string | null) {
   if (!value) return "—";

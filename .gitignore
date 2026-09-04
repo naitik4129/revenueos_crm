@@ -1,0 +1,4 @@
+# One-off, hand-run SQL meant for manual execution in the Supabase SQL
+# editor (data seeding, not schema changes). Never committed — permanent
+# schema changes belong in Supabase/migrations/*.sql instead.
+/Supabase/disposable/

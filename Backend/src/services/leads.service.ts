@@ -7,7 +7,7 @@ import type { AutomationMode, ContactChannel, LeadSource, LifecycleState, Pipeli
 import { CONTACT_CHANNEL_STATUS, LEAD_SOURCES } from "../domain/enums.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { cancelOpenTasksForLead, createTask, getLeadNextAction } from "./tasks.service.js";
-import { applyAutomationModeToRuns } from "./runs.service.js";
+import { applyAutomationModeToRuns, autoEnroll } from "./runs.service.js";
 import { normalizePhoneE164 } from "../domain/phone.js";
 
 export interface LeadRow {
@@ -212,6 +212,12 @@ export async function createLead(db: Queryable, actor: Actor, input: CreateLeadI
     origin: "manual",
   });
 
+  // Stage 1 of the nurture funnel: the welcome email + WhatsApp sequence
+  // starts immediately in parallel with the human BD call task above, not
+  // after it. Enrollment is a quiet no-op if no active published workflow
+  // is configured for this trigger yet (see autoEnroll).
+  await autoEnroll(db, id, "lead_created", "New lead entered CRM — Stage 1 welcome sequence");
+
   return getLeadRowOr404(db, id);
 }
 
@@ -345,6 +351,10 @@ export async function importLeads(db: Queryable, actor: Actor, rows: ImportLeadR
       dueAt: addDaysIso(0),
       origin: "manual",
     });
+
+    // Same Stage 1 welcome sequence as a single lead create — every
+    // imported row gets it, not just leads added one at a time.
+    await autoEnroll(db, id, "lead_created", "New lead entered CRM — Stage 1 welcome sequence (CSV import)");
 
     created.push(await getLeadRowOr404(db, id));
   }

@@ -1,4 +1,5 @@
 export const WORKFLOW_TRIGGERS = [
+  "lead_created",
   "call_not_connected",
   "call_outcome_maybe",
   "call_outcome_negative",
