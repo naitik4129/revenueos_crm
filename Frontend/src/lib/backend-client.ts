@@ -7,6 +7,7 @@ import type {
   CallNotConnectedReason,
   Contactability,
   Lead,
+  LeadLossReason,
   LeadNote,
   LeadSource,
   LifecycleState,
@@ -197,6 +198,15 @@ export interface LogCallInput {
   notes?: string | undefined;
   callbackDueAt?: string | undefined;
   taskId?: string | undefined;
+  /** "Interested - Later" capture — read by the backend only when connectedOutcome === 'interested_later'. */
+  interestedLater?:
+    | {
+        reason?: string | undefined;
+        restartAt?: string | undefined;
+        nextAction?: string | undefined;
+        decisionOwner?: string | undefined;
+      }
+    | undefined;
 }
 export interface CreateTaskInput {
   leadId: string;
@@ -442,11 +452,14 @@ export const backend = {
     reactivateFromDnc: (id: string, reason: string) =>
       send<Lead>("POST", `/leads/${id}/dnc/reactivate`, { reason }),
     markWon: (id: string, reason?: string) => send<Lead>("POST", `/leads/${id}/won`, { reason }),
-    markLost: (id: string, reason?: string) => send<Lead>("POST", `/leads/${id}/lost`, { reason }),
+    markLost: (id: string, lossReason: LeadLossReason, notes?: string) =>
+      send<Lead>("POST", `/leads/${id}/lost`, { lossReason, notes }),
     discard: (id: string, reason?: string) =>
       send<Lead>("POST", `/leads/${id}/discard`, { reason }),
     reactivate: (id: string, reason?: string) =>
       send<Lead>("POST", `/leads/${id}/reactivate`, { reason }),
+    longTermNurture: (id: string, reason?: string) =>
+      send<Lead>("POST", `/leads/${id}/long-term-nurture`, { reason }),
     logCall: (id: string, input: LogCallInput) =>
       send<{
         call: Call;
@@ -502,8 +515,12 @@ export const backend = {
     },
     update: (id: string, input: UpdateProposalInput) =>
       send<Proposal>("PATCH", `/proposals/${id}`, input),
-    setStatus: (id: string, status: ProposalStatus) =>
-      send<Proposal>("POST", `/proposals/${id}/status`, { status }),
+    setStatus: (
+      id: string,
+      status: ProposalStatus,
+      lossReason?: LeadLossReason,
+      lossNotes?: string,
+    ) => send<Proposal>("POST", `/proposals/${id}/status`, { status, lossReason, lossNotes }),
   },
   workflows: {
     list: (signal?: AbortSignal) => get<{ data: Workflow[] }>("/workflows", signal),

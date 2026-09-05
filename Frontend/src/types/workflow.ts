@@ -1,8 +1,17 @@
+/** `call_outcome_maybe`/`call_outcome_negative` intentionally omitted — see types/lead.ts comment. */
 export const WORKFLOW_TRIGGERS = [
   "lead_created",
   "call_not_connected",
-  "call_outcome_maybe",
-  "call_outcome_negative",
+  "call_outcome_interested_later",
+  "call_outcome_future_possibility",
+  "call_outcome_information_requested",
+  "objection_commission_only",
+  "objection_internal_hiring",
+  "objection_existing_team",
+  "objection_budget_price",
+  "objection_internal_approval",
+  "meeting_needs_more_information",
+  "meeting_not_ready",
   "proposal_pending",
   "manual_enrollment",
 ] as const;

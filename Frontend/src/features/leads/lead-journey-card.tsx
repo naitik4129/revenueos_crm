@@ -7,11 +7,17 @@ import { useAutomations } from "@/store";
 import type { PipelineStage } from "@/types";
 import { ScheduledFollowupTimeline } from "./scheduled-followups";
 
-const CALL_STAGES: PipelineStage[] = ["new", "ready_for_first_call", "contact_attempted"];
+const CALL_STAGES: PipelineStage[] = [
+  "new",
+  "ready_for_first_call",
+  "contact_attempted",
+  "connected_qualifying",
+];
 const NURTURE_STAGES: PipelineStage[] = [
   "not_connected_nurture",
-  "maybe_nurture",
-  "negative_nurture",
+  "interested_later",
+  "future_possibility",
+  "objection_nurture",
 ];
 const MEETING_STAGES: PipelineStage[] = [
   "meeting_scheduling",
@@ -22,6 +28,7 @@ const PROPOSAL_STAGES: PipelineStage[] = [
   "proposal_preparation",
   "proposal_sent",
   "proposal_decision_pending",
+  "negotiation",
 ];
 
 type Phase = "new" | "call" | "nurture" | "meeting" | "proposal";

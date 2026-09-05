@@ -56,12 +56,21 @@ export function LogCallDialog({
   const [outcome, setOutcome] = useState<CallConnectedOutcome | null>(null);
   const [notes, setNotes] = useState("");
   const [callbackAt, setCallbackAt] = useState(dateInputValue(1));
+  // "Interested - Later" capture — only shown/sent when outcome is interested_later.
+  const [interestedLaterReason, setInterestedLaterReason] = useState("");
+  const [interestedLaterRestartAt, setInterestedLaterRestartAt] = useState("");
+  const [interestedLaterNextAction, setInterestedLaterNextAction] = useState("");
+  const [interestedLaterDecisionOwner, setInterestedLaterDecisionOwner] = useState("");
   const reset = () => {
     setConnected(null);
     setOutcome(null);
     setNotes("");
     setReason("no_answer");
     setCallbackAt(dateInputValue(1));
+    setInterestedLaterReason("");
+    setInterestedLaterRestartAt("");
+    setInterestedLaterNextAction("");
+    setInterestedLaterDecisionOwner("");
   };
   if (!lead) return null;
   const canSave =
@@ -81,6 +90,16 @@ export function LogCallDialog({
         notes: notes.trim() || undefined,
         ...(connected && outcome === "callback_requested"
           ? { callbackDueAt: toIsoFromIst(callbackAt) }
+          : {}),
+        ...(connected && outcome === "interested_later"
+          ? {
+              interestedLater: {
+                reason: interestedLaterReason.trim() || undefined,
+                restartAt: interestedLaterRestartAt || undefined,
+                nextAction: interestedLaterNextAction.trim() || undefined,
+                decisionOwner: interestedLaterDecisionOwner.trim() || undefined,
+              },
+            }
           : {}),
         taskId,
       });
@@ -178,6 +197,46 @@ export function LogCallDialog({
                 value={callbackAt}
                 onChange={(event) => setCallbackAt(event.target.value)}
               />
+            </div>
+          )}
+          {outcome === "interested_later" && (
+            <div className="space-y-3 rounded-md border p-3">
+              <p className="text-xs font-medium text-muted-foreground">
+                Interested – Later details
+              </p>
+              <div>
+                <Label className="mb-1.5 block text-xs">Reason for delay</Label>
+                <Input
+                  placeholder="e.g. Budget cycle, product launch, internal hiring…"
+                  value={interestedLaterReason}
+                  onChange={(event) => setInterestedLaterReason(event.target.value)}
+                />
+              </div>
+              <div>
+                <Label className="mb-1.5 block text-xs">Expected restart date</Label>
+                <Input
+                  type="date"
+                  min={dateInputValue()}
+                  value={interestedLaterRestartAt}
+                  onChange={(event) => setInterestedLaterRestartAt(event.target.value)}
+                />
+              </div>
+              <div>
+                <Label className="mb-1.5 block text-xs">Next planned action</Label>
+                <Input
+                  placeholder="e.g. Reconnect, share case study, management presentation…"
+                  value={interestedLaterNextAction}
+                  onChange={(event) => setInterestedLaterNextAction(event.target.value)}
+                />
+              </div>
+              <div>
+                <Label className="mb-1.5 block text-xs">Decision owner</Label>
+                <Input
+                  placeholder="Person expected to reopen the conversation"
+                  value={interestedLaterDecisionOwner}
+                  onChange={(event) => setInterestedLaterDecisionOwner(event.target.value)}
+                />
+              </div>
             </div>
           )}
           <div>

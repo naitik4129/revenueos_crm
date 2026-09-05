@@ -5,21 +5,57 @@
  * is added there, add it here too.
  */
 
+/**
+ * `maybe_nurture` and `negative_nurture` are intentionally omitted here even
+ * though the Postgres enum still contains them (Postgres can't cheaply drop
+ * an enum value). They are retired in favor of the richer stages below
+ * (`interested_later`, `future_possibility`) and must never be produced by
+ * application code again — see Backend/src/domain/callRouting.ts.
+ *
+ * `negotiation` has no dedicated routing function: it is reachable only via
+ * the generic manual "Stage override" path (a rep sets it once commercial
+ * back-and-forth starts on a proposal) — this is intentional, not a gap.
+ */
 export const PIPELINE_STAGES = [
   "new",
   "ready_for_first_call",
   "contact_attempted",
   "not_connected_nurture",
-  "maybe_nurture",
-  "negative_nurture",
+  "connected_qualifying",
+  "interested_later",
+  "future_possibility",
+  "objection_nurture",
   "meeting_scheduling",
   "meeting_scheduled",
   "meeting_follow_up",
   "proposal_preparation",
   "proposal_sent",
   "proposal_decision_pending",
+  "negotiation",
 ] as const;
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
+
+export const OBJECTION_TYPES = [
+  "commission_only",
+  "internal_hiring",
+  "existing_team",
+  "budget_price",
+  "internal_approval",
+  "wrong_fit",
+] as const;
+export type ObjectionType = (typeof OBJECTION_TYPES)[number];
+
+export const LEAD_LOSS_REASONS = [
+  "price_budget",
+  "internal_hiring",
+  "project_postponed",
+  "competitor_selected",
+  "management_rejected",
+  "no_urgency",
+  "no_response",
+  "other",
+] as const;
+export type LeadLossReason = (typeof LEAD_LOSS_REASONS)[number];
 
 export const LIFECYCLE_STATES = [
   "active",
@@ -87,12 +123,28 @@ export const CALL_NOT_CONNECTED_REASONS = [
 ] as const;
 export type CallNotConnectedReason = (typeof CALL_NOT_CONNECTED_REASONS)[number];
 
+/**
+ * `maybe` and `negative` are intentionally omitted (see PIPELINE_STAGES
+ * comment above for why they stay in Postgres but not here). Replaced by
+ * `interested_later` and `future_possibility` respectively, plus 6 new
+ * named dispositions in the Human Call Classification list. `wrong_fit`
+ * (irrelevant company) is kept distinct from `wrong_person` (right company,
+ * wrong contact) — a deliberate refinement rather than collapsing both into
+ * one row; the existing `wrong_person` "preserve history, find the right
+ * contact" behavior is worth keeping separately.
+ */
 export const CALL_CONNECTED_OUTCOMES = [
   "positive",
-  "maybe",
-  "negative",
+  "interested_later",
+  "future_possibility",
   "callback_requested",
   "information_requested",
+  "commission_only",
+  "internal_hiring",
+  "existing_team",
+  "budget_price",
+  "internal_approval",
+  "wrong_fit",
   "wrong_person",
   "do_not_contact",
 ] as const;
@@ -136,8 +188,18 @@ export const MEETING_STATUSES = [
 ] as const;
 export type MeetingStatus = (typeof MEETING_STATUSES)[number];
 
+/**
+ * `follow_up_required` represents "Not ready -> Timed nurture" (kept, not
+ * renamed — same meaning, now wired to a workflowTrigger it didn't have
+ * before). `not_interested` represents "Not fit," deliberately still routed
+ * to lifecycle long_term_nurture rather than discarded — see
+ * Backend/src/domain/meetingRouting.ts for the rationale.
+ */
 export const MEETING_OUTCOMES = [
   "proposal_required",
+  "highly_interested",
+  "needs_internal_discussion",
+  "needs_more_information",
   "won",
   "follow_up_required",
   "second_meeting",
@@ -160,11 +222,24 @@ export const PROPOSAL_STATUSES = [
 ] as const;
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
+/**
+ * `call_outcome_maybe`/`call_outcome_negative` are intentionally omitted
+ * (see CALL_CONNECTED_OUTCOMES comment) — replaced by
+ * `call_outcome_interested_later`/`call_outcome_future_possibility`.
+ */
 export const WORKFLOW_TRIGGERS = [
   "lead_created",
   "call_not_connected",
-  "call_outcome_maybe",
-  "call_outcome_negative",
+  "call_outcome_interested_later",
+  "call_outcome_future_possibility",
+  "call_outcome_information_requested",
+  "objection_commission_only",
+  "objection_internal_hiring",
+  "objection_existing_team",
+  "objection_budget_price",
+  "objection_internal_approval",
+  "meeting_needs_more_information",
+  "meeting_not_ready",
   "proposal_pending",
   "manual_enrollment",
 ] as const;

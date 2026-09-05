@@ -19,6 +19,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { messageFromError, useLeads, useSession } from "@/store";
+import { BackendError } from "@/lib/backend-client";
+import {
+  normalizeEmail,
+  normalizePhone,
+  validateLeadForm,
+  type LeadFormErrors,
+} from "@/lib/lead-validation";
 import { LEAD_SOURCES, type Lead, type LeadSource } from "@/types";
 import { label } from "@/lib/labels";
 
@@ -72,6 +79,14 @@ function formFromLead(lead: Lead): FormState {
   };
 }
 
+function fieldFromDetails(details: unknown): string | null {
+  if (details && typeof details === "object" && "field" in details) {
+    const field = (details as { field?: unknown }).field;
+    return typeof field === "string" ? field : null;
+  }
+  return null;
+}
+
 export function EditLeadDialog({
   lead,
   open,
@@ -85,6 +100,11 @@ export function EditLeadDialog({
   const { users } = useSession();
   const [form, setForm] = useState<FormState>(() => formFromLead(lead));
   const [loadedFor, setLoadedFor] = useState(lead.id);
+  const [touched, setTouched] = useState<Partial<Record<keyof LeadFormErrors, boolean>>>({});
+  const [backendFieldError, setBackendFieldError] = useState<{
+    field: string;
+    message: string;
+  } | null>(null);
 
   // The dialog stays mounted (only `open` toggles), so the useState
   // initializer only runs once — re-sync whenever it's opened for a
@@ -93,13 +113,26 @@ export function EditLeadDialog({
   if (open && loadedFor !== lead.id) {
     setLoadedFor(lead.id);
     setForm(formFromLead(lead));
+    setTouched({});
+    setBackendFieldError(null);
   }
 
-  const set = (k: keyof FormState, v: string) => setForm((f) => ({ ...f, [k]: v }));
-  const valid =
-    form.firstName.trim() && form.company.trim() && (form.email.trim() || form.phone.trim());
+  const errors = validateLeadForm(form);
+  const set = (k: keyof FormState, v: string) => {
+    setForm((f) => ({ ...f, [k]: v }));
+    if (backendFieldError?.field === k) setBackendFieldError(null);
+  };
+  const touch = (k: keyof LeadFormErrors) => setTouched((t) => ({ ...t, [k]: true }));
+  const fieldError = (k: keyof LeadFormErrors) =>
+    backendFieldError?.field === k ? backendFieldError.message : touched[k] ? errors[k] : undefined;
 
   const submit = async () => {
+    if (Object.keys(errors).length > 0) {
+      setTouched({ firstName: true, company: true, email: true, phone: true, source: true });
+      return;
+    }
+    setBackendFieldError(null);
+
     try {
       await updateLead(lead.id, {
         firstName: form.firstName.trim(),
@@ -107,14 +140,19 @@ export function EditLeadDialog({
         company: form.company.trim(),
         jobTitle: form.jobTitle.trim(),
         industry: form.industry.trim(),
-        phone: form.phone.trim(),
-        email: form.email.trim(),
+        phone: form.phone.trim() ? (normalizePhone(form.phone).value ?? form.phone.trim()) : "",
+        email: form.email.trim() ? (normalizeEmail(form.email).value ?? form.email.trim()) : "",
         source: form.source,
         serviceInterest: form.serviceInterest,
         ownerId: form.ownerId || undefined,
       });
     } catch (error) {
-      toast.error(messageFromError(error));
+      const field = error instanceof BackendError ? fieldFromDetails(error.details) : null;
+      if (field) {
+        setBackendFieldError({ field, message: messageFromError(error) });
+      } else {
+        toast.error(messageFromError(error));
+      }
       return;
     }
     toast.success("Lead updated");
@@ -130,14 +168,24 @@ export function EditLeadDialog({
         </DialogHeader>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="First name">
-            <Input value={form.firstName} onChange={(e) => set("firstName", e.target.value)} />
+          <Field label="First name" error={fieldError("firstName")}>
+            <Input
+              value={form.firstName}
+              onChange={(e) => set("firstName", e.target.value)}
+              onBlur={() => touch("firstName")}
+              aria-invalid={Boolean(fieldError("firstName"))}
+            />
           </Field>
           <Field label="Last name">
             <Input value={form.lastName} onChange={(e) => set("lastName", e.target.value)} />
           </Field>
-          <Field label="Company" className="sm:col-span-2">
-            <Input value={form.company} onChange={(e) => set("company", e.target.value)} />
+          <Field label="Company" className="sm:col-span-2" error={fieldError("company")}>
+            <Input
+              value={form.company}
+              onChange={(e) => set("company", e.target.value)}
+              onBlur={() => touch("company")}
+              aria-invalid={Boolean(fieldError("company"))}
+            />
           </Field>
           <Field label="Job title">
             <Input value={form.jobTitle} onChange={(e) => set("jobTitle", e.target.value)} />
@@ -145,15 +193,30 @@ export function EditLeadDialog({
           <Field label="Industry">
             <Input value={form.industry} onChange={(e) => set("industry", e.target.value)} />
           </Field>
-          <Field label="Phone">
+          <Field label="Phone" error={fieldError("phone")}>
             <Input
               value={form.phone}
               onChange={(e) => set("phone", e.target.value)}
+              onBlur={() => {
+                touch("phone");
+                const { value } = normalizePhone(form.phone);
+                if (value) setForm((f) => ({ ...f, phone: value }));
+              }}
               placeholder="+91 …"
+              aria-invalid={Boolean(fieldError("phone"))}
             />
           </Field>
-          <Field label="Email">
-            <Input value={form.email} onChange={(e) => set("email", e.target.value)} />
+          <Field label="Email" error={fieldError("email")}>
+            <Input
+              value={form.email}
+              onChange={(e) => set("email", e.target.value)}
+              onBlur={() => {
+                touch("email");
+                const { value } = normalizeEmail(form.email);
+                if (value) setForm((f) => ({ ...f, email: value }));
+              }}
+              aria-invalid={Boolean(fieldError("email"))}
+            />
           </Field>
           <Field label="Lead source">
             <Select value={form.source} onValueChange={(v) => set("source", v)}>
@@ -203,7 +266,10 @@ export function EditLeadDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={!valid || isPending} onClick={() => void submit()}>
+          <Button
+            disabled={Object.keys(errors).length > 0 || isPending}
+            onClick={() => void submit()}
+          >
             {isPending ? "Saving…" : "Save changes"}
           </Button>
         </DialogFooter>
@@ -216,15 +282,18 @@ function Field({
   label,
   children,
   className,
+  error,
 }: {
   label: string;
   children: React.ReactNode;
   className?: string;
+  error?: string | undefined;
 }) {
   return (
     <div className={className}>
       <Label className="mb-1.5 block text-xs">{label}</Label>
       {children}
+      {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
     </div>
   );
 }

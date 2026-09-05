@@ -32,18 +32,52 @@ describe("routeConnectedOutcome", () => {
     expect(r.task?.type).toBe("schedule_meeting");
   });
 
-  it("routes Maybe to Maybe Nurture with a 7-day follow-up", () => {
-    const r = routeConnectedOutcome("maybe");
-    expect(r.stage).toBe("maybe_nurture");
-    expect(r.workflowTrigger).toBe("call_outcome_maybe");
-    expect(r.task).toMatchObject({ dueInDays: 7 });
+  it("routes Interested - Later with a 30-day follow-up when no restart date is captured", () => {
+    const r = routeConnectedOutcome("interested_later");
+    expect(r.stage).toBe("interested_later");
+    expect(r.workflowTrigger).toBe("call_outcome_interested_later");
+    expect(r.task).toMatchObject({ dueInDays: 30 });
   });
 
-  it("routes Negative to Negative Nurture with a 30-day check", () => {
-    const r = routeConnectedOutcome("negative");
-    expect(r.stage).toBe("negative_nurture");
-    expect(r.workflowTrigger).toBe("call_outcome_negative");
-    expect(r.task).toMatchObject({ dueInDays: 30 });
+  it("routes Interested - Later to reconnect 7 days before the captured restart date", () => {
+    const restartAt = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString();
+    const r = routeConnectedOutcome("interested_later", { restartAt });
+    expect(r.task?.dueInDays).toBe(13);
+  });
+
+  it("routes Future Possibility to a low-intensity 90-day check", () => {
+    const r = routeConnectedOutcome("future_possibility");
+    expect(r.stage).toBe("future_possibility");
+    expect(r.workflowTrigger).toBe("call_outcome_future_possibility");
+    expect(r.task).toMatchObject({ dueInDays: 90 });
+  });
+
+  it("routes Send Information to Connected - Qualifying with an active nurture sequence", () => {
+    const r = routeConnectedOutcome("information_requested");
+    expect(r.stage).toBe("connected_qualifying");
+    expect(r.automation).toBe("active");
+    expect(r.workflowTrigger).toBe("call_outcome_information_requested");
+  });
+
+  it.each([
+    ["commission_only", "objection_commission_only"],
+    ["internal_hiring", "objection_internal_hiring"],
+    ["existing_team", "objection_existing_team"],
+    ["budget_price", "objection_budget_price"],
+    ["internal_approval", "objection_internal_approval"],
+  ] as const)("routes %s objection to Objection Nurture + matching trigger", (outcome, trigger) => {
+    const r = routeConnectedOutcome(outcome);
+    expect(r.stage).toBe("objection_nurture");
+    expect(r.objectionType).toBe(outcome);
+    expect(r.workflowTrigger).toBe(trigger);
+  });
+
+  it("routes Wrong Fit to a manual archive/reroute task without nurture enrollment", () => {
+    const r = routeConnectedOutcome("wrong_fit");
+    expect(r.stage).toBeUndefined();
+    expect(r.automation).toBe("manual");
+    expect(r.objectionType).toBe("wrong_fit");
+    expect(r.workflowTrigger).toBeUndefined();
   });
 
   it("routes Callback Requested to Manual with a callback task and does NOT touch stage", () => {
@@ -51,13 +85,12 @@ describe("routeConnectedOutcome", () => {
     expect(r.stage).toBeUndefined();
     expect(r.automation).toBe("manual");
     expect(r.task?.type).toBe("call");
-    // must not be classified as Maybe/Negative nurture (product brief rule)
     expect(r.workflowTrigger).toBeUndefined();
   });
 
-  it("routes wrong_person without changing stage/automation (preserve interaction)", () => {
+  it("routes wrong_person to Connected - Qualifying without changing automation (preserve interaction)", () => {
     const r = routeConnectedOutcome("wrong_person");
-    expect(r.stage).toBeUndefined();
+    expect(r.stage).toBe("connected_qualifying");
     expect(r.automation).toBeUndefined();
     expect(r.task?.type).toBe("general_task");
   });

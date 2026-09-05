@@ -13,6 +13,7 @@ import {
   CONTACT_CHANNELS,
   CALL_NOT_CONNECTED_REASONS,
   CALL_CONNECTED_OUTCOMES,
+  LEAD_LOSS_REASONS,
 } from "../domain/enums.js";
 import * as leadsService from "../services/leads.service.js";
 import { leadToDto } from "../services/leads.service.js";
@@ -26,15 +27,22 @@ import { listRuns } from "../services/runs.service.js";
 export const leadsRouter = Router();
 leadsRouter.use(requireAuth);
 
+// firstName/company/source are bare optional strings, not z.string().min(1)/
+// z.enum(LEAD_SOURCES) -- a blank/unknown value is left for
+// leadsService.validateLeadFields to reject with its friendly, field-tagged
+// message, the same single source of truth the CSV import path already uses,
+// rather than failing here with Zod's differently-shaped .flatten() error.
+// email format is validated there too (normalizeEmail), not here, so it's
+// checked once, not by two different validators.
 const createLeadSchema = z.object({
-  firstName: z.string().min(1),
+  firstName: z.string().optional(),
   lastName: z.string().optional(),
-  company: z.string().min(1),
+  company: z.string().optional(),
   jobTitle: z.string().optional(),
   industry: z.string().optional(),
-  email: z.string().email().optional().or(z.literal("")),
+  email: z.string().optional(),
   phone: z.string().optional(),
-  source: z.enum(LEAD_SOURCES),
+  source: z.string().optional(),
   serviceInterest: z.string().optional(),
   ownerId: z.string().uuid().optional(),
 });
@@ -43,7 +51,14 @@ leadsRouter.post(
   "/",
   asyncHandler(async (req, res) => {
     const input = parseBody(createLeadSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.createLead(client, req.actor!, input));
+    const lead = await withTransaction((client) =>
+      leadsService.createLead(client, req.actor!, {
+        ...input,
+        firstName: input.firstName ?? "",
+        company: input.company ?? "",
+        source: input.source ?? "",
+      }),
+    );
     res.status(201).json(await withNextAction(lead));
   }),
 );
@@ -124,15 +139,20 @@ async function withNextAction(row: leadsService.LeadRow) {
   return leadToDto(row, nextAction);
 }
 
+// firstName/company/source left as bare optional strings, not
+// z.string().min(1)/z.enum(LEAD_SOURCES) -- leadsService.updateLead
+// re-validates all three itself (non-blank, known source) with the same
+// field-tagged ValidationError shape createLead uses, instead of Zod's
+// differently-shaped .flatten() error. email format is validated there too.
 const updateLeadSchema = z.object({
-  firstName: z.string().min(1).optional(),
+  firstName: z.string().optional(),
   lastName: z.string().optional(),
-  company: z.string().min(1).optional(),
+  company: z.string().optional(),
   jobTitle: z.string().optional(),
   industry: z.string().optional(),
-  email: z.string().email().optional().or(z.literal("")),
+  email: z.string().optional(),
   phone: z.string().optional(),
-  source: z.enum(LEAD_SOURCES).optional(),
+  source: z.string().optional(),
   serviceInterest: z.string().optional(),
   ownerId: z.string().uuid().optional(),
   pipelineStage: z.enum(PIPELINE_STAGES).optional(),
@@ -231,11 +251,13 @@ leadsRouter.post(
   }),
 );
 
+const markLostSchema = z.object({ lossReason: z.enum(LEAD_LOSS_REASONS), notes: z.string().optional() });
+
 leadsRouter.post(
   "/:id/lost",
   asyncHandler(async (req, res) => {
-    const { reason } = parseBody(optionalReasonSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.markLost(client, req.actor!, req.params.id!, reason));
+    const { lossReason, notes } = parseBody(markLostSchema, req.body);
+    const lead = await withTransaction((client) => leadsService.markLost(client, req.actor!, req.params.id!, lossReason, notes));
     res.json(await withNextAction(lead));
   }),
 );
@@ -245,6 +267,18 @@ leadsRouter.post(
   asyncHandler(async (req, res) => {
     const { reason } = parseBody(optionalReasonSchema, req.body);
     const lead = await withTransaction((client) => leadsService.markDiscarded(client, req.actor!, req.params.id!, reason));
+    res.json(await withNextAction(lead));
+  }),
+);
+
+// A rep-initiated "this lead is going quiet, park it" action.
+// moveToLongTermNurture already existed (reached only from meeting/proposal
+// routing); this is its first direct HTTP entry point.
+leadsRouter.post(
+  "/:id/long-term-nurture",
+  asyncHandler(async (req, res) => {
+    const { reason } = parseBody(optionalReasonSchema, req.body);
+    const lead = await withTransaction((client) => leadsService.moveToLongTermNurture(client, req.actor!, req.params.id!, reason));
     res.json(await withNextAction(lead));
   }),
 );
@@ -291,6 +325,13 @@ leadsRouter.post(
 
 // --- Calls -------------------------------------------------------------------
 
+const interestedLaterCaptureSchema = z.object({
+  reason: z.string().optional(),
+  restartAt: z.string().optional(),
+  nextAction: z.string().optional(),
+  decisionOwner: z.string().optional(),
+});
+
 const logCallSchema = z.object({
   connected: z.boolean(),
   notConnectedReason: z.enum(CALL_NOT_CONNECTED_REASONS).optional(),
@@ -298,6 +339,9 @@ const logCallSchema = z.object({
   notes: z.string().optional(),
   callbackDueAt: z.string().datetime({ offset: true }).optional(),
   taskId: z.string().uuid().optional(),
+  // "Interested - Later" capture — only meaningful (and only read by
+  // logCall) when connectedOutcome === 'interested_later'.
+  interestedLater: interestedLaterCaptureSchema.optional(),
 });
 
 leadsRouter.get(

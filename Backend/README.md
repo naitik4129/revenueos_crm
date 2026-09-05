@@ -118,7 +118,9 @@ POST       /leads/:id/communications        persist manual email/WhatsApp activi
 POST       /leads/:id/automation            {mode, reason?}
 POST       /leads/:id/dnc                   {reason}
 POST       /leads/:id/dnc/reactivate        {reason}
-POST       /leads/:id/won | /lost | /discard | /reactivate
+POST       /leads/:id/won | /discard | /reactivate
+POST       /leads/:id/lost                   {lossReason, notes?}
+POST       /leads/:id/long-term-nurture      {reason?}
 POST       /leads/:id/merge                 {targetLeadId, reason?}
 GET/POST   /leads/:id/contactability
 GET/POST   /leads/:id/calls                  logging a call IS outcome processing

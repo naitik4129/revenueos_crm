@@ -6,7 +6,7 @@ import { routeMeetingOutcome } from "../domain/meetingRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
 import { cancelOpenTasksForLead, createTask } from "./tasks.service.js";
 import { getLeadRowOr404, markWon, moveToLongTermNurture, updateLead, type LeadRow } from "./leads.service.js";
-import { cancelRunsForLead } from "./runs.service.js";
+import { autoEnroll, cancelRunsForLead } from "./runs.service.js";
 import { addDaysIso } from "../dto.js";
 import { pipelineStageIndex } from "../domain/pipeline.js";
 
@@ -270,7 +270,14 @@ export async function recordMeetingOutcome(db: Queryable, actor: Actor, id: stri
   });
 
   const routing = routeMeetingOutcome(outcome);
-  if (routing.stage) await updateLead(db, actor, meeting.lead_id, { pipelineStage: routing.stage });
+  // stage and objectionType must land in one update statement — see the
+  // identical constraint note in calls.service.ts::logCall.
+  if (routing.stage || routing.objectionType) {
+    await updateLead(db, actor, meeting.lead_id, {
+      ...(routing.stage ? { pipelineStage: routing.stage } : {}),
+      ...(routing.objectionType ? { objectionType: routing.objectionType } : {}),
+    });
+  }
   if (routing.lifecycle === "long_term_nurture") await moveToLongTermNurture(db, actor, meeting.lead_id, `Meeting outcome: ${outcome}`);
   if (routing.lifecycle === "won") await markWon(db, actor, meeting.lead_id, `Meeting outcome: ${outcome}`);
   if (routing.task) {
@@ -282,6 +289,9 @@ export async function recordMeetingOutcome(db: Queryable, actor: Actor, id: stri
       dueAt: addDaysIso(routing.task.dueInDays),
       origin: "manual",
     });
+  }
+  if (routing.workflowTrigger) {
+    await autoEnroll(db, meeting.lead_id, routing.workflowTrigger, `Meeting outcome: ${outcome}`);
   }
 
   return getMeetingOr404(db, id);

@@ -6,7 +6,7 @@ import { requireAuth } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
 import { parseBody, parseQuery } from "../validation/parse.js";
 import { ValidationError } from "../errors.js";
-import { PROPOSAL_STATUSES } from "../domain/enums.js";
+import { LEAD_LOSS_REASONS, PROPOSAL_STATUSES } from "../domain/enums.js";
 import { listProposals, updateProposal, updateProposalStatus } from "../services/proposals.service.js";
 import { createAndSendProposal } from "../services/proposalSending.service.js";
 
@@ -106,13 +106,22 @@ proposalsRouter.patch(
   }),
 );
 
-const statusSchema = z.object({ status: z.enum(PROPOSAL_STATUSES) });
+// lossReason is required by updateProposalStatus itself when status is
+// rejected/expired; kept optional here so the schema doesn't
+// reject a "sent"/"accepted" etc. call for omitting it.
+const statusSchema = z.object({
+  status: z.enum(PROPOSAL_STATUSES),
+  lossReason: z.enum(LEAD_LOSS_REASONS).optional(),
+  lossNotes: z.string().optional(),
+});
 
 proposalsRouter.post(
   "/:id/status",
   asyncHandler(async (req, res) => {
-    const { status } = parseBody(statusSchema, req.body);
-    const proposal = await withTransaction((client) => updateProposalStatus(client, req.actor!, req.params.id!, status));
+    const { status, lossReason, lossNotes } = parseBody(statusSchema, req.body);
+    const proposal = await withTransaction((client) =>
+      updateProposalStatus(client, req.actor!, req.params.id!, status, { lossReason, lossNotes }),
+    );
     res.json(proposal);
   }),
 );

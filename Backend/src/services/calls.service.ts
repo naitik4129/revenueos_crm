@@ -2,7 +2,7 @@ import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import type { CallConnectedOutcome, CallNotConnectedReason } from "../domain/enums.js";
-import { routeConnectedOutcome, routeNotConnected } from "../domain/callRouting.js";
+import { routeConnectedOutcome, routeNotConnected, type InterestedLaterCapture } from "../domain/callRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
 import { createTask, cancelOpenTasksForLead, completeTask } from "./tasks.service.js";
 import { getLeadRowOr404, markDnc, setAutomationMode, setContactability, updateLead } from "./leads.service.js";
@@ -17,6 +17,8 @@ export interface LogCallInput {
   callbackDueAt?: string;
   /** When set, the open 'call' task that prompted this log is completed atomically with it. */
   taskId?: string;
+  /** "Interested - Later" capture — read only when connectedOutcome === 'interested_later'. */
+  interestedLater?: InterestedLaterCapture;
 }
 
 export interface CallRow {
@@ -122,15 +124,33 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
   }
 
   const routing = input.connected
-    ? routeConnectedOutcome(input.connectedOutcome as Exclude<CallConnectedOutcome, "do_not_contact">)
+    ? routeConnectedOutcome(
+        input.connectedOutcome as Exclude<CallConnectedOutcome, "do_not_contact">,
+        input.interestedLater,
+      )
     : routeNotConnected(input.notConnectedReason!);
 
   if (routing.phoneContactStatus) {
     await setContactability(db, actor, leadId, { channel: "phone", status: routing.phoneContactStatus, reason: `Call outcome: ${input.notConnectedReason}` });
   }
 
-  if (routing.stage) {
-    await updateLead(db, actor, leadId, { pipelineStage: routing.stage });
+  // stage and objectionType (and, for interested_later, the capture fields)
+  // must land in ONE update statement: leads_objection_stage_has_type
+  // requires objection_type whenever pipeline_stage = 'objection_nurture',
+  // and that constraint is checked against the row as written, not per-column.
+  if (routing.stage || routing.objectionType) {
+    await updateLead(db, actor, leadId, {
+      ...(routing.stage ? { pipelineStage: routing.stage } : {}),
+      ...(routing.objectionType ? { objectionType: routing.objectionType } : {}),
+      ...(input.connectedOutcome === "interested_later" && input.interestedLater
+        ? {
+            interestedLaterReason: input.interestedLater.reason,
+            interestedLaterRestartAt: input.interestedLater.restartAt,
+            interestedLaterNextAction: input.interestedLater.nextAction,
+            interestedLaterDecisionOwner: input.interestedLater.decisionOwner,
+          }
+        : {}),
+    });
   }
   if (routing.automation) {
     await setAutomationMode(db, actor, leadId, routing.automation, `Call outcome: ${input.connected ? input.connectedOutcome : "Not Connected"}`);

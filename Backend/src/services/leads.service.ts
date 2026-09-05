@@ -3,12 +3,22 @@ import { addDaysIso } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import { assertPipelineStageEditable, assertValidLifecycleState, assertValidPipelineStage, isTerminalLifecycle } from "../domain/pipeline.js";
-import type { AutomationMode, ContactChannel, LeadSource, LifecycleState, PipelineStage, ResponseState } from "../domain/enums.js";
+import type {
+  AutomationMode,
+  ContactChannel,
+  LeadLossReason,
+  LeadSource,
+  LifecycleState,
+  ObjectionType,
+  PipelineStage,
+  ResponseState,
+} from "../domain/enums.js";
 import { CONTACT_CHANNEL_STATUS, LEAD_SOURCES } from "../domain/enums.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { cancelOpenTasksForLead, createTask, getLeadNextAction } from "./tasks.service.js";
 import { applyAutomationModeToRuns, autoEnroll } from "./runs.service.js";
 import { normalizePhoneE164 } from "../domain/phone.js";
+import { normalizeEmail } from "../domain/email.js";
 
 export interface LeadRow {
   id: string;
@@ -32,6 +42,13 @@ export interface LeadRow {
   dnc_by: string | null;
   dnc_by_name: string | null;
   dnc_at: Date | null;
+  objection_type: ObjectionType | null;
+  interested_later_reason: string | null;
+  interested_later_restart_at: Date | null;
+  interested_later_next_action: string | null;
+  interested_later_decision_owner: string | null;
+  loss_reason: LeadLossReason | null;
+  loss_notes: string | null;
   merged_into_lead_id: string | null;
   last_activity_at: Date;
   created_by: string | null;
@@ -68,6 +85,13 @@ export function leadToDto(row: LeadRow, nextAction?: Awaited<ReturnType<typeof g
     dncReason: row.dnc_reason ?? undefined,
     dncBy: row.dnc_by_name ?? undefined,
     dncAt: row.dnc_at?.toISOString(),
+    objectionType: row.objection_type ?? undefined,
+    interestedLaterReason: row.interested_later_reason ?? undefined,
+    interestedLaterRestartAt: row.interested_later_restart_at?.toISOString().slice(0, 10) ?? undefined,
+    interestedLaterNextAction: row.interested_later_next_action ?? undefined,
+    interestedLaterDecisionOwner: row.interested_later_decision_owner ?? undefined,
+    lossReason: row.loss_reason ?? undefined,
+    lossNotes: row.loss_notes ?? undefined,
     mergedIntoLeadId: row.merged_into_lead_id ?? undefined,
     lastActivityAt: row.last_activity_at.toISOString(),
     createdBy: row.created_by_name ?? undefined,
@@ -85,7 +109,7 @@ export interface CreateLeadInput {
   industry?: string;
   email?: string;
   phone?: string;
-  source: LeadSource;
+  source: string;
   serviceInterest?: string;
   ownerId?: string;
 }
@@ -124,19 +148,24 @@ export interface ValidatedLeadFields {
  */
 export function validateLeadFields(input: LeadFieldsInput): ValidatedLeadFields {
   const firstName = input.firstName.trim();
-  if (!firstName) throw new ValidationError("First name is required.");
+  if (!firstName) throw new ValidationError("First name is required.", { field: "firstName" });
   const company = input.company.trim();
-  if (!company) throw new ValidationError("Company is required.");
+  if (!company) throw new ValidationError("Company is required.", { field: "company" });
   if (!input.email?.trim() && !input.phone?.trim()) {
-    throw new ValidationError("Provide at least an email or a phone number.");
+    throw new ValidationError("Provide at least an email or a phone number.", { field: "email" });
+  }
+  const emailRaw = input.email?.trim() || null;
+  const email = emailRaw ? normalizeEmail(emailRaw) : null;
+  if (emailRaw && !email) {
+    throw new ValidationError("Enter a valid email address.", { field: "email" });
   }
   const phone = input.phone?.trim() || null;
   const phoneE164 = phone ? normalizePhoneE164(phone) : null;
   if (phone && !phoneE164) {
-    throw new ValidationError("Enter a valid phone number. Indian local numbers default to +91; international numbers must include their country code.");
+    throw new ValidationError("Enter a valid phone number. Indian local numbers default to +91; international numbers must include their country code.", { field: "phone" });
   }
   if (!(LEAD_SOURCES as readonly string[]).includes(input.source)) {
-    throw new ValidationError(`Unknown source "${input.source}" — must be one of: ${LEAD_SOURCES.join(", ")}.`);
+    throw new ValidationError(`Unknown source "${input.source}" — must be one of: ${LEAD_SOURCES.join(", ")}.`, { field: "source" });
   }
 
   return {
@@ -145,7 +174,7 @@ export function validateLeadFields(input: LeadFieldsInput): ValidatedLeadFields 
     company,
     jobTitle: input.jobTitle?.trim() || null,
     industry: input.industry?.trim() || null,
-    email: input.email?.trim() || null,
+    email,
     phone,
     phoneE164,
     source: input.source as LeadSource,
@@ -454,11 +483,18 @@ export interface UpdateLeadInput {
   industry?: string;
   email?: string;
   phone?: string;
-  source?: LeadSource;
+  source?: string;
   serviceInterest?: string;
   ownerId?: string;
   pipelineStage?: PipelineStage;
   responseState?: ResponseState;
+  /** Set alongside pipelineStage = 'objection_nurture' (or for wrong_fit, reporting-only — see callRouting.ts). */
+  objectionType?: ObjectionType;
+  /** "Interested - Later" capture — written by calls.service.ts when the outcome is interested_later. */
+  interestedLaterReason?: string;
+  interestedLaterRestartAt?: string;
+  interestedLaterNextAction?: string;
+  interestedLaterDecisionOwner?: string;
 }
 
 /**
@@ -489,26 +525,51 @@ export async function updateLead(
     params.push(value);
   };
 
-  if (patch.firstName !== undefined) push("first_name", patch.firstName.trim());
+  if (patch.firstName !== undefined) {
+    const firstName = patch.firstName.trim();
+    if (!firstName) throw new ValidationError("First name is required.", { field: "firstName" });
+    push("first_name", firstName);
+  }
   if (patch.lastName !== undefined) push("last_name", patch.lastName.trim());
-  if (patch.company !== undefined) push("company", patch.company.trim());
+  if (patch.company !== undefined) {
+    const company = patch.company.trim();
+    if (!company) throw new ValidationError("Company is required.", { field: "company" });
+    push("company", company);
+  }
   if (patch.jobTitle !== undefined) push("job_title", patch.jobTitle.trim() || null);
   if (patch.industry !== undefined) push("industry", patch.industry.trim() || null);
-  if (patch.email !== undefined) push("email", patch.email.trim() || null);
+  if (patch.email !== undefined) {
+    const emailRaw = patch.email.trim() || null;
+    const email = emailRaw ? normalizeEmail(emailRaw) : null;
+    if (emailRaw && !email) {
+      throw new ValidationError("Enter a valid email address.", { field: "email" });
+    }
+    push("email", email);
+  }
   if (patch.phone !== undefined) {
     const phone = patch.phone.trim() || null;
     const phoneE164 = phone ? normalizePhoneE164(phone) : null;
     if (phone && !phoneE164) {
-      throw new ValidationError("Enter a valid phone number. Indian local numbers default to +91; international numbers must include their country code.");
+      throw new ValidationError("Enter a valid phone number. Indian local numbers default to +91; international numbers must include their country code.", { field: "phone" });
     }
     push("phone", phone);
     push("phone_e164", phoneE164);
   }
-  if (patch.source !== undefined) push("source", patch.source);
+  if (patch.source !== undefined) {
+    if (!(LEAD_SOURCES as readonly string[]).includes(patch.source)) {
+      throw new ValidationError(`Unknown source "${patch.source}" — must be one of: ${LEAD_SOURCES.join(", ")}.`, { field: "source" });
+    }
+    push("source", patch.source);
+  }
   if (patch.serviceInterest !== undefined) push("service_interest", patch.serviceInterest.trim() || null);
   if (patch.ownerId !== undefined) push("owner_id", patch.ownerId);
   if (patch.pipelineStage !== undefined) push("pipeline_stage", patch.pipelineStage);
   if (patch.responseState !== undefined) push("response_state", patch.responseState);
+  if (patch.objectionType !== undefined) push("objection_type", patch.objectionType);
+  if (patch.interestedLaterReason !== undefined) push("interested_later_reason", patch.interestedLaterReason.trim() || null);
+  if (patch.interestedLaterRestartAt !== undefined) push("interested_later_restart_at", patch.interestedLaterRestartAt || null);
+  if (patch.interestedLaterNextAction !== undefined) push("interested_later_next_action", patch.interestedLaterNextAction.trim() || null);
+  if (patch.interestedLaterDecisionOwner !== undefined) push("interested_later_decision_owner", patch.interestedLaterDecisionOwner.trim() || null);
 
   if (sets.length === 0) return current;
 
@@ -689,12 +750,19 @@ async function setTerminalLifecycle(
   lifecycle: Exclude<LifecycleState, "active" | "do_not_contact" | "merged">,
   timelineTitle: string,
   reason?: string,
+  extraColumns?: Record<string, unknown>,
 ) {
   assertValidLifecycleState(lifecycle);
   const current = await getLeadRowOr404(db, leadId);
   if (current.lifecycle_state === lifecycle) return current;
 
-  await db.query(`update public.leads set lifecycle_state = $2, last_activity_at = now() where id = $1`, [leadId, lifecycle]);
+  const extraEntries = Object.entries(extraColumns ?? {});
+  const extraSets = extraEntries.map(([column], index) => `${column} = $${index + 2}`);
+  const extraParams = extraEntries.map(([, value]) => value);
+  await db.query(
+    `update public.leads set lifecycle_state = $${extraParams.length + 2}, last_activity_at = now()${extraSets.length ? ", " + extraSets.join(", ") : ""} where id = $1`,
+    [leadId, ...extraParams, lifecycle],
+  );
   await cancelOpenTasksForLead(db, actor, leadId, `Lead ${timelineTitle}`);
   await addTimelineEvent(db, { leadId, kind: "system", title: timelineTitle, detail: reason, ...(actor ? actorEvent(actor) : AUTOMATION_ACTOR) });
   return getLeadRowOr404(db, leadId);
@@ -703,8 +771,14 @@ async function setTerminalLifecycle(
 export const markWon = (db: Queryable, actor: Actor | null, leadId: string, reason?: string) =>
   setTerminalLifecycle(db, actor, leadId, "won", "Won", reason);
 
-export const markLost = (db: Queryable, actor: Actor, leadId: string, reason?: string) =>
-  setTerminalLifecycle(db, actor, leadId, "lost", "Lost", reason);
+/**
+ * A loss reason is required on every Lost lead (drives the reactivation
+ * approach/content later) — enforced at the database level too
+ * (leads_lost_has_reason), so lossReason must land in the SAME update
+ * statement as lifecycle_state = 'lost', not a follow-up call.
+ */
+export const markLost = (db: Queryable, actor: Actor, leadId: string, lossReason: LeadLossReason, notes?: string) =>
+  setTerminalLifecycle(db, actor, leadId, "lost", "Lost", notes ?? lossReason, { loss_reason: lossReason, loss_notes: notes?.trim() || null });
 
 export const markDiscarded = (db: Queryable, actor: Actor, leadId: string, reason?: string) =>
   setTerminalLifecycle(db, actor, leadId, "discarded", "Discarded", reason);

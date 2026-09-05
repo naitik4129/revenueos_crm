@@ -2,6 +2,7 @@ import type {
   AutomationMode,
   CallConnectedOutcome,
   CallNotConnectedReason,
+  ObjectionType,
   PipelineStage,
   TaskType,
   WorkflowTrigger,
@@ -12,6 +13,14 @@ export interface TaskSpec {
   title: string;
   /** Either a fixed number of days from now, or an explicit ISO timestamp (callback). */
   dueInDays?: number;
+}
+
+/** "Interested - Later" capture fields — free text/date, not a closed vocabulary. */
+export interface InterestedLaterCapture {
+  reason?: string;
+  restartAt?: string;
+  nextAction?: string;
+  decisionOwner?: string;
 }
 
 export interface CallRoutingResult {
@@ -27,6 +36,8 @@ export interface CallRoutingResult {
   promptScheduleMeeting?: boolean;
   /** Phone contactability status to record, if the reason implies the number itself is bad. */
   phoneContactStatus?: "invalid" | "wrong_number";
+  /** Set alongside stage = 'objection_nurture' (or for wrong_fit, reporting-only). */
+  objectionType?: ObjectionType;
 }
 
 /**
@@ -46,61 +57,143 @@ export function routeNotConnected(reason: CallNotConnectedReason): CallRoutingRe
   return result;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 /**
- * Call Connected outcome routing (product brief, "POSITIVE/MAYBE/NEGATIVE FLOW"
- * + CALLBACK REQUESTED + edge cases). `do_not_contact` is handled separately
- * by callsService (it goes through the shared DNC path, not this table) and
- * is intentionally absent here.
+ * "Reconnect using the customer's own earlier timing" — reconnect shortly
+ * BEFORE the date the customer indicated, not on/after it. Falls back to
+ * the old 'maybe' outcome's 30-day default when no restart date was
+ * captured (the field is optional — the exact month/date is captured where
+ * possible, not required).
+ */
+function interestedLaterDueInDays(restartAt?: string): number {
+  const fallback = 30;
+  if (!restartAt) return fallback;
+  const restart = Date.parse(restartAt);
+  if (Number.isNaN(restart)) return fallback;
+  const days = Math.round((restart - Date.now()) / MS_PER_DAY) - 7;
+  return Math.max(days, 1);
+}
+
+/**
+ * Call Connected outcome routing — the Human Call Classification disposition
+ * table. `do_not_contact` is handled separately by callsService (it goes
+ * through the shared DNC path, not this table) and is intentionally absent
+ * here.
  */
 export function routeConnectedOutcome(
   outcome: Exclude<CallConnectedOutcome, "do_not_contact">,
+  capture?: InterestedLaterCapture,
 ): CallRoutingResult {
   switch (outcome) {
     case "positive":
       // Positive leads move quickly toward a meeting rather than nurture,
-      // and become manually handled (product brief, "POSITIVE FLOW").
+      // and become manually handled (Meeting Agreed sequence).
       return {
         stage: "meeting_scheduling",
         automation: "manual",
         task: { type: "schedule_meeting", title: "Schedule discovery meeting", dueInDays: 1 },
         promptScheduleMeeting: true,
       };
-    case "maybe":
+    case "interested_later":
+      // The capture (reason/restart date/next action/decision owner) is
+      // written onto the lead by the caller (calls.service.ts); routing here
+      // only decides the reconnect timing and nurture enrollment.
       return {
-        stage: "maybe_nurture",
+        stage: "interested_later",
         automation: "active",
-        task: { type: "follow_up", title: "Follow up after nurture email", dueInDays: 7 },
-        workflowTrigger: "call_outcome_maybe",
+        task: {
+          type: "follow_up",
+          title: "Reconnect per stated timing",
+          dueInDays: interestedLaterDueInDays(capture?.restartAt),
+        },
+        workflowTrigger: "call_outcome_interested_later",
       };
-    case "negative":
-      // Negative nurture stays controlled/limited (product brief) — a single
-      // long-horizon re-engagement check, not an aggressive sequence.
+    case "future_possibility":
+      // Low-intensity, long-horizon nurture. Not permanently closed, so
+      // lifecycle stays active (unlike long_term_nurture, which is a
+      // lifecycle-level bucket reached from other paths).
       return {
-        stage: "negative_nurture",
+        stage: "future_possibility",
         automation: "active",
-        task: { type: "follow_up", title: "Long-term re-engagement check", dueInDays: 30 },
-        workflowTrigger: "call_outcome_negative",
+        task: { type: "follow_up", title: "Long-term low-intensity check-in", dueInDays: 90 },
+        workflowTrigger: "call_outcome_future_possibility",
       };
     case "callback_requested":
-      // Not Maybe, not Negative — a distinct outcome. Stage is left
-      // unchanged; the caller supplies the requested callback time.
+      // A distinct outcome — stage is left unchanged; the caller supplies
+      // the requested callback time.
       return {
         automation: "manual",
         task: { type: "call", title: "Callback requested by lead" },
       };
     case "information_requested":
-      // Manual handling: the lead asked a direct question, this isn't a
-      // nurture-sequence situation.
+      // "Send Me Details First": progressive email sequence, then a human
+      // call to gauge relevance before a meeting CTA — an active nurture
+      // sequence, not a one-off manual task.
+      return {
+        stage: "connected_qualifying",
+        automation: "active",
+        task: { type: "follow_up", title: "Call after info sequence — gauge relevance", dueInDays: 10 },
+        workflowTrigger: "call_outcome_information_requested",
+      };
+    case "commission_only":
+      return objectionRouting("commission_only", "objection_commission_only", "Follow up: Commission-only objection", 5);
+    case "internal_hiring":
+      return objectionRouting("internal_hiring", "objection_internal_hiring", "Follow up: Internal hiring objection", 5);
+    case "existing_team":
+      return objectionRouting("existing_team", "objection_existing_team", "Follow up: Existing team objection", 5);
+    case "budget_price":
+      return objectionRouting("budget_price", "objection_budget_price", "Follow up: Budget/price objection", 5);
+    case "internal_approval":
+      // A decision-maker-ready one-pager, not a generic follow-up email, is
+      // the concrete next action.
+      return {
+        stage: "objection_nurture",
+        automation: "active",
+        task: { type: "general_task", title: "Prepare decision-maker one-pager", dueInDays: 2 },
+        workflowTrigger: "objection_internal_approval",
+        objectionType: "internal_approval",
+      };
+    case "wrong_fit":
+      // "Wrong Fit -> Archive, reroute or find correct contact" — a human
+      // decision, not an automatic nurture enrollment. Recorded for
+      // reporting (objectionType) without moving the lead into
+      // objection_nurture, since this isn't a sequence to be nurtured
+      // through — matches the existing "don't invent aggressive/automatic
+      // behavior" philosophy already used for wrong_person/no_proposal_required.
       return {
         automation: "manual",
-        task: { type: "send_information", title: "Send requested information", dueInDays: 1 },
+        task: { type: "general_task", title: "Confirm fit — archive or reroute", dueInDays: 2 },
+        objectionType: "wrong_fit",
       };
     case "wrong_person":
       // Edge case: "Preserve the interaction. Do not automatically discard
       // all lead history." No stage/automation change — just get to the
-      // right contact.
+      // right contact. Kept distinct from wrong_fit (see enums.ts comment).
       return {
+        stage: "connected_qualifying",
         task: { type: "general_task", title: "Confirm correct contact person", dueInDays: 2 },
       };
   }
+}
+
+function objectionRouting(
+  objectionType: NonNullable<CallRoutingResult["objectionType"]>,
+  workflowTrigger: Extract<
+    WorkflowTrigger,
+    | "objection_commission_only"
+    | "objection_internal_hiring"
+    | "objection_existing_team"
+    | "objection_budget_price"
+  >,
+  taskTitle: string,
+  dueInDays: number,
+): CallRoutingResult {
+  return {
+    stage: "objection_nurture",
+    automation: "active",
+    task: { type: "follow_up", title: taskTitle, dueInDays },
+    workflowTrigger,
+    objectionType,
+  };
 }

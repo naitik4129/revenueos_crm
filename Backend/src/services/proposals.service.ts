@@ -1,7 +1,7 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
-import type { EmailSendStatus, ProposalStatus, WhatsappSendStatus } from "../domain/enums.js";
+import type { EmailSendStatus, LeadLossReason, ProposalStatus, WhatsappSendStatus } from "../domain/enums.js";
 import { routeProposalStatus } from "../domain/proposalRouting.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { cancelOpenTasksForLead, createTask } from "./tasks.service.js";
@@ -37,6 +37,8 @@ export interface ProposalRow {
   whatsapp_send_error: string | null;
   whatsapp_next_attempt_at: Date | null;
   whatsapp_attempt_count: number;
+  loss_reason: LeadLossReason | null;
+  loss_notes: string | null;
   created_by: string | null;
   created_by_name: string | null;
   created_at: Date;
@@ -68,6 +70,8 @@ function proposalToDto(row: ProposalRow) {
     whatsappSendStatus: row.whatsapp_send_status,
     whatsappSentAt: row.whatsapp_sent_at?.toISOString(),
     whatsappSendError: row.whatsapp_send_error ?? undefined,
+    lossReason: row.loss_reason ?? undefined,
+    lossNotes: row.loss_notes ?? undefined,
     updatedAt: row.updated_at.toISOString(),
     createdAt: row.created_at.toISOString(),
   };
@@ -208,13 +212,28 @@ const TERMINAL_PROPOSAL_STATUSES: ProposalStatus[] = ["accepted", "rejected", "w
  * lead-state cascade (Rule 16), so status changes only ever go through
  * here.
  */
-export async function updateProposalStatus(db: Queryable, actor: Actor | null, id: string, status: ProposalStatus) {
+export interface UpdateProposalStatusOptions {
+  /** Required for rejected/expired (proposals_loss_has_reason enforces this at the DB level too). */
+  lossReason?: LeadLossReason;
+  lossNotes?: string;
+}
+
+export async function updateProposalStatus(
+  db: Queryable,
+  actor: Actor | null,
+  id: string,
+  status: ProposalStatus,
+  options: UpdateProposalStatusOptions = {},
+) {
   const proposal = await getProposalRowOr404(db, id);
   if (proposal.status === status) return proposalToDto(proposal);
   if (TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)) {
     throw new ConflictError(
       `Proposal is already "${proposal.status}", a terminal status — it can't be moved to "${status}". Create a new proposal instead.`,
     );
+  }
+  if ((status === "rejected" || status === "expired") && !options.lossReason) {
+    throw new ValidationError(`lossReason is required when moving a proposal to "${status}".`);
   }
 
   const sets = ["status = $2"];
@@ -223,6 +242,10 @@ export async function updateProposalStatus(db: Queryable, actor: Actor | null, i
   if (status === "sent") {
     sets.push(`sent_at = now()`, `follow_up_at = $${i++}`);
     params.push(addDaysIso(3));
+  }
+  if (status === "rejected" || status === "expired") {
+    sets.push(`loss_reason = $${i++}`, `loss_notes = $${i++}`);
+    params.push(options.lossReason, options.lossNotes?.trim() || null);
   }
   await db.query(`update public.proposals set ${sets.join(", ")} where id = $1`, params);
 

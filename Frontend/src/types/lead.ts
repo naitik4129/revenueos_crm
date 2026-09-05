@@ -1,20 +1,50 @@
 import type { TaskType } from "./task";
 
+/**
+ * `maybe_nurture`/`negative_nurture` are intentionally omitted — retired in
+ * favor of `interested_later`/`future_possibility` (mirrors
+ * Backend/src/domain/enums.ts exactly; keep both files in sync).
+ */
 export const PIPELINE_STAGES = [
   "new",
   "ready_for_first_call",
   "contact_attempted",
   "not_connected_nurture",
-  "maybe_nurture",
-  "negative_nurture",
+  "connected_qualifying",
+  "interested_later",
+  "future_possibility",
+  "objection_nurture",
   "meeting_scheduling",
   "meeting_scheduled",
   "meeting_follow_up",
   "proposal_preparation",
   "proposal_sent",
   "proposal_decision_pending",
+  "negotiation",
 ] as const;
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
+
+export const OBJECTION_TYPES = [
+  "commission_only",
+  "internal_hiring",
+  "existing_team",
+  "budget_price",
+  "internal_approval",
+  "wrong_fit",
+] as const;
+export type ObjectionType = (typeof OBJECTION_TYPES)[number];
+
+export const LEAD_LOSS_REASONS = [
+  "price_budget",
+  "internal_hiring",
+  "project_postponed",
+  "competitor_selected",
+  "management_rejected",
+  "no_urgency",
+  "no_response",
+  "other",
+] as const;
+export type LeadLossReason = (typeof LEAD_LOSS_REASONS)[number];
 export const LIFECYCLE_STATES = [
   "active",
   "long_term_nurture",
@@ -103,6 +133,13 @@ export interface Lead {
   dncReason?: string;
   dncBy?: string;
   dncAt?: string;
+  objectionType?: ObjectionType;
+  interestedLaterReason?: string;
+  interestedLaterRestartAt?: string;
+  interestedLaterNextAction?: string;
+  interestedLaterDecisionOwner?: string;
+  lossReason?: LeadLossReason;
+  lossNotes?: string;
   mergedIntoLeadId?: string;
   lastActivityAt: string;
   nextAction: NextAction | null;
@@ -124,12 +161,19 @@ export const CALL_NOT_CONNECTED_REASONS = [
   "other",
 ] as const;
 export type CallNotConnectedReason = (typeof CALL_NOT_CONNECTED_REASONS)[number];
+/** `maybe`/`negative` intentionally omitted — see PIPELINE_STAGES comment above. */
 export const CALL_CONNECTED_OUTCOMES = [
   "positive",
-  "maybe",
-  "negative",
+  "interested_later",
+  "future_possibility",
   "callback_requested",
   "information_requested",
+  "commission_only",
+  "internal_hiring",
+  "existing_team",
+  "budget_price",
+  "internal_approval",
+  "wrong_fit",
   "wrong_person",
   "do_not_contact",
 ] as const;

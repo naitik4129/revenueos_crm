@@ -19,6 +19,7 @@ import {
 import { initials } from "@/lib/format";
 import type {
   AutomationMode,
+  LeadLossReason,
   MeetingOutcome,
   ProposalStatus,
   TemplateType,
@@ -139,18 +140,23 @@ export function useLeads() {
       id,
       action,
       reason,
+      lossReason,
     }: {
       id: string;
-      action: "won" | "lost" | "discard" | "reactivate";
+      action: "won" | "lost" | "discard" | "reactivate" | "long_term_nurture";
       reason?: string | undefined;
+      /** Required by the backend when action === 'lost'. */
+      lossReason?: LeadLossReason | undefined;
     }) =>
       action === "won"
         ? backend.leads.markWon(id, reason)
         : action === "lost"
-          ? backend.leads.markLost(id, reason)
+          ? backend.leads.markLost(id, lossReason!, reason)
           : action === "discard"
             ? backend.leads.discard(id, reason)
-            : backend.leads.reactivate(id, reason),
+            : action === "long_term_nurture"
+              ? backend.leads.longTermNurture(id, reason)
+              : backend.leads.reactivate(id, reason),
     onSuccess: (lead) => refresh(lead.id),
   });
   const leads = query.data?.data ?? [];
@@ -187,9 +193,10 @@ export function useLeads() {
       communication.mutateAsync({ id, channel, detail }),
     setLifecycle: (
       id: string,
-      action: "won" | "lost" | "discard" | "reactivate",
+      action: "won" | "lost" | "discard" | "reactivate" | "long_term_nurture",
       reason?: string,
-    ) => lifecycle.mutateAsync({ id, action, reason }),
+      lossReason?: LeadLossReason,
+    ) => lifecycle.mutateAsync({ id, action, reason, lossReason }),
   };
 }
 export type LeadsSlice = ReturnType<typeof useLeads>;
@@ -323,8 +330,17 @@ export function useProposals() {
     onSuccess: (proposal) => refresh(proposal.leadId),
   });
   const status = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: ProposalStatus }) =>
-      backend.proposals.setStatus(id, status),
+    mutationFn: ({
+      id,
+      status,
+      lossReason,
+      lossNotes,
+    }: {
+      id: string;
+      status: ProposalStatus;
+      lossReason?: LeadLossReason | undefined;
+      lossNotes?: string | undefined;
+    }) => backend.proposals.setStatus(id, status, lossReason, lossNotes),
     onSuccess: (proposal) => refresh(proposal.leadId),
   });
   return {
@@ -334,8 +350,15 @@ export function useProposals() {
     isPending: create.isPending || update.isPending || status.isPending,
     addProposal: (input: CreateProposalInput) => create.mutateAsync(input),
     updateProposal: (id: string, input: UpdateProposalInput) => update.mutateAsync({ id, input }),
-    setProposalStatus: (id: string, value: ProposalStatus) =>
-      status.mutateAsync({ id, status: value }),
+    // lossReason/lossNotes are required by the backend when value is
+    // 'rejected'/'expired' — the UI prompts for it first (see
+    // proposals-page.tsx) rather than this hook silently omitting it.
+    setProposalStatus: (
+      id: string,
+      value: ProposalStatus,
+      lossReason?: LeadLossReason,
+      lossNotes?: string,
+    ) => status.mutateAsync({ id, status: value, lossReason, lossNotes }),
   };
 }
 export type ProposalsSlice = ReturnType<typeof useProposals>;

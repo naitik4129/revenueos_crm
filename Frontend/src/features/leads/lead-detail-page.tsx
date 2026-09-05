@@ -59,10 +59,12 @@ import {
 } from "@/store";
 import {
   AUTOMATION_MODES,
+  LEAD_LOSS_REASONS,
   PIPELINE_STAGES,
   RESPONSE_STATES,
   TASK_TYPES,
   type AutomationMode,
+  type LeadLossReason,
   type PipelineStage,
   type ResponseState,
   type TaskType,
@@ -88,6 +90,9 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
   const [dncOpen, setDncOpen] = useState(false);
   const [reactivateOpen, setReactivateOpen] = useState(false);
   const [reason, setReason] = useState("");
+  const [lostOpen, setLostOpen] = useState(false);
+  const [lossReason, setLossReason] = useState<LeadLossReason | "">("");
+  const [lossNotes, setLossNotes] = useState("");
   const [nextOpen, setNextOpen] = useState(false);
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [enrollTriggerFilter, setEnrollTriggerFilter] = useState<WorkflowTrigger | undefined>(
@@ -199,7 +204,9 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
               setCallTaskId(lead.nextAction?.type === "call" ? lead.nextAction.taskId : undefined);
               setCallOpen(true);
             }}
-            onEnrollClick={() => openEnroll(nurtureTriggerForStage(lead.pipelineStage))}
+            onEnrollClick={() =>
+              openEnroll(nurtureTriggerForStage(lead.pipelineStage, lead.objectionType))
+            }
           />
 
           <Card
@@ -676,6 +683,46 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
               </CardContent>
             </Card>
           )}
+          {lead.pipelineStage === "objection_nurture" && lead.objectionType && (
+            <Card>
+              <CardContent className="py-4 text-sm">
+                <div className="font-medium">
+                  Objection: <StatusBadge value={lead.objectionType} />
+                </div>
+              </CardContent>
+            </Card>
+          )}
+          {lead.pipelineStage === "interested_later" && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Interested – Later</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1 text-xs text-muted-foreground">
+                {lead.interestedLaterReason && <p>Reason: {lead.interestedLaterReason}</p>}
+                {lead.interestedLaterRestartAt && (
+                  <p>Expected restart: {lead.interestedLaterRestartAt}</p>
+                )}
+                {lead.interestedLaterNextAction && (
+                  <p>Next action: {lead.interestedLaterNextAction}</p>
+                )}
+                {lead.interestedLaterDecisionOwner && (
+                  <p>Decision owner: {lead.interestedLaterDecisionOwner}</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+          {lead.lifecycleState === "lost" && lead.lossReason && (
+            <Card>
+              <CardContent className="py-4 text-sm">
+                <div className="font-medium">
+                  Loss reason: <StatusBadge value={lead.lossReason} />
+                </div>
+                {lead.lossNotes && (
+                  <p className="pt-1 text-xs text-muted-foreground">{lead.lossNotes}</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Lifecycle</CardTitle>
@@ -692,16 +739,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                   >
                     Won
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      void mutate(
-                        () => leadActions.setLifecycle(leadId, "lost"),
-                        "Lead marked Lost",
-                      )
-                    }
-                  >
+                  <Button size="sm" variant="outline" onClick={() => setLostOpen(true)}>
                     Lost
                   </Button>
                   <Button
@@ -715,6 +753,18 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                     }
                   >
                     Discard
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      void mutate(
+                        () => leadActions.setLifecycle(leadId, "long_term_nurture"),
+                        "Moved to Long-Term Nurture",
+                      )
+                    }
+                  >
+                    Move to Long-Term Nurture
                   </Button>
                 </>
               ) : (
@@ -838,6 +888,27 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
           }, "Lead reactivated")
         }
       />
+      <LostReasonDialog
+        open={lostOpen}
+        lossReason={lossReason}
+        onLossReason={setLossReason}
+        notes={lossNotes}
+        onNotes={setLossNotes}
+        onOpenChange={setLostOpen}
+        onConfirm={() =>
+          void mutate(async () => {
+            await leadActions.setLifecycle(
+              leadId,
+              "lost",
+              lossNotes.trim() || undefined,
+              lossReason || undefined,
+            );
+            setLostOpen(false);
+            setLossReason("");
+            setLossNotes("");
+          }, "Lead marked Lost")
+        }
+      />
       <NextActionDialog
         open={nextOpen}
         onOpenChange={setNextOpen}
@@ -945,6 +1016,70 @@ function ReasonDialog({
             Cancel
           </Button>
           <Button variant="destructive" disabled={!value.trim()} onClick={onConfirm}>
+            Confirm
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** A loss reason is required (not just free text) so the reactivation approach/content can be chosen automatically later. */
+function LostReasonDialog({
+  open,
+  lossReason,
+  onLossReason,
+  notes,
+  onNotes,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  lossReason: LeadLossReason | "";
+  onLossReason: (value: LeadLossReason | "") => void;
+  notes: string;
+  onNotes: (value: string) => void;
+  onOpenChange: (value: boolean) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Mark Lost</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="mb-1.5 block text-xs">Loss reason</Label>
+            <Select
+              value={lossReason}
+              onValueChange={(value) => onLossReason(value as LeadLossReason)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select a reason" />
+              </SelectTrigger>
+              <SelectContent>
+                {LEAD_LOSS_REASONS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {label(value)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="mb-1.5 block text-xs">Notes (optional)</Label>
+            <Textarea rows={3} value={notes} onChange={(event) => onNotes(event.target.value)} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Drives the reactivation approach used later — required to close a lead as Lost.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" disabled={!lossReason} onClick={onConfirm}>
             Confirm
           </Button>
         </DialogFooter>

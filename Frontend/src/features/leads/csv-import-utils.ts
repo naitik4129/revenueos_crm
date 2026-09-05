@@ -1,5 +1,6 @@
 import Papa from "papaparse";
 import { LEAD_SOURCES, type LeadSource } from "@/types";
+import { normalizeEmail, normalizePhone } from "@/lib/lead-validation";
 
 export const CANONICAL_FIELDS = [
   "firstName",
@@ -180,6 +181,14 @@ export function previewValidate(row: MappedRow): string | null {
   if (!row.firstName.trim()) return "First name is required.";
   if (!row.company.trim()) return "Company is required.";
   if (!row.email?.trim() && !row.phone?.trim()) return "Needs an email or a phone number.";
+  if (row.email?.trim()) {
+    const { error } = normalizeEmail(row.email);
+    if (error) return error;
+  }
+  if (row.phone?.trim()) {
+    const { error } = normalizePhone(row.phone);
+    if (error) return error;
+  }
   if (!row.source.trim() || !normalizeSourceValue(row.source))
     return `Unknown source "${row.source}".`;
   return null;

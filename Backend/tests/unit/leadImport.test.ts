@@ -70,4 +70,35 @@ describe("validateLeadFields", () => {
       expect(err).toBeInstanceOf(ValidationError);
     }
   });
+
+  it("rejects an invalid email format", () => {
+    expect(() => validateLeadFields({ ...base, email: "not-an-email" })).toThrow(
+      "Enter a valid email address.",
+    );
+  });
+
+  it("normalizes email to lowercase", () => {
+    const fields = validateLeadFields({ ...base, email: "Grace@Example.COM" });
+    expect(fields.email).toBe("grace@example.com");
+  });
+
+  it("attaches the offending field name to each ValidationError", () => {
+    const cases: [Record<string, unknown>, string][] = [
+      [{ ...base, firstName: "" }, "firstName"],
+      [{ ...base, company: "" }, "company"],
+      [{ ...base, email: "" }, "email"],
+      [{ ...base, email: "not-an-email" }, "email"],
+      [{ ...base, email: "", phone: "not-a-phone" }, "phone"],
+      [{ ...base, source: "made_up_source" }, "source"],
+    ];
+    for (const [input, field] of cases) {
+      try {
+        validateLeadFields(input as Parameters<typeof validateLeadFields>[0]);
+        throw new Error(`expected validateLeadFields to throw for field ${field}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(ValidationError);
+        expect((err as ValidationError).details).toMatchObject({ field });
+      }
+    }
+  });
 });

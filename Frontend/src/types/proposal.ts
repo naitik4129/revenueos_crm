@@ -1,3 +1,5 @@
+import type { LeadLossReason } from "./lead";
+
 export const PROPOSAL_STATUSES = [
   "draft",
   "uploaded",
@@ -55,6 +57,8 @@ export interface Proposal {
   whatsappSendStatus: WhatsappSendStatus;
   whatsappSentAt?: string;
   whatsappSendError?: string;
+  lossReason?: LeadLossReason;
+  lossNotes?: string;
   updatedAt: string;
   createdAt: string;
 }

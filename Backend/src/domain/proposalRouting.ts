@@ -46,6 +46,10 @@ export function routeProposalStatus(status: ProposalStatus): ProposalRoutingResu
         cancelAllOpenTasks: true,
       };
     case "rejected":
+      // Lost / Deferred Proposal Reactivation: the loss reason (captured by
+      // the caller onto proposals.loss_reason — see proposals.service.ts)
+      // decides the reactivation approach/content; routing here only
+      // decides the generic default timing.
       return {
         lifecycle: "long_term_nurture",
         task: { type: "re_engage", title: "Re-engage after rejection", dueInDays: 45 },
