@@ -546,6 +546,8 @@ export const backend = {
       }),
     duplicate: (id: string) => send<Workflow>("POST", `/workflows/${id}/duplicate`),
     delete: (id: string, force?: boolean) => del(`/workflows/${id}${force ? "?force=true" : ""}`),
+    deleteVersion: (id: string, version: number) =>
+      request<Workflow>(`/workflows/${id}/versions/${version}`, { method: "DELETE" }),
   },
   templates: {
     list: (signal?: AbortSignal) => get<{ data: Template[] }>("/templates", signal),

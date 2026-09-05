@@ -89,6 +89,17 @@ workflowsRouter.put(
   }),
 );
 
+workflowsRouter.delete(
+  "/:id/versions/:version",
+  asyncHandler(async (req, res) => {
+    const { version } = parseParams(versionParamSchema, req.params);
+    const workflow = await withTransaction((client) =>
+      workflowsService.deleteWorkflowVersion(client, req.params.id!, version),
+    );
+    res.json(workflow);
+  }),
+);
+
 const publishSchema = z.object({ enrollmentMode: z.literal("keep_existing").optional() });
 
 workflowsRouter.post(

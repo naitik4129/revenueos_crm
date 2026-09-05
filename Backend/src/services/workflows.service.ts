@@ -248,10 +248,23 @@ export interface StepInput {
   enabled: boolean;
 }
 
-/** Replaces the full step list of a Draft version. workflow_steps_draft_only_edit (DB trigger) is the hard backstop. */
+/**
+ * Replaces the full step list of a Draft version. workflow_steps_draft_only_edit
+ * (DB trigger) is the hard backstop.
+ *
+ * The `for update` lock below is required, not optional: this function does a
+ * delete-all-then-insert-all against `workflow_steps` inside one transaction,
+ * so two overlapping calls for the *same* version (two rapid edits from one
+ * tab, or two tabs/users) can otherwise interleave — the second transaction's
+ * DELETE takes its snapshot before the first's INSERTs are visible, so it
+ * deletes nothing, then its INSERTs collide with the first's already-committed
+ * `step_order` values and raise `workflow_steps_unique_order`. Locking the
+ * version row first forces a second overlapping call to wait for the first to
+ * fully commit, so its delete+insert always runs against the true latest state.
+ */
 export async function updateDraftSteps(db: Queryable, workflowId: string, version: number, steps: StepInput[]) {
   const versionRow = await db.query<WorkflowVersionRow>(
-    `select * from public.workflow_versions where workflow_id = $1 and version_number = $2`,
+    `select * from public.workflow_versions where workflow_id = $1 and version_number = $2 for update`,
     [workflowId, version],
   );
   const v = versionRow.rows[0];
@@ -274,6 +287,44 @@ export async function updateDraftSteps(db: Queryable, workflowId: string, versio
     order++;
   }
 
+  return getWorkflow(db, workflowId);
+}
+
+/**
+ * Discards a single Draft version (and its steps) while leaving the rest of
+ * the workflow and its other versions untouched — for when a user starts
+ * editing a draft and decides they don't want it, without wiping the whole
+ * workflow (and its published version/enrollment history) via deleteWorkflow.
+ * Refuses a non-draft target (nothing to "discard" there — that's live
+ * history) and refuses the workflow's only version (nothing would be left;
+ * deleteWorkflow is the correct action for that case).
+ *
+ * Locks every version row for this workflow up front: this gives the same
+ * cross-request serialization as updateDraftSteps's lock (a racing autosave
+ * for this exact version either finishes first, after which this cleanly
+ * finds it already handled, or is blocked until this commits, after which it
+ * 404s instead of racing) and we need the full list anyway to count versions.
+ */
+export async function deleteWorkflowVersion(db: Queryable, workflowId: string, version: number) {
+  await getWorkflowRowOr404(db, workflowId);
+  const versions = await db.query<WorkflowVersionRow>(
+    `select * from public.workflow_versions where workflow_id = $1 order by version_number asc for update`,
+    [workflowId],
+  );
+  const target = versions.rows.find((v) => v.version_number === version);
+  if (!target) throw new NotFoundError("Workflow version");
+  if (target.status !== "draft") {
+    throw new InvalidTransitionError(`Version ${version} is "${target.status}" — only a Draft version can be discarded.`);
+  }
+  if (versions.rows.length <= 1) {
+    throw new ConflictError(
+      "This is the workflow's only version — delete the whole workflow instead.",
+      { reason: "only_version" },
+    );
+  }
+
+  await db.query(`delete from public.workflow_steps where workflow_version_id = $1`, [target.id]);
+  await db.query(`delete from public.workflow_versions where id = $1`, [target.id]);
   return getWorkflow(db, workflowId);
 }
 

@@ -254,6 +254,99 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     expect(withDraft.versions.some((version) => version.status === "published" && version.version === 1)).toBe(true);
   });
 
+  it("updateDraftSteps never raises workflow_steps_unique_order under concurrent overlapping saves", async () => {
+    const { createWorkflow, updateDraftSteps, getWorkflow } = await import("../../src/services/workflows.service.js");
+    const workflow = await withTestTransaction((client) =>
+      createWorkflow(client, actor, { name: "Concurrency workflow", trigger: "manual_enrollment" }),
+    );
+
+    const payloadA = [
+      { order: 0, delayDays: 0, action: "create_call_task" as const, config: "A1", enabled: true },
+      { order: 1, delayDays: 1, action: "create_call_task" as const, config: "A2", enabled: true },
+    ];
+    const payloadB = [
+      { order: 0, delayDays: 0, action: "create_call_task" as const, config: "B1", enabled: true },
+    ];
+
+    // Two overlapping requests for the same draft version used to race — the
+    // second's delete-all/insert-all could collide with the first's
+    // already-committed rows and raise workflow_steps_unique_order. The
+    // `for update` lock in updateDraftSteps serializes them instead, so both
+    // must resolve cleanly (never reject) regardless of which one's writes
+    // end up as the final state.
+    await expect(
+      Promise.all([
+        withTestTransaction((client) => updateDraftSteps(client, workflow.id, 1, payloadA)),
+        withTestTransaction((client) => updateDraftSteps(client, workflow.id, 1, payloadB)),
+      ]),
+    ).resolves.toBeDefined();
+
+    const final = await getWorkflow(pool, workflow.id);
+    const finalSteps = final.versions.find((version) => version.version === 1)!.steps;
+    const matchesA =
+      finalSteps.length === payloadA.length &&
+      finalSteps.every((step, index) => step.config === payloadA[index]!.config);
+    const matchesB =
+      finalSteps.length === payloadB.length &&
+      finalSteps.every((step, index) => step.config === payloadB[index]!.config);
+    // The final state must be exactly whichever request committed last, not
+    // an interleaved mix of both payloads' steps.
+    expect(matchesA || matchesB).toBe(true);
+  });
+
+  it("deleteWorkflowVersion rejects a non-draft version", async () => {
+    const { createWorkflow, updateDraftSteps, publishVersion, deleteWorkflowVersion } = await import(
+      "../../src/services/workflows.service.js"
+    );
+    const workflow = await withTestTransaction((client) =>
+      createWorkflow(client, actor, { name: "Discard-reject workflow", trigger: "manual_enrollment" }),
+    );
+    await withTestTransaction((client) =>
+      updateDraftSteps(client, workflow.id, 1, [
+        { order: 0, delayDays: 0, action: "create_call_task", config: "Call", enabled: true },
+      ]),
+    );
+    await withTestTransaction((client) => publishVersion(client, actor, workflow.id, 1, "keep_existing"));
+
+    await expect(
+      withTestTransaction((client) => deleteWorkflowVersion(client, workflow.id, 1)),
+    ).rejects.toMatchObject({ code: "invalid_transition" });
+  });
+
+  it("deleteWorkflowVersion rejects the workflow's only version", async () => {
+    const { createWorkflow, deleteWorkflowVersion } = await import("../../src/services/workflows.service.js");
+    const workflow = await withTestTransaction((client) =>
+      createWorkflow(client, actor, { name: "Only-version workflow", trigger: "manual_enrollment" }),
+    );
+
+    await expect(
+      withTestTransaction((client) => deleteWorkflowVersion(client, workflow.id, 1)),
+    ).rejects.toMatchObject({ code: "conflict", details: { reason: "only_version" } });
+  });
+
+  it("deleteWorkflowVersion removes just the draft, leaving the published version's steps intact", async () => {
+    const { createWorkflow, updateDraftSteps, publishVersion, createDraft, deleteWorkflowVersion } = await import(
+      "../../src/services/workflows.service.js"
+    );
+    const workflow = await withTestTransaction((client) =>
+      createWorkflow(client, actor, { name: "Discard workflow", trigger: "manual_enrollment" }),
+    );
+    await withTestTransaction((client) =>
+      updateDraftSteps(client, workflow.id, 1, [
+        { order: 0, delayDays: 0, action: "create_call_task", config: "Original", enabled: true },
+      ]),
+    );
+    await withTestTransaction((client) => publishVersion(client, actor, workflow.id, 1, "keep_existing"));
+    await withTestTransaction((client) => createDraft(client, actor, workflow.id));
+
+    const updated = await withTestTransaction((client) => deleteWorkflowVersion(client, workflow.id, 2));
+    expect(updated.versions.some((version) => version.version === 2)).toBe(false);
+    const published = updated.versions.find((version) => version.version === 1)!;
+    expect(published.status).toBe("published");
+    expect(published.steps).toHaveLength(1);
+    expect(published.steps[0]?.config).toBe("Original");
+  });
+
   it("enrollLeadInWorkflow enrolls a lead in a chosen workflow regardless of its trigger", async () => {
     const { createLead } = await import("../../src/services/leads.service.js");
     const { createWorkflow, updateDraftSteps, publishVersion } = await import("../../src/services/workflows.service.js");

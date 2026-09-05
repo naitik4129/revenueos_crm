@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { ArrowDown, ArrowLeft, ArrowUp, Plus, Trash2, Zap } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
@@ -25,9 +25,12 @@ import {
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
+import { BackendError } from "@/lib/backend-client";
 import { messageFromError, useAutomations, useSession } from "@/store";
+import { stepsWithCumulativeDay } from "@/lib/workflow-timeline";
 import {
   PIPELINE_STAGES,
   STEP_ACTIONS,
@@ -65,54 +68,122 @@ export function WorkflowBuilderPage({ workflowId }: { workflowId: string }) {
   return <Builder workflow={workflow} />;
 }
 
+interface StepSaveSnapshot {
+  workflowId: string;
+  versionNumber: number;
+  steps: WorkflowStep[];
+}
+
 function Builder({ workflow }: { workflow: Workflow }) {
   const store = useAutomations();
   const { userName } = useSession();
+  const navigate = useNavigate();
   const [selectedVersion, setSelectedVersion] = useState<number>(
     workflow.currentVersion || workflow.versions.at(-1)?.version || 1,
   );
   const [publishOpen, setPublishOpen] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [deleteWorkflowOpen, setDeleteWorkflowOpen] = useState(false);
+  const [forceDeleteWorkflowOpen, setForceDeleteWorkflowOpen] = useState(false);
   const version =
     workflow.versions.find((item) => item.version === selectedVersion) ?? workflow.versions.at(-1)!;
   const editable = version.status === "draft";
+  const isOnlyVersion = workflow.versions.length <= 1;
   const bufferKey = `${workflow.id}:${version.version}`;
   const [buffer, setBuffer] = useState<{ key: string; steps: WorkflowStep[]; dirty: boolean }>({
     key: bufferKey,
     steps: version.steps,
     dirty: false,
   });
+  const [dayDrafts, setDayDrafts] = useState<Record<string, string>>({});
   const steps = buffer.key === bufferKey ? buffer.steps : version.steps;
+  const dayByStepId = useMemo(
+    () => new Map(stepsWithCumulativeDay(steps).map(({ step, day }) => [step.id, day])),
+    [steps],
+  );
 
   useEffect(() => {
-    if (buffer.key !== bufferKey) setBuffer({ key: bufferKey, steps: version.steps, dirty: false });
+    if (buffer.key !== bufferKey) {
+      setBuffer({ key: bufferKey, steps: version.steps, dirty: false });
+      setDayDrafts({});
+    }
   }, [buffer.key, bufferKey, version.steps]);
+
+  // Serialized save queue: a plain promise chain acts as a mutex so at most
+  // one PUT .../steps request is ever in flight for this draft at a time.
+  // Every step edit (wait/day, toggle, move, add, insert, delete, action or
+  // template select) used to call store.updateDraftSteps directly — nearly
+  // all of them immediately, wait-days on a 500ms debounce — so a debounced
+  // save landing near an immediate one fired two overlapping requests. Each
+  // does its own delete-all-then-insert-all, and the second would race the
+  // first's commit and raise "duplicate key value violates unique constraint
+  // workflow_steps_unique_order". Routing every save through enqueueSave
+  // below means a save requested while one is in flight simply waits its
+  // turn on the chain, and if a newer edit supersedes it before its turn
+  // comes up, the stale one is skipped in favor of the latest — nothing
+  // overlaps, and no edit is ever silently dropped.
+  const storeRef = useRef(store);
+  storeRef.current = store;
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // Keyed by "<workflowId>:<versionNumber>" so superseding only ever compares
+  // a snapshot against a later edit for that *same* version — a save queued
+  // for one draft version must never be skipped just because the user
+  // switched to another version and edited that one too.
+  const latestSnapshotByKeyRef = useRef(new Map<string, StepSaveSnapshot>());
+  const skipNextDebounceRef = useRef(false);
+
+  const enqueueSave = (snapshot: StepSaveSnapshot): Promise<void> => {
+    const key = `${snapshot.workflowId}:${snapshot.versionNumber}`;
+    latestSnapshotByKeyRef.current.set(key, snapshot);
+    const chained = saveQueueRef.current.then(async () => {
+      if (latestSnapshotByKeyRef.current.get(key) !== snapshot) return; // superseded while waiting its turn
+      try {
+        await storeRef.current.updateDraftSteps(
+          snapshot.workflowId,
+          snapshot.versionNumber,
+          snapshot.steps,
+        );
+      } catch (error) {
+        toast.error(messageFromError(error));
+        return;
+      }
+      setBuffer((current) =>
+        current.key === key && latestSnapshotByKeyRef.current.get(key) === snapshot
+          ? { ...current, dirty: false }
+          : current,
+      );
+    });
+    saveQueueRef.current = chained;
+    return chained;
+  };
+
   useEffect(() => {
     if (!editable || buffer.key !== bufferKey || !buffer.dirty) return;
+    if (skipNextDebounceRef.current) {
+      skipNextDebounceRef.current = false;
+      return;
+    }
     const timer = window.setTimeout(() => {
-      void store
-        .updateDraftSteps(workflow.id, version.version, buffer.steps)
-        .then(() =>
-          setBuffer((current) =>
-            current.key === bufferKey ? { ...current, dirty: false } : current,
-          ),
-        )
-        .catch((error) => toast.error(messageFromError(error)));
+      void enqueueSave({
+        workflowId: workflow.id,
+        versionNumber: version.version,
+        steps: buffer.steps,
+      });
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [editable, buffer, bufferKey, store, version.version, workflow.id]);
+  }, [editable, buffer, bufferKey, version.version, workflow.id]);
 
   // The debounce cleanup above cancels the pending save on *every*
   // dependency change, including on unmount (navigating away). Without this
   // separate mount-only effect, a dirty edit made within the last 500ms
   // before navigating away is silently discarded — never saved, no warning.
   // Refs (kept current every render) let this true-unmount-only cleanup see
-  // the latest buffer/store, flushing any still-dirty edit instead of
-  // dropping it.
+  // the latest buffer, flushing any still-dirty edit through the same
+  // serialized queue instead of dropping it.
   const flushOnUnmountRef = useRef({
     buffer,
     editable,
     bufferKey,
-    store,
     workflowId: workflow.id,
     versionNumber: version.version,
   });
@@ -120,7 +191,6 @@ function Builder({ workflow }: { workflow: Workflow }) {
     buffer,
     editable,
     bufferKey,
-    store,
     workflowId: workflow.id,
     versionNumber: version.version,
   };
@@ -128,22 +198,25 @@ function Builder({ workflow }: { workflow: Workflow }) {
     return () => {
       const current = flushOnUnmountRef.current;
       if (current.editable && current.buffer.dirty && current.buffer.key === current.bufferKey) {
-        void current.store.updateDraftSteps(
-          current.workflowId,
-          current.versionNumber,
-          current.buffer.steps,
-        );
+        void enqueueSave({
+          workflowId: current.workflowId,
+          versionNumber: current.versionNumber,
+          steps: current.buffer.steps,
+        });
       }
     };
   }, []);
 
   const setSteps = (next: WorkflowStep[], immediate = false) => {
     const normalized = next.map((step, order) => ({ ...step, order }));
-    setBuffer({ key: bufferKey, steps: normalized, dirty: !immediate });
+    if (immediate) skipNextDebounceRef.current = true;
+    setBuffer({ key: bufferKey, steps: normalized, dirty: true });
     if (immediate) {
-      void store
-        .updateDraftSteps(workflow.id, version.version, normalized)
-        .catch((error) => toast.error(messageFromError(error)));
+      void enqueueSave({
+        workflowId: workflow.id,
+        versionNumber: version.version,
+        steps: normalized,
+      });
     }
   };
   const updateStep = (id: string, patch: Partial<WorkflowStep>, immediate = false) =>
@@ -158,23 +231,33 @@ function Builder({ workflow }: { workflow: Workflow }) {
     [next[index], next[target]] = [next[target]!, next[index]!];
     setSteps(next, true);
   };
-  const addStep = () =>
-    setSteps(
-      [
-        ...steps,
-        {
-          id: crypto.randomUUID(),
-          order: steps.length,
-          delayDays: 2,
-          action: "send_email",
-          templateId: store.templates.find(
-            (template) => template.type === "email" && template.active,
-          )?.id,
-          enabled: true,
-        },
-      ],
-      true,
-    );
+  const defaultStep = (): WorkflowStep => ({
+    id: crypto.randomUUID(),
+    order: 0,
+    delayDays: 2,
+    action: "send_email",
+    templateId: store.templates.find((template) => template.type === "email" && template.active)
+      ?.id,
+    enabled: true,
+  });
+  const addStep = () => setSteps([...steps, defaultStep()], true);
+  const insertStepAt = (index: number) => {
+    const next = steps.slice();
+    next.splice(index, 0, defaultStep());
+    setSteps(next, true);
+  };
+  const commitDay = (step: WorkflowStep, index: number, rawValue: string) => {
+    setDayDrafts((current) => {
+      const next = { ...current };
+      delete next[step.id];
+      return next;
+    });
+    const parsed = Number(rawValue);
+    const typedDay = Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
+    const prevDay = index === 0 ? 0 : (dayByStepId.get(steps[index - 1]!.id) ?? 0);
+    const delayDays = Math.max(0, typedDay - prevDay);
+    if (delayDays !== step.delayDays) updateStep(step.id, { delayDays }, true);
+  };
   const mutate = async (work: () => Promise<unknown>, success: string) => {
     try {
       await work();
@@ -190,10 +273,43 @@ function Builder({ workflow }: { workflow: Workflow }) {
     }, "Draft ready to edit");
   const publish = () =>
     void mutate(async () => {
-      await store.updateDraftSteps(workflow.id, version.version, steps);
+      await enqueueSave({ workflowId: workflow.id, versionNumber: version.version, steps });
       await store.publishVersion(workflow.id, version.version);
       setPublishOpen(false);
     }, `V${version.version} published`);
+  const discardDraft = () =>
+    void mutate(async () => {
+      setDiscardOpen(false);
+      const updated = await store.deleteWorkflowVersion(workflow.id, version.version);
+      const next =
+        updated.versions.find((item) => item.status === "published") ?? updated.versions.at(-1);
+      if (next) setSelectedVersion(next.version);
+    }, "Draft discarded");
+  const deleteWorkflow = () => {
+    setDeleteWorkflowOpen(false);
+    store
+      .deleteWorkflow(workflow.id)
+      .then(() => {
+        toast.success("Workflow deleted");
+        void navigate({ to: "/automations" });
+      })
+      .catch((error: unknown) => {
+        if (
+          error instanceof BackendError &&
+          (error.details as { reason?: string } | undefined)?.reason === "has_enrollment_history"
+        ) {
+          setForceDeleteWorkflowOpen(true);
+          return;
+        }
+        toast.error(messageFromError(error));
+      });
+  };
+  const forceDeleteWorkflow = () =>
+    void mutate(async () => {
+      setForceDeleteWorkflowOpen(false);
+      await store.deleteWorkflow(workflow.id, true);
+      void navigate({ to: "/automations" });
+    }, "Workflow and its enrollment history deleted");
 
   return (
     <div className="pb-10">
@@ -208,9 +324,21 @@ function Builder({ workflow }: { workflow: Workflow }) {
               </Link>
             </Button>
             {editable ? (
-              <Button size="sm" onClick={() => setPublishOpen(true)}>
-                Publish V{version.version}
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive"
+                  onClick={() =>
+                    isOnlyVersion ? setDeleteWorkflowOpen(true) : setDiscardOpen(true)
+                  }
+                >
+                  {isOnlyVersion ? "Delete workflow" : "Discard draft"}
+                </Button>
+                <Button size="sm" onClick={() => setPublishOpen(true)}>
+                  Publish V{version.version}
+                </Button>
+              </>
             ) : (
               <Button size="sm" variant="outline" onClick={createDraft}>
                 Edit as new draft
@@ -256,108 +384,128 @@ function Builder({ workflow }: { workflow: Workflow }) {
             </CardContent>
           </Card>
           {steps.map((step, index) => (
-            <Card key={step.id} className={step.enabled ? "" : "opacity-60"}>
-              <CardContent className="space-y-3 py-4">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="num grid size-6 place-items-center rounded-full bg-secondary text-xs font-semibold">
-                      {index + 1}
-                    </span>
-                    <span className="text-sm font-medium">{label(step.action)}</span>
-                    {["send_email", "send_whatsapp"].includes(step.action) && (
-                      <StatusBadge value={store.templateName(step.templateId)} tone="muted" />
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Switch
-                      checked={step.enabled}
-                      disabled={!editable}
-                      onCheckedChange={(value) => updateStep(step.id, { enabled: value }, true)}
-                    />
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      disabled={!editable || index === 0}
-                      onClick={() => move(index, -1)}
-                    >
-                      <ArrowUp className="size-4" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      disabled={!editable || index === steps.length - 1}
-                      onClick={() => move(index, 1)}
-                    >
-                      <ArrowDown className="size-4" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      disabled={!editable}
-                      onClick={() =>
-                        setSteps(
-                          steps.filter((item) => item.id !== step.id),
-                          true,
-                        )
-                      }
-                    >
-                      <Trash2 className="size-4 text-destructive" />
-                    </Button>
-                  </div>
+            <div key={step.id} className="space-y-1">
+              {editable && (
+                <div className="flex justify-center">
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-6 rounded-full text-muted-foreground hover:text-foreground"
+                    aria-label={`Insert step before step ${index + 1}`}
+                    onClick={() => insertStepAt(index)}
+                  >
+                    <Plus className="size-3.5" />
+                  </Button>
                 </div>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <div>
-                    <Label className="mb-1.5 block text-xs">Wait (days)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      disabled={!editable}
-                      value={step.delayDays}
-                      onChange={(event) =>
-                        updateStep(step.id, { delayDays: Math.max(0, Number(event.target.value)) })
-                      }
+              )}
+              <Card className={step.enabled ? "" : "opacity-60"}>
+                <CardContent className="space-y-3 py-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="num grid size-6 place-items-center rounded-full bg-secondary text-xs font-semibold">
+                        {index + 1}
+                      </span>
+                      <span className="text-sm font-medium">{label(step.action)}</span>
+                      {["send_email", "send_whatsapp"].includes(step.action) && (
+                        <StatusBadge value={store.templateName(step.templateId)} tone="muted" />
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Switch
+                        checked={step.enabled}
+                        disabled={!editable}
+                        onCheckedChange={(value) => updateStep(step.id, { enabled: value }, true)}
+                      />
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        disabled={!editable || index === 0}
+                        onClick={() => move(index, -1)}
+                      >
+                        <ArrowUp className="size-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        disabled={!editable || index === steps.length - 1}
+                        onClick={() => move(index, 1)}
+                      >
+                        <ArrowDown className="size-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        disabled={!editable}
+                        onClick={() =>
+                          setSteps(
+                            steps.filter((item) => item.id !== step.id),
+                            true,
+                          )
+                        }
+                      >
+                        <Trash2 className="size-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div>
+                      <Label className="mb-1.5 block text-xs">Day</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        disabled={!editable}
+                        value={dayDrafts[step.id] ?? String(dayByStepId.get(step.id) ?? 0)}
+                        onChange={(event) =>
+                          setDayDrafts((current) => ({ ...current, [step.id]: event.target.value }))
+                        }
+                        onBlur={(event) => commitDay(step, index, event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") event.currentTarget.blur();
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <Label className="mb-1.5 block text-xs">Action</Label>
+                      <Select
+                        value={step.action}
+                        disabled={!editable}
+                        onValueChange={(value) => {
+                          const action = value as StepAction;
+                          const template =
+                            action === "send_email"
+                              ? store.templates.find((item) => item.type === "email" && item.active)
+                                  ?.id
+                              : action === "send_whatsapp"
+                                ? store.templates.find(
+                                    (item) => item.type === "whatsapp" && item.active,
+                                  )?.id
+                                : undefined;
+                          updateStep(step.id, { action, templateId: template }, true);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {STEP_ACTIONS.map((value) => (
+                            <SelectItem key={value} value={value}>
+                              {label(value)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <StepConfig
+                      step={step}
+                      editable={editable}
+                      templates={store.templates}
+                      onChange={(patch, immediate) => updateStep(step.id, patch, immediate)}
                     />
                   </div>
-                  <div>
-                    <Label className="mb-1.5 block text-xs">Action</Label>
-                    <Select
-                      value={step.action}
-                      disabled={!editable}
-                      onValueChange={(value) => {
-                        const action = value as StepAction;
-                        const template =
-                          action === "send_email"
-                            ? store.templates.find((item) => item.type === "email" && item.active)
-                                ?.id
-                            : action === "send_whatsapp"
-                              ? store.templates.find(
-                                  (item) => item.type === "whatsapp" && item.active,
-                                )?.id
-                              : undefined;
-                        updateStep(step.id, { action, templateId: template }, true);
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {STEP_ACTIONS.map((value) => (
-                          <SelectItem key={value} value={value}>
-                            {label(value)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <StepConfig
-                    step={step}
-                    editable={editable}
-                    templates={store.templates}
-                    onChange={(patch, immediate) => updateStep(step.id, patch, immediate)}
-                  />
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            </div>
           ))}
           {editable ? (
             <Button variant="outline" className="w-full border-dashed" onClick={addStep}>
@@ -445,6 +593,32 @@ function Builder({ workflow }: { workflow: Workflow }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={discardOpen}
+        onOpenChange={setDiscardOpen}
+        title={`Discard draft V${version.version}?`}
+        description="This permanently deletes this draft's steps. The workflow's published version is unaffected."
+        confirmLabel="Discard draft"
+        disabled={store.isPending}
+        onConfirm={discardDraft}
+      />
+      <ConfirmDialog
+        open={deleteWorkflowOpen}
+        onOpenChange={setDeleteWorkflowOpen}
+        title={`Delete "${workflow.name}"?`}
+        description="This removes the workflow and all of its versions and steps. Workflows that leads have ever been enrolled in need a second confirmation — pausing is the non-destructive alternative."
+        disabled={store.isPending}
+        onConfirm={deleteWorkflow}
+      />
+      <ConfirmDialog
+        open={forceDeleteWorkflowOpen}
+        onOpenChange={setForceDeleteWorkflowOpen}
+        title={`Force delete "${workflow.name}"?`}
+        description="Leads have been enrolled in this workflow. Force-deleting permanently erases that enrollment history (which runs, when, what happened) — this cannot be undone. Pausing the workflow is the reversible alternative."
+        confirmLabel="Force delete"
+        disabled={store.isPending}
+        onConfirm={forceDeleteWorkflow}
+      />
     </div>
   );
 }

@@ -429,6 +429,11 @@ export function useAutomations() {
       backend.workflows.delete(id, force),
     onSuccess: invalidate,
   });
+  const workflowVersionDelete = useMutation({
+    mutationFn: ({ id, version }: { id: string; version: number }) =>
+      backend.workflows.deleteVersion(id, version),
+    onSuccess: invalidate,
+  });
   const runAction = useMutation({
     mutationFn: ({
       id,
@@ -490,6 +495,7 @@ export function useAutomations() {
       publish,
       duplicate,
       workflowDelete,
+      workflowVersionDelete,
       runAction,
       enroll,
       templateCreate,
@@ -516,6 +522,8 @@ export function useAutomations() {
     duplicateWorkflow: (id: string) => duplicate.mutateAsync(id),
     deleteWorkflow: (id: string, force?: boolean) =>
       workflowDelete.mutateAsync(force !== undefined ? { id, force } : { id }),
+    deleteWorkflowVersion: (id: string, version: number) =>
+      workflowVersionDelete.mutateAsync({ id, version }),
     pauseRun: (id: string) => runAction.mutateAsync({ id, action: "pause" }),
     resumeRun: (id: string) => runAction.mutateAsync({ id, action: "resume" }),
     cancelRun: (id: string) => runAction.mutateAsync({ id, action: "cancel" }),
