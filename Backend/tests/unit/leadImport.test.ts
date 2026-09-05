@@ -93,7 +93,7 @@ describe("validateLeadFields", () => {
     ];
     for (const [input, field] of cases) {
       try {
-        validateLeadFields(input as Parameters<typeof validateLeadFields>[0]);
+        validateLeadFields(input as unknown as Parameters<typeof validateLeadFields>[0]);
         throw new Error(`expected validateLeadFields to throw for field ${field}`);
       } catch (err) {
         expect(err).toBeInstanceOf(ValidationError);
