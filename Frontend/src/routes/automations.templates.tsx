@@ -4,12 +4,12 @@ import { TemplatesPage } from "@/features/automations/templates-page";
 export const Route = createFileRoute("/automations/templates")({
   head: () => ({
     meta: [
-      { title: "Message templates — Northbeam CRM" },
+      { title: "Message templates — MOTM Flow" },
       {
         name: "description",
         content: "Email and WhatsApp message templates used by nurture workflow steps.",
       },
-      { property: "og:title", content: "Message templates — Northbeam CRM" },
+      { property: "og:title", content: "Message templates — MOTM Flow" },
       {
         property: "og:description",
         content: "A simple library of message bodies managers can edit.",

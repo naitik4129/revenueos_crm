@@ -42,7 +42,7 @@ export function LoginPage({ adminMode = false }: { adminMode?: boolean }) {
           <div className="grid size-9 place-items-center rounded-md bg-primary text-primary-foreground">
             <Bot className="size-4" />
           </div>
-          <div className="text-lg font-semibold">Northbeam CRM{adminMode ? " Admin" : ""}</div>
+          <div className="text-lg font-semibold">MOTM Flow{adminMode ? " Admin" : ""}</div>
         </div>
 
         <form onSubmit={onSubmit} className="space-y-4 rounded-lg border bg-card p-6 shadow-sm">

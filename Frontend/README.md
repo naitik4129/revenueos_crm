@@ -1,6 +1,6 @@
-# Northbeam CRM Frontend
+# MOTM Flow Frontend
 
-React 19 frontend for Northbeam's lead-management and sales-automation CRM. Production CRM data is loaded and mutated exclusively through the authenticated `Backend/` API. Supabase JS is used only for browser authentication and session management.
+React 19 frontend for MOTM Technologies' lead-management and sales-automation CRM. Production CRM data is loaded and mutated exclusively through the authenticated `Backend/` API. Supabase JS is used only for browser authentication and session management.
 
 ## Architecture
 

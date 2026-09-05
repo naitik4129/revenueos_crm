@@ -83,7 +83,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Bot className="size-4" />
             </div>
             <div className="leading-tight">
-              <div className="text-sm font-semibold">Northbeam CRM</div>
+              <div className="text-sm font-semibold">MOTM Flow</div>
               <div className="text-[11px] text-muted-foreground">Sales Automation</div>
             </div>
           </div>
@@ -123,7 +123,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-sidebar-accent">
               <Building2 className="size-4 text-muted-foreground" />
               <div className="min-w-0 flex-1 text-xs">
-                <div className="truncate font-medium">Northbeam Solutions</div>
+                <div className="truncate font-medium">MOTM Technologies</div>
                 <div className="text-muted-foreground">Workspace · IST</div>
               </div>
               <ChevronsUpDown className="size-3.5 text-muted-foreground" />

@@ -85,7 +85,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { name: "author", content: "Northbeam CRM" },
+      { name: "author", content: "MOTM Flow" },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
@@ -96,7 +96,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: "https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap",
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+      { rel: "icon", href: "/favicon.ico", sizes: "any" },
     ],
   }),
   component: RootComponent,
@@ -138,7 +139,7 @@ function AuthGate({ children, queryClient }: { children: ReactNode; queryClient:
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-4">
         <div className="max-w-lg rounded-lg border bg-card p-6 text-center shadow-sm">
-          <h1 className="text-lg font-semibold">Northbeam CRM is not configured</h1>
+          <h1 className="text-lg font-semibold">MOTM Flow is not configured</h1>
           <p className="mt-2 text-sm text-muted-foreground">{configurationError}</p>
           <p className="mt-2 text-xs text-muted-foreground">
             Add the browser-safe values documented in Frontend/.env.example and restart the

@@ -26,7 +26,7 @@ export function AdminPage() {
               <Shield className="size-4" />
             </div>
             <div>
-              <div className="font-semibold">Northbeam Admin</div>
+              <div className="font-semibold">MOTM Flow Admin</div>
               <div className="text-xs text-muted-foreground">
                 Identity and messaging control plane
               </div>
