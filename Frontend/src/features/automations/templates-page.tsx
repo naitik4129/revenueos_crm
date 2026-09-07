@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useRef, useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
 import { Paperclip, Plus, Trash2, X } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
@@ -30,6 +30,7 @@ import type { Template, TemplateAttachment, TemplateType } from "@/types";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { TemplateBodyEditor } from "@/features/automations/template-body-editor";
 import { htmlToWhatsAppText } from "@/lib/html-to-whatsapp-text";
+import { TEMPLATE_VARIABLES } from "@/lib/template-variables";
 
 const ATTACHMENT_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp";
 
@@ -220,6 +221,7 @@ function TemplateDialog({
   const [isDefaultMeetingScheduled, setIsDefaultMeetingScheduled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const subjectInputRef = useRef<HTMLInputElement>(null);
 
   const key = template?.id ?? "new";
   if (open && loadedFor !== key) {
@@ -247,6 +249,22 @@ function TemplateDialog({
       return;
     }
     setStagedFiles((prev) => [...prev, ...selected]);
+  }
+
+  function insertSubjectVariable(token: string) {
+    const variable = `{{${token}}}`;
+    const input = subjectInputRef.current;
+    const start = input?.selectionStart ?? subject.length;
+    const end = input?.selectionEnd ?? start;
+    const nextSubject = `${subject.slice(0, start)}${variable}${subject.slice(end)}`;
+
+    setSubject(nextSubject);
+    window.requestAnimationFrame(() => {
+      if (!input) return;
+      const cursor = start + variable.length;
+      input.focus();
+      input.setSelectionRange(cursor, cursor);
+    });
   }
 
   async function handleSave() {
@@ -326,8 +344,32 @@ function TemplateDialog({
           </div>
           {type === "email" && (
             <div>
-              <Label className="mb-1.5 block text-xs">Subject</Label>
-              <Input value={subject} onChange={(e) => setSubject(e.target.value)} />
+              <Label htmlFor="template-subject" className="mb-1.5 block text-xs">
+                Subject
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  ref={subjectInputRef}
+                  id="template-subject"
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                />
+                <Select value="" onValueChange={insertSubjectVariable}>
+                  <SelectTrigger
+                    aria-label="Insert subject variable"
+                    className="h-9 w-[170px] text-xs"
+                  >
+                    <SelectValue placeholder="Insert variable" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TEMPLATE_VARIABLES.map((v) => (
+                      <SelectItem key={v.token} value={v.token} className="text-xs">
+                        {v.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           )}
 
@@ -375,7 +417,7 @@ function TemplateDialog({
               </TabsContent>
             </Tabs>
             <p className="pt-1 text-xs text-muted-foreground">
-              Use the "Insert variable" menu in the toolbar to personalise with lead/owner details.
+              Use the "Insert variable" menus to personalise with lead/owner details.
             </p>
           </div>
 
