@@ -135,6 +135,7 @@ export type CallNotConnectedReason = (typeof CALL_NOT_CONNECTED_REASONS)[number]
  */
 export const CALL_CONNECTED_OUTCOMES = [
   "positive",
+  "meeting_agreed",
   "interested_later",
   "future_possibility",
   "callback_requested",
@@ -229,6 +230,7 @@ export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
  */
 export const WORKFLOW_TRIGGERS = [
   "lead_created",
+  "meeting_agreed",
   "call_not_connected",
   "call_outcome_interested_later",
   "call_outcome_future_possibility",

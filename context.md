@@ -1,6 +1,6 @@
 # Northbeam CRM - Project Context
 
-Last refreshed: 2026-09-05
+Last refreshed: 2026-09-07
 
 ## Project Summary
 
@@ -19,7 +19,7 @@ Supabase JS in the frontend is used only for browser authentication and session 
 
 - `Frontend/`: React 19, Vite 8, TanStack Router, TanStack Query, Tailwind CSS 4, Radix UI, lucide icons, Tiptap template editing, PapaParse CSV import, QR code rendering, and Vitest tests.
 - `Backend/`: Node 22 TypeScript ESM, Express, `pg`, Zod validation, Supabase admin auth/storage client, provider integrations, pure domain routing modules, service-layer transactions, API routes, automation worker, and Vitest tests.
-- `Supabase/migrations/`: ordered SQL migrations. Apply every file in filename order, currently `001_initial_migration.sql` through `013_proposal_loss_fields.sql`.
+- `Supabase/migrations/`: ordered SQL migrations. Apply every file in filename order, currently `001_initial_migration.sql` through `014_meeting_agreed_call_outcome.sql`.
 - `Supabase/disposable/`: one-off SQL seed scripts (not tracked as migrations, not idempotent) that create workflows/templates/steps. Run once by hand after the migrations they depend on. Currently: `stage1_welcome_workflow_seed.sql` (the new-lead welcome sequence) plus 14 further nurture sequences — `not_connected_reconnect_seed.sql`, `interested_later_seed.sql`, `future_possibility_seed.sql`, `send_information_seed.sql`, `objection_commission_only_seed.sql`/`objection_internal_hiring_seed.sql`/`objection_existing_team_seed.sql`/`objection_budget_price_seed.sql`/`objection_internal_approval_seed.sql`, `meeting_needs_more_info_seed.sql`/`meeting_not_ready_seed.sql`, `proposal_conversion_seed.sql`, and `reactivation_price_budget_seed.sql`/`reactivation_internal_hiring_seed.sql` (illustrative — the same pattern extends to the other loss reasons via the Automations UI). Every template contains real MOTM copy with `[PROOF NEEDED: ...]` markers wherever a specific case study, testimonial, or number must come from the business, not be fabricated.
 - `compose.yaml`: production-style three-service Docker Compose setup for `backend`, `worker`, and `frontend`.
 - `.env.example`: root Compose environment example. `Backend/.env.example` and `Frontend/.env.example` document local service env values.
@@ -62,6 +62,7 @@ The migration files are the schema source of truth. The current migration stack 
 - `011_objection_and_loss_types.sql`: adds `public.objection_type` and `public.lead_loss_reason` enums.
 - `012_lead_fields.sql`: adds `leads.objection_type`, the four `leads.interested_later_*` capture columns, and `leads.loss_reason`/`loss_notes`, plus `leads_lost_has_reason` and `leads_objection_stage_has_type` constraints.
 - `013_proposal_loss_fields.sql`: adds `proposals.loss_reason`/`loss_notes` (captured on `rejected`/`expired`, since those don't move the lead to `lost`).
+- `014_meeting_agreed_call_outcome.sql`: adds `meeting_agreed` to `public.call_connected_outcome` and `public.workflow_trigger`.
 
 Private Supabase Storage buckets currently used by the backend:
 
@@ -170,7 +171,7 @@ Important enum concepts are intentionally separate:
 - Contact channels: `phone`, `email`, `whatsapp`, each with channel-specific status values.
 - Objection type (set alongside `pipeline_stage = objection_nurture`): `commission_only`, `internal_hiring`, `existing_team`, `budget_price`, `internal_approval`, `wrong_fit`.
 - Lead loss reason (required when `lifecycle_state = lost`, or on a proposal `rejected`/`expired`): `price_budget`, `internal_hiring`, `project_postponed`, `competitor_selected`, `management_rejected`, `no_urgency`, `no_response`, `other`.
-- Workflow triggers: `lead_created`, `call_not_connected`, `call_outcome_interested_later`, `call_outcome_future_possibility`, `call_outcome_information_requested`, `objection_commission_only`, `objection_internal_hiring`, `objection_existing_team`, `objection_budget_price`, `objection_internal_approval`, `meeting_needs_more_information`, `meeting_not_ready`, `proposal_pending`, `manual_enrollment`. (`call_outcome_maybe`/`call_outcome_negative` retired — see migration `010`.)
+- Workflow triggers: `lead_created`, `meeting_agreed`, `call_not_connected`, `call_outcome_interested_later`, `call_outcome_future_possibility`, `call_outcome_information_requested`, `objection_commission_only`, `objection_internal_hiring`, `objection_existing_team`, `objection_budget_price`, `objection_internal_approval`, `meeting_needs_more_information`, `meeting_not_ready`, `proposal_pending`, `manual_enrollment`. (`call_outcome_maybe`/`call_outcome_negative` retired — see migration `010`.)
 - Workflow step actions: `send_email`, `send_whatsapp`, `create_call_task`, `create_follow_up_task`, `change_lead_stage`, `stop_workflow`.
 
 Backend values stay lowercase. Friendly labels are presentation-only and generated in `Frontend/src/lib/labels.ts`.

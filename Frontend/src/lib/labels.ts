@@ -7,6 +7,7 @@ const SPECIAL: Record<string, string> = {
   proposal_pending: "Proposal Pending",
   manual_enrollment: "Manual Enrollment",
   lead_created: "New Lead Created",
+  meeting_agreed: "Meeting Agreed",
   // Pipeline stages
   connected_qualifying: "Connected – Qualifying",
   interested_later: "Interested – Later",

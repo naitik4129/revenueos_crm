@@ -95,6 +95,13 @@ export function routeConnectedOutcome(
         task: { type: "schedule_meeting", title: "Schedule discovery meeting", dueInDays: 1 },
         promptScheduleMeeting: true,
       };
+    case "meeting_agreed":
+      return {
+        stage: "meeting_scheduling",
+        automation: "active",
+        task: { type: "schedule_meeting", title: "Schedule agreed meeting", dueInDays: 1 },
+        workflowTrigger: "meeting_agreed",
+      };
     case "interested_later":
       // The capture (reason/restart date/next action/decision owner) is
       // written onto the lead by the caller (calls.service.ts); routing here

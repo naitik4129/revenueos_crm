@@ -164,6 +164,7 @@ export type CallNotConnectedReason = (typeof CALL_NOT_CONNECTED_REASONS)[number]
 /** `maybe`/`negative` intentionally omitted — see PIPELINE_STAGES comment above. */
 export const CALL_CONNECTED_OUTCOMES = [
   "positive",
+  "meeting_agreed",
   "interested_later",
   "future_possibility",
   "callback_requested",

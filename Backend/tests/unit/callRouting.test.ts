@@ -32,6 +32,14 @@ describe("routeConnectedOutcome", () => {
     expect(r.task?.type).toBe("schedule_meeting");
   });
 
+  it("routes Meeting Agreed to Meeting Scheduling + active automation + matching trigger", () => {
+    const r = routeConnectedOutcome("meeting_agreed");
+    expect(r.stage).toBe("meeting_scheduling");
+    expect(r.automation).toBe("active");
+    expect(r.workflowTrigger).toBe("meeting_agreed");
+    expect(r.task).toMatchObject({ type: "schedule_meeting", dueInDays: 1 });
+  });
+
   it("routes Interested - Later with a 30-day follow-up when no restart date is captured", () => {
     const r = routeConnectedOutcome("interested_later");
     expect(r.stage).toBe("interested_later");
