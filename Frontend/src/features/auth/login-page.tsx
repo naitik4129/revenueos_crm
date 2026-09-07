@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Bot } from "lucide-react";
+import { BrandLogo } from "@/components/common/brand-logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,7 +30,7 @@ export function LoginPage({ adminMode = false }: { adminMode?: boolean }) {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-background px-4">
+    <div className="relative flex min-h-screen items-center justify-center bg-background px-4 pb-10 pt-24">
       <a
         href={adminMode ? "/" : "/admin"}
         className="absolute right-5 top-5 rounded-md border bg-card px-3 py-2 text-xs font-medium shadow-sm hover:bg-accent"
@@ -38,12 +38,11 @@ export function LoginPage({ adminMode = false }: { adminMode?: boolean }) {
         {adminMode ? "Sales Login" : "Admin Login"}
       </a>
       <div className="w-full max-w-sm">
-        <div className="mb-6 flex items-center justify-center gap-2">
-          <div className="grid size-9 place-items-center rounded-md bg-primary text-primary-foreground">
-            <Bot className="size-4" />
-          </div>
-          <div className="text-lg font-semibold">MOTM Flow{adminMode ? " Admin" : ""}</div>
-        </div>
+        <BrandLogo
+          variant="signature"
+          caption={adminMode ? "MOTM Flow · Admin sign in" : "MOTM Flow · Sales sign in"}
+          className="mx-auto mb-7 w-72 max-w-full"
+        />
 
         <form onSubmit={onSubmit} className="space-y-4 rounded-lg border bg-card p-6 shadow-sm">
           <div>

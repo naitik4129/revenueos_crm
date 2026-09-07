@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 800"><title>MOTM Technologies - Igniting Industrial Growth</title><svg x="220" y="10" width="640" height="530" viewBox="220 0 640 530">
+  <title>MOTM Technologies growth mark</title>
+  <defs>
+    <linearGradient id="growth" x1="229" y1="505" x2="851" y2="150" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#cd402c" />
+      <stop offset="1" stop-color="#f58a59" />
+    </linearGradient>
+  </defs>
+  <path fill="url(#growth)" fill-rule="evenodd" d="M229 505 452 148 537 277 654 85 620 65 723 5 723 125 690 106 538 349 455 219 298 469 366 468 457 321 538 449 676 234 851 505 694 505 619 391 538 520 457 394 388 505Z M643 356 676 306 778 462 712 466Z" />
+
+</svg><svg x="0" y="600" width="1080" height="108" viewBox="0 0 1000 100"><title>MOTM Technologies</title><text x="500" y="76" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="88" font-weight="700" letter-spacing="-2" fill="#242122">MOTM Technologies</text></svg><path d="M0 728H1080" stroke="#cd402c" stroke-width="4"/><text x="540" y="784" text-anchor="middle" font-family="Arial, sans-serif" font-size="49" fill="#cd402c">Igniting Industrial Growth</text></svg>

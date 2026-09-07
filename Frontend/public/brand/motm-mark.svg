@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="220 0 640 530" fill="none">
+  <title>MOTM Technologies growth mark</title>
+  <defs>
+    <linearGradient id="growth" x1="229" y1="505" x2="851" y2="150" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#cd402c" />
+      <stop offset="1" stop-color="#f58a59" />
+    </linearGradient>
+  </defs>
+  <path fill="url(#growth)" fill-rule="evenodd" d="M229 505 452 148 537 277 654 85 620 65 723 5 723 125 690 106 538 349 455 219 298 469 366 468 457 321 538 449 676 234 851 505 694 505 619 391 538 520 457 394 388 505Z M643 356 676 306 778 462 712 466Z" />
+</svg>

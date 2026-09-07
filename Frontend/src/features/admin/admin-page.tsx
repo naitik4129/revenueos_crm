@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
-import { Bot, Cable, CalendarDays, LogOut, Mail, RefreshCw, Shield, Users } from "lucide-react";
+import { Bot, Cable, CalendarDays, LogOut, Mail, RefreshCw, Users } from "lucide-react";
 import { toast } from "sonner";
 import { backend, type AdminUser, type EmailConnection } from "@/lib/backend-client";
 import { backendBaseUrl, supabase } from "@/lib/supabase-client";
@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import { BrandLogo } from "@/components/common/brand-logo";
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Something went wrong.";
@@ -21,17 +22,7 @@ export function AdminPage() {
     <div className="min-h-screen bg-muted/25">
       <header className="border-b bg-card">
         <div className="mx-auto flex h-16 max-w-6xl items-center px-5">
-          <div className="flex items-center gap-3">
-            <div className="grid size-9 place-items-center rounded-md bg-primary text-primary-foreground">
-              <Shield className="size-4" />
-            </div>
-            <div>
-              <div className="font-semibold">MOTM Flow Admin</div>
-              <div className="text-xs text-muted-foreground">
-                Identity and messaging control plane
-              </div>
-            </div>
-          </div>
+          <BrandLogo caption="MOTM Flow Admin" />
           <Button className="ml-auto" variant="ghost" onClick={() => void supabase?.auth.signOut()}>
             <LogOut /> Sign out
           </Button>

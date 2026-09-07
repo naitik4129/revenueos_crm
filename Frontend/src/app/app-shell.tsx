@@ -3,7 +3,6 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   Bell,
   Bot,
-  Building2,
   CalendarDays,
   ChevronsUpDown,
   FileText,
@@ -15,6 +14,7 @@ import {
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { BrandLogo } from "@/components/common/brand-logo";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -78,14 +78,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     <AddLeadContext.Provider value={{ open: () => setAddOpen(true) }}>
       <div className="flex min-h-screen bg-background">
         <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
-          <div className="flex items-center gap-2 px-4 py-4">
-            <div className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground">
-              <Bot className="size-4" />
-            </div>
-            <div className="leading-tight">
-              <div className="text-sm font-semibold">MOTM Flow</div>
-              <div className="text-[11px] text-muted-foreground">Sales Automation</div>
-            </div>
+          <div className="px-3 py-5">
+            <BrandLogo caption="MOTM Flow · Sales Automation" />
           </div>
 
           <div className="px-3 pb-3">
@@ -121,7 +115,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <div className="border-t border-sidebar-border p-3">
             <div className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-sidebar-accent">
-              <Building2 className="size-4 text-muted-foreground" />
+              <BrandLogo variant="mark" className="size-6" />
               <div className="min-w-0 flex-1 text-xs">
                 <div className="truncate font-medium">MOTM Technologies</div>
                 <div className="text-muted-foreground">Workspace · IST</div>
@@ -153,6 +147,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-card/80 px-4 backdrop-blur">
+            <Link to="/" aria-label="MOTM Flow home" className="shrink-0 lg:hidden">
+              <BrandLogo variant="mark" className="size-8" />
+            </Link>
             <div className="relative w-full max-w-md">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input

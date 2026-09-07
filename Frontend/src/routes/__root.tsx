@@ -19,11 +19,13 @@ import { configurationError } from "@/lib/supabase-client";
 import { useSupabaseSession } from "@/lib/use-supabase-session";
 import { LoginPage } from "@/features/auth/login-page";
 import { backend } from "@/lib/backend-client";
+import { BrandLogo } from "@/components/common/brand-logo";
 
 function NotFoundComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
+        <BrandLogo variant="mark" className="mx-auto mb-6 size-14" />
         <h1 className="text-7xl font-bold text-foreground">404</h1>
         <h2 className="mt-4 text-xl font-semibold text-foreground">Page not found</h2>
         <p className="mt-2 text-sm text-muted-foreground">
@@ -52,6 +54,7 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
+        <BrandLogo variant="mark" className="mx-auto mb-6 size-14" />
         <h1 className="text-xl font-semibold tracking-tight text-foreground">
           This page didn't load
         </h1>
@@ -86,6 +89,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { name: "author", content: "MOTM Flow" },
+      { name: "theme-color", content: "#bc422c" },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
@@ -96,8 +100,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: "https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap",
       },
-      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
-      { rel: "icon", href: "/favicon.ico", sizes: "any" },
+      { rel: "icon", href: "/favicon.ico?v=motm-2026", sizes: "any" },
+      { rel: "icon", href: "/favicon.svg?v=motm-2026", type: "image/svg+xml" },
+      { rel: "apple-touch-icon", href: "/apple-touch-icon.png?v=motm-2026" },
     ],
   }),
   component: RootComponent,
@@ -139,6 +144,7 @@ function AuthGate({ children, queryClient }: { children: ReactNode; queryClient:
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-4">
         <div className="max-w-lg rounded-lg border bg-card p-6 text-center shadow-sm">
+          <BrandLogo variant="mark" className="mx-auto mb-5 size-14" />
           <h1 className="text-lg font-semibold">MOTM Flow is not configured</h1>
           <p className="mt-2 text-sm text-muted-foreground">{configurationError}</p>
           <p className="mt-2 text-xs text-muted-foreground">
@@ -151,16 +157,24 @@ function AuthGate({ children, queryClient }: { children: ReactNode; queryClient:
   }
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
-        Loading…
+      <div
+        className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background text-sm text-muted-foreground"
+        role="status"
+      >
+        <BrandLogo variant="mark" className="size-14" />
+        <span>Loading…</span>
       </div>
     );
   }
   if (!session) return <LoginPage adminMode={adminPath} />;
   if (me.isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
-        Checking access…
+      <div
+        className="flex min-h-screen flex-col items-center justify-center gap-4 text-sm text-muted-foreground"
+        role="status"
+      >
+        <BrandLogo variant="mark" className="size-14" />
+        <span>Checking access…</span>
       </div>
     );
   }
