@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { ArrowDown, ArrowLeft, ArrowUp, Plus, Trash2, Zap } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, Pencil, Plus, Trash2, X, Zap } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -85,6 +86,9 @@ function Builder({ workflow }: { workflow: Workflow }) {
   const [discardOpen, setDiscardOpen] = useState(false);
   const [deleteWorkflowOpen, setDeleteWorkflowOpen] = useState(false);
   const [forceDeleteWorkflowOpen, setForceDeleteWorkflowOpen] = useState(false);
+  const [detailsEditing, setDetailsEditing] = useState(false);
+  const [nameDraft, setNameDraft] = useState(workflow.name);
+  const [descriptionDraft, setDescriptionDraft] = useState(workflow.description);
   const version =
     workflow.versions.find((item) => item.version === selectedVersion) ?? workflow.versions.at(-1)!;
   const editable = version.status === "draft";
@@ -108,6 +112,12 @@ function Builder({ workflow }: { workflow: Workflow }) {
       setDayDrafts({});
     }
   }, [buffer.key, bufferKey, version.steps]);
+
+  useEffect(() => {
+    if (detailsEditing) return;
+    setNameDraft(workflow.name);
+    setDescriptionDraft(workflow.description);
+  }, [detailsEditing, workflow.description, workflow.name]);
 
   // Serialized save queue: a plain promise chain acts as a mutex so at most
   // one PUT .../steps request is ever in flight for this draft at a time.
@@ -310,12 +320,53 @@ function Builder({ workflow }: { workflow: Workflow }) {
       await store.deleteWorkflow(workflow.id, true);
       void navigate({ to: "/automations" });
     }, "Workflow and its enrollment history deleted");
+  const startDetailsEdit = () => {
+    setNameDraft(workflow.name);
+    setDescriptionDraft(workflow.description);
+    setDetailsEditing(true);
+  };
+  const cancelDetailsEdit = () => {
+    setNameDraft(workflow.name);
+    setDescriptionDraft(workflow.description);
+    setDetailsEditing(false);
+  };
+  const saveDetails = () => {
+    const nextName = nameDraft.trim();
+    const nextDescription = descriptionDraft.trim();
+    if (!nextName) {
+      toast.error("Workflow name is required.");
+      return;
+    }
+    store
+      .updateWorkflow(workflow.id, { name: nextName, description: nextDescription })
+      .then(() => {
+        toast.success("Workflow details updated");
+        setDetailsEditing(false);
+      })
+      .catch((error: unknown) => {
+        toast.error(messageFromError(error));
+      });
+  };
 
   return (
     <div className="pb-10">
       <PageHeader
         title={workflow.name}
-        description={workflow.description}
+        heading={
+          <WorkflowDetailsHeading
+            name={workflow.name}
+            description={workflow.description}
+            editing={detailsEditing}
+            nameDraft={nameDraft}
+            descriptionDraft={descriptionDraft}
+            disabled={store.isPending}
+            onEdit={startDetailsEdit}
+            onCancel={cancelDetailsEdit}
+            onSave={saveDetails}
+            onNameChange={setNameDraft}
+            onDescriptionChange={setDescriptionDraft}
+          />
+        }
         actions={
           <>
             <Button asChild size="sm" variant="ghost">
@@ -620,6 +671,90 @@ function Builder({ workflow }: { workflow: Workflow }) {
         onConfirm={forceDeleteWorkflow}
       />
     </div>
+  );
+}
+
+function WorkflowDetailsHeading({
+  name,
+  description,
+  editing,
+  nameDraft,
+  descriptionDraft,
+  disabled,
+  onEdit,
+  onCancel,
+  onSave,
+  onNameChange,
+  onDescriptionChange,
+}: {
+  name: string;
+  description: string;
+  editing: boolean;
+  nameDraft: string;
+  descriptionDraft: string;
+  disabled: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onSave: () => void;
+  onNameChange: (value: string) => void;
+  onDescriptionChange: (value: string) => void;
+}) {
+  if (!editing) {
+    return (
+      <div className="flex max-w-2xl items-start gap-2">
+        <div className="min-w-0">
+          <h1 className="break-words text-xl font-semibold tracking-tight">{name}</h1>
+          {description && (
+            <p className="mt-0.5 break-words text-sm text-muted-foreground">{description}</p>
+          )}
+        </div>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="mt-0.5 size-8 shrink-0 text-muted-foreground"
+          disabled={disabled}
+          aria-label="Edit workflow details"
+          onClick={onEdit}
+        >
+          <Pencil className="size-4" />
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <form
+      className="grid w-full max-w-xl gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave();
+      }}
+    >
+      <Input
+        value={nameDraft}
+        disabled={disabled}
+        aria-label="Workflow name"
+        className="h-9 text-xl font-semibold"
+        autoFocus
+        onChange={(event) => onNameChange(event.target.value)}
+      />
+      <Textarea
+        value={descriptionDraft}
+        disabled={disabled}
+        aria-label="Workflow description"
+        className="min-h-16 resize-none text-sm"
+        onChange={(event) => onDescriptionChange(event.target.value)}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="submit" size="sm" disabled={disabled || !nameDraft.trim()}>
+          <Check className="mr-1 size-4" /> Save
+        </Button>
+        <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={onCancel}>
+          <X className="mr-1 size-4" /> Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 

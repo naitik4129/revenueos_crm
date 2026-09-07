@@ -179,8 +179,10 @@ export async function updateWorkflow(db: Queryable, id: string, patch: { name?: 
   const params: unknown[] = [];
   let i = 1;
   if (patch.name !== undefined) {
+    const name = patch.name.trim();
+    if (!name) throw new ValidationError("Workflow name is required.");
     sets.push(`name = $${i++}`);
-    params.push(patch.name.trim());
+    params.push(name);
   }
   if (patch.description !== undefined) {
     sets.push(`description = $${i++}`);
