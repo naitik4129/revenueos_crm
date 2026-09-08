@@ -141,7 +141,7 @@ export function ImportLeadsDialog({
         <DialogHeader>
           <DialogTitle>Import leads from CSV</DialogTitle>
           <DialogDescription>
-            Columns are matched by name, not position — order doesn't matter. Required: First Name,
+            Columns are matched by name, not position - order doesn't matter. Required: First Name,
             Company, Source, and either Email or Phone.
           </DialogDescription>
         </DialogHeader>
@@ -193,7 +193,7 @@ export function ImportLeadsDialog({
               {invalidCount > 0 && (
                 <span className="text-muted-foreground">
                   {" "}
-                  — {validCount} look valid, {invalidCount} will likely fail (checked again on
+                  - {validCount} look valid, {invalidCount} will likely fail (checked again on
                   import).
                 </span>
               )}
@@ -240,9 +240,9 @@ export function ImportLeadsDialog({
                         </td>
                         <td className="px-2 py-1.5">{row.company}</td>
                         <td className="px-2 py-1.5 text-muted-foreground">
-                          {row.email || row.phone || "—"}
+                          {row.email || row.phone || "-"}
                         </td>
-                        <td className="px-2 py-1.5 text-muted-foreground">{row.source || "—"}</td>
+                        <td className="px-2 py-1.5 text-muted-foreground">{row.source || "-"}</td>
                         <td className="px-2 py-1.5">
                           {error ? (
                             <span className="inline-flex items-center gap-1 text-destructive">

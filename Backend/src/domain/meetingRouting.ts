@@ -81,7 +81,7 @@ export function routeMeetingOutcome(outcome: MeetingOutcome): MeetingRoutingResu
       };
     case "no_proposal_required":
       return {
-        task: { type: "internal_review", title: "Review meeting outcome — no proposal required", dueInDays: 2 },
+        task: { type: "internal_review", title: "Review meeting outcome - no proposal required", dueInDays: 2 },
       };
   }
 }

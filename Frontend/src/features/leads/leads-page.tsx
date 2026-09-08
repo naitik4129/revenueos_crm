@@ -206,7 +206,7 @@ export function LeadsPage() {
                             : "text-muted-foreground"
                         }`}
                       >
-                        {l.nextAction ? relDay(l.nextAction.dueAt) : "—"}
+                        {l.nextAction ? relDay(l.nextAction.dueAt) : "-"}
                       </td>
                       <td className="px-3 py-2">
                         <StatusBadge value={l.automationMode} dot />

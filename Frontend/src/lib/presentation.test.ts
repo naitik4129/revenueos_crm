@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { toIsoFromIst } from "./dates";
-import { label } from "./labels";
+import { label, workflowTriggerLabel } from "./labels";
 
 describe("presentation helpers", () => {
   it("transports an IST form value as UTC", () => {
@@ -11,5 +11,12 @@ describe("presentation helpers", () => {
     expect(label("proposal_pending")).toBe("Proposal Pending");
     expect(label("ready_for_first_call")).toBe("Ready for First Call");
     expect(label("no_show")).toBe("No-show");
+    expect(label(null)).toBe("-");
+    expect(label("interested_later")).toBe("Interested - Later");
+  });
+
+  it("labels meeting-agreed workflow triggers as call outcomes", () => {
+    expect(label("meeting_agreed")).toBe("Meeting Agreed");
+    expect(workflowTriggerLabel("meeting_agreed")).toBe("Call Outcome = Meeting Agreed");
   });
 });

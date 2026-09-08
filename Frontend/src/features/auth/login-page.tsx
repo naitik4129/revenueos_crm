@@ -80,7 +80,7 @@ export function LoginPage({ adminMode = false }: { adminMode?: boolean }) {
           </Button>
 
           <p className="text-center text-xs text-muted-foreground">
-            Accounts are provisioned by your administrator — there is no self-service sign-up.
+            Accounts are provisioned by your administrator - there is no self-service sign-up.
           </p>
         </form>
       </div>

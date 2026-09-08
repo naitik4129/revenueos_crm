@@ -39,7 +39,7 @@ describe("validateLeadFields", () => {
 
   it("rejects an unrecognized source with a friendly message", () => {
     expect(() => validateLeadFields({ ...base, source: "made_up_source" })).toThrow(
-      /Unknown source "made_up_source" — must be one of:/,
+      /Unknown source "made_up_source" - must be one of:/,
     );
   });
 

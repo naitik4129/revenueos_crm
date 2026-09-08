@@ -81,7 +81,7 @@ async function getVersionsForWorkflow(db: Queryable, workflowId: string) {
     versions.push({
       version: v.version_number,
       status: v.status,
-      createdBy: v.created_by_name ?? "—",
+      createdBy: v.created_by_name ?? "-",
       createdAt: v.created_at.toISOString(),
       publishedAt: v.published_at?.toISOString(),
       steps: await getStepsForVersion(db, v.id),
@@ -272,7 +272,7 @@ export async function updateDraftSteps(db: Queryable, workflowId: string, versio
   const v = versionRow.rows[0];
   if (!v) throw new NotFoundError("Workflow version");
   if (v.status !== "draft") {
-    throw new InvalidTransitionError(`Version ${version} is "${v.status}" — only a Draft version's steps can be edited.`);
+    throw new InvalidTransitionError(`Version ${version} is "${v.status}" - only a Draft version's steps can be edited.`);
   }
 
   await db.query(`delete from public.workflow_steps where workflow_version_id = $1`, [v.id]);
@@ -316,11 +316,11 @@ export async function deleteWorkflowVersion(db: Queryable, workflowId: string, v
   const target = versions.rows.find((v) => v.version_number === version);
   if (!target) throw new NotFoundError("Workflow version");
   if (target.status !== "draft") {
-    throw new InvalidTransitionError(`Version ${version} is "${target.status}" — only a Draft version can be discarded.`);
+    throw new InvalidTransitionError(`Version ${version} is "${target.status}" - only a Draft version can be discarded.`);
   }
   if (versions.rows.length <= 1) {
     throw new ConflictError(
-      "This is the workflow's only version — delete the whole workflow instead.",
+      "This is the workflow's only version - delete the whole workflow instead.",
       { reason: "only_version" },
     );
   }
@@ -358,7 +358,7 @@ async function assertNoUnknownTemplateVariables(db: Queryable, versionId: string
   }
 
   if (problems.length > 0) {
-    throw new ValidationError(`Cannot publish — unrecognized template variable(s) found: ${problems.join("; ")}`);
+    throw new ValidationError(`Cannot publish - unrecognized template variable(s) found: ${problems.join("; ")}`);
   }
 }
 
@@ -373,7 +373,7 @@ async function assertNoUnknownTemplateVariables(db: Queryable, versionId: string
 export async function publishVersion(db: Queryable, actor: Actor, workflowId: string, version: number, enrollmentMode: EnrollmentMode = "keep_existing") {
   if (enrollmentMode !== "keep_existing") {
     throw new InvalidTransitionError(
-      `Enrollment mode "${enrollmentMode}" is not implemented yet — existing runs always keep the version they were enrolled against. Use "keep_existing".`,
+      `Enrollment mode "${enrollmentMode}" is not implemented yet - existing runs always keep the version they were enrolled against. Use "keep_existing".`,
     );
   }
 
@@ -476,7 +476,7 @@ export async function deleteWorkflow(db: Queryable, id: string, options: { force
   const runCount = Number(runs.rows[0]?.count ?? 0);
   if (runCount > 0 && !options.force) {
     throw new ConflictError(
-      `${runCount} lead${runCount === 1 ? " has" : "s have"} been enrolled in this workflow — pause it instead, or force-delete to permanently remove its enrollment history too.`,
+      `${runCount} lead${runCount === 1 ? " has" : "s have"} been enrolled in this workflow - pause it instead, or force-delete to permanently remove its enrollment history too.`,
       { reason: "has_enrollment_history", runCount },
     );
   }
@@ -665,7 +665,7 @@ export async function createTemplateAttachment(
       [templateId],
     );
     if (Number(existing.rows[0]?.count ?? 0) >= 1) {
-      throw new ValidationError("WhatsApp templates support only one attachment — remove the existing one first.");
+      throw new ValidationError("WhatsApp templates support only one attachment - remove the existing one first.");
     }
     if (file.size > WHATSAPP_ATTACHMENT_MAX_BYTES) {
       throw new ValidationError(`WhatsApp attachments must be under ${WHATSAPP_ATTACHMENT_MAX_BYTES / (1024 * 1024)}MB.`);
@@ -723,7 +723,7 @@ export async function deleteTemplate(db: Queryable, id: string) {
     [id],
   );
   if (Number(liveUsage.rows[0]?.count ?? 0) > 0) {
-    throw new ConflictError("Cannot delete a template used by a published workflow step — remove it from that step first.");
+    throw new ConflictError("Cannot delete a template used by a published workflow step - remove it from that step first.");
   }
 
   await db.query(`delete from public.message_templates where id = $1`, [id]);

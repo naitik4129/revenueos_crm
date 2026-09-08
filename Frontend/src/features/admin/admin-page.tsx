@@ -287,7 +287,7 @@ function EmailPanel() {
             <Input
               type="password"
               value={resendApiKey}
-              placeholder={form.resendApiKeyConfigured ? "•••••••• — retain current" : "re_…"}
+              placeholder={form.resendApiKeyConfigured ? "•••••••• - retain current" : "re_…"}
               onChange={(e) => setResendApiKey(e.target.value)}
             />
           </Field>
@@ -324,7 +324,7 @@ function EmailPanel() {
               <Input
                 type="password"
                 value={smtpPassword}
-                placeholder={form.smtpPasswordConfigured ? "•••••••• — retain current" : "Password"}
+                placeholder={form.smtpPasswordConfigured ? "•••••••• - retain current" : "Password"}
                 onChange={(e) => setSmtpPassword(e.target.value)}
               />
             </Field>
@@ -451,7 +451,7 @@ function WhatsAppPanel() {
                 />
               </Field>
               <Field label="Send spacing">
-                <Input value="Randomized 5–15 seconds" disabled />
+                <Input value="Randomized 5-15 seconds" disabled />
               </Field>
               <div className="flex items-end gap-2 pb-2">
                 <Switch
@@ -618,7 +618,7 @@ function GoogleCalendarPanel() {
             <Notice>
               Register an OAuth 2.0 client (Web application) in Google Cloud Console with the
               Calendar API enabled, then paste its credentials below. Nothing here is ever stored in
-              an env file — the client secret is encrypted in the database, same as the Resend API
+              an env file - the client secret is encrypted in the database, same as the Resend API
               key.
             </Notice>
             <div className="grid gap-4 md:grid-cols-2">
@@ -636,7 +636,7 @@ function GoogleCalendarPanel() {
                   type="password"
                   value={clientSecret}
                   placeholder={
-                    data.clientSecretConfigured ? "•••••••• — retain current" : "GOCSPX-…"
+                    data.clientSecretConfigured ? "•••••••• - retain current" : "GOCSPX-…"
                   }
                   onChange={(e) => {
                     setDirty(true);

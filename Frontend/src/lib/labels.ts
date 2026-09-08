@@ -9,8 +9,8 @@ const SPECIAL: Record<string, string> = {
   lead_created: "New Lead Created",
   meeting_agreed: "Meeting Agreed",
   // Pipeline stages
-  connected_qualifying: "Connected – Qualifying",
-  interested_later: "Interested – Later",
+  connected_qualifying: "Connected - Qualifying",
+  interested_later: "Interested - Later",
   future_possibility: "Future Possibility",
   objection_nurture: "Objection Nurture",
   negotiation: "Negotiation",
@@ -48,6 +48,15 @@ const SPECIAL: Record<string, string> = {
   meeting_not_ready: "Meeting: Not Ready",
 };
 export function label(value?: string | null) {
-  if (!value) return "—";
+  if (!value) return "-";
   return SPECIAL[value] ?? value.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+const WORKFLOW_TRIGGER_SPECIAL: Record<string, string> = {
+  meeting_agreed: "Call Outcome = Meeting Agreed",
+};
+
+export function workflowTriggerLabel(value?: string | null) {
+  if (!value) return label(value);
+  return WORKFLOW_TRIGGER_SPECIAL[value] ?? label(value);
 }

@@ -115,14 +115,14 @@ export function SendProposalDialog({
       onOpenChange(false);
       toast.success("Proposal sent");
       if (proposal.emailSendStatus === "skipped") {
-        toast.warning("Email skipped — this lead has no email address.");
+        toast.warning("Email skipped - this lead has no email address.");
       } else if (proposal.emailSendStatus === "failed") {
         toast.error(
           `Email failed to send${proposal.emailSendError ? `: ${proposal.emailSendError}` : "."}`,
         );
       }
       if (proposal.whatsappSendStatus === "skipped") {
-        toast.warning("WhatsApp skipped — this lead has no WhatsApp-capable phone number.");
+        toast.warning("WhatsApp skipped - this lead has no WhatsApp-capable phone number.");
       }
     } catch (err) {
       toast.error(messageFromError(err));

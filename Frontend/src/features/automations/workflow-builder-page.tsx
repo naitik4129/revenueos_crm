@@ -28,7 +28,7 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { relDay } from "@/lib/format";
-import { label } from "@/lib/labels";
+import { label, workflowTriggerLabel } from "@/lib/labels";
 import { BackendError } from "@/lib/backend-client";
 import { messageFromError, useAutomations, useSession } from "@/store";
 import { stepsWithCumulativeDay } from "@/lib/workflow-timeline";
@@ -424,7 +424,7 @@ function Builder({ workflow }: { workflow: Workflow }) {
                 <SelectContent>
                   {WORKFLOW_TRIGGERS.map((value) => (
                     <SelectItem key={value} value={value}>
-                      {label(value)}
+                      {workflowTriggerLabel(value)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -657,7 +657,7 @@ function Builder({ workflow }: { workflow: Workflow }) {
         open={deleteWorkflowOpen}
         onOpenChange={setDeleteWorkflowOpen}
         title={`Delete "${workflow.name}"?`}
-        description="This removes the workflow and all of its versions and steps. Workflows that leads have ever been enrolled in need a second confirmation — pausing is the non-destructive alternative."
+        description="This removes the workflow and all of its versions and steps. Workflows that leads have ever been enrolled in need a second confirmation - pausing is the non-destructive alternative."
         disabled={store.isPending}
         onConfirm={deleteWorkflow}
       />
@@ -665,7 +665,7 @@ function Builder({ workflow }: { workflow: Workflow }) {
         open={forceDeleteWorkflowOpen}
         onOpenChange={setForceDeleteWorkflowOpen}
         title={`Force delete "${workflow.name}"?`}
-        description="Leads have been enrolled in this workflow. Force-deleting permanently erases that enrollment history (which runs, when, what happened) — this cannot be undone. Pausing the workflow is the reversible alternative."
+        description="Leads have been enrolled in this workflow. Force-deleting permanently erases that enrollment history (which runs, when, what happened) - this cannot be undone. Pausing the workflow is the reversible alternative."
         confirmLabel="Force delete"
         disabled={store.isPending}
         onConfirm={forceDeleteWorkflow}

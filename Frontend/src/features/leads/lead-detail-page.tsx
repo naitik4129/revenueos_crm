@@ -163,7 +163,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
     <div className="pb-10">
       <PageHeader
         title={`${lead.firstName} ${lead.lastName}`}
-        description={`${lead.jobTitle || "—"} · ${lead.company} · ${lead.industry || "—"}`}
+        description={`${lead.jobTitle || "-"} · ${lead.company} · ${lead.industry || "-"}`}
         actions={
           <>
             <Button asChild size="sm" variant="ghost">
@@ -242,7 +242,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                 ) : (
                   <div className="text-sm">
                     {lead.doNotContact
-                      ? "Lead is suppressed — no next action required."
+                      ? "Lead is suppressed - no next action required."
                       : "No next action assigned. Every active lead needs one."}
                   </div>
                 )}
@@ -289,11 +289,11 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                   <CardTitle className="text-sm">Contact</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm">
-                  <Row label="Phone" value={lead.phone || "—"} />
-                  <Row label="Email" value={lead.email || "—"} />
+                  <Row label="Phone" value={lead.phone || "-"} />
+                  <Row label="Email" value={lead.email || "-"} />
                   <Row label="Company" value={lead.company} />
-                  <Row label="Industry" value={lead.industry || "—"} />
-                  <Row label="Interest" value={lead.serviceInterest || "—"} />
+                  <Row label="Industry" value={lead.industry || "-"} />
+                  <Row label="Interest" value={lead.serviceInterest || "-"} />
                   {detail.contactability.map((item) => (
                     <Row
                       key={item.channel}
@@ -563,7 +563,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                       ? label(currentStep.action)
                       : ["running", "waiting"].includes(run.status)
                         ? "No enabled steps configured"
-                        : "—";
+                        : "-";
                     return (
                       <div key={run.id} className="rounded-md border px-3 py-2">
                         <div className="flex justify-between">
@@ -695,7 +695,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
           {lead.pipelineStage === "interested_later" && (
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Interested – Later</CardTitle>
+                <CardTitle className="text-sm">Interested - Later</CardTitle>
               </CardHeader>
               <CardContent className="space-y-1 text-xs text-muted-foreground">
                 {lead.interestedLaterReason && <p>Reason: {lead.interestedLaterReason}</p>}
@@ -802,7 +802,7 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         title={`Delete ${lead.firstName} ${lead.lastName} forever?`}
-        description="This permanently deletes the lead and everything attached to it — calls, tasks, meetings, proposals, notes and the activity timeline. This cannot be undone."
+        description="This permanently deletes the lead and everything attached to it - calls, tasks, meetings, proposals, notes and the activity timeline. This cannot be undone."
         confirmLabel="Delete forever"
         disabled={deleting}
         onConfirm={() =>
@@ -1072,7 +1072,7 @@ function LostReasonDialog({
             <Textarea rows={3} value={notes} onChange={(event) => onNotes(event.target.value)} />
           </div>
           <p className="text-xs text-muted-foreground">
-            Drives the reactivation approach used later — required to close a lead as Lost.
+            Drives the reactivation approach used later - required to close a lead as Lost.
           </p>
         </div>
         <DialogFooter>

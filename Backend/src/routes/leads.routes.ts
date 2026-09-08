@@ -87,7 +87,7 @@ const importLeadsSchema = z.object({
   rows: z
     .array(importRowSchema)
     .min(1, "The file has no data rows to import.")
-    .max(2000, "This file has more than 2000 rows — split it and import in batches."),
+    .max(2000, "This file has more than 2000 rows - split it and import in batches."),
 });
 
 leadsRouter.post(

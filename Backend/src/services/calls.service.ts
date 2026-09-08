@@ -60,7 +60,7 @@ function callToDto(row: CallRow) {
 export async function logCall(db: Queryable, actor: Actor, leadId: string, input: LogCallInput) {
   const lead = await getLeadRowOr404(db, leadId);
   if (lead.lifecycle_state === "do_not_contact") {
-    throw new DoNotContactError("This lead is Do Not Contact — no further contact can be logged.");
+    throw new DoNotContactError("This lead is Do Not Contact - no further contact can be logged.");
   }
 
   if (input.connected && !input.connectedOutcome) {
@@ -97,8 +97,8 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
   await addTimelineEvent(db, {
     leadId,
     kind: "call",
-    title: input.connected ? `Call Connected — ${input.connectedOutcome}` : "Call Not Connected",
-    detail: input.connected ? input.notes : `${input.notConnectedReason}${input.notes ? ` — ${input.notes}` : ""}`,
+    title: input.connected ? `Call Connected - ${input.connectedOutcome}` : "Call Not Connected",
+    detail: input.connected ? input.notes : `${input.notConnectedReason}${input.notes ? ` - ${input.notes}` : ""}`,
     ...actorEvent(actor),
     relatedCallId: call.id,
   });

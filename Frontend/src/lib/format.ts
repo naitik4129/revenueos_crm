@@ -13,13 +13,13 @@ const timeFormatter = new Intl.DateTimeFormat("en-IN", {
   hour12: true,
 });
 export function fmtDate(iso?: string) {
-  return iso ? dateFormatter.format(new Date(iso)) : "—";
+  return iso ? dateFormatter.format(new Date(iso)) : "-";
 }
 export function fmtTime(iso?: string) {
   return iso ? timeFormatter.format(new Date(iso)) : "";
 }
 export function fmtDateTime(iso?: string) {
-  return iso ? `${fmtDate(iso)}, ${fmtTime(iso)}` : "—";
+  return iso ? `${fmtDate(iso)}, ${fmtTime(iso)}` : "-";
 }
 export function dayOf(iso: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -33,7 +33,7 @@ export function dayOf(iso: string) {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 export function relDay(iso?: string) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const diff = dayDiff(dayOf(iso), dateInputValue());
   if (diff === 0) return `Today, ${fmtTime(iso)}`;
   if (diff === 1) return `Tomorrow, ${fmtTime(iso)}`;

@@ -91,7 +91,7 @@ export function EnrollWorkflowDialog({
           <DialogTitle>Enroll in workflow</DialogTitle>
           {triggerFilter && (
             <DialogDescription>
-              This lead just moved to nurture — pick the workflow to enroll them in.
+              This lead just moved to nurture - pick the workflow to enroll them in.
             </DialogDescription>
           )}
         </DialogHeader>
@@ -117,7 +117,7 @@ export function EnrollWorkflowDialog({
             )}
             {triggerFilter && matchingTrigger.length === 0 && active.length > 0 && (
               <p className="text-xs text-muted-foreground">
-                No workflow is configured for this outcome specifically — showing all active
+                No workflow is configured for this outcome specifically - showing all active
                 workflows instead.
               </p>
             )}
@@ -281,7 +281,7 @@ export function ScheduledFollowupTimeline({
   const windowStart = currentIndex >= 0 ? currentIndex : 0;
   const visibleRows = rows.slice(windowStart, windowStart + VISIBLE_STEP_COUNT);
   const hiddenCount = rows.length - visibleRows.length;
-  const title = `Scheduled follow-up${workflow ? ` — ${workflow.name}` : ""}`;
+  const title = `Scheduled follow-up${workflow ? ` - ${workflow.name}` : ""}`;
 
   return (
     <Card>

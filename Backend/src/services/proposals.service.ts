@@ -229,7 +229,7 @@ export async function updateProposalStatus(
   if (proposal.status === status) return proposalToDto(proposal);
   if (TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)) {
     throw new ConflictError(
-      `Proposal is already "${proposal.status}", a terminal status — it can't be moved to "${status}". Create a new proposal instead.`,
+      `Proposal is already "${proposal.status}", a terminal status - it can't be moved to "${status}". Create a new proposal instead.`,
     );
   }
   if ((status === "rejected" || status === "expired") && !options.lossReason) {
@@ -266,7 +266,7 @@ export async function updateProposalStatus(
   if (routing.cancelAllOpenTasks) {
     await cancelOpenTasksForLead(db, actor, proposal.lead_id, "Lead Won");
   } else if (routing.cancelOpenProposalFollowUps) {
-    await cancelOpenTasksForLead(db, actor, proposal.lead_id, `Superseded — proposal ${status}`, ["proposal_follow_up"]);
+    await cancelOpenTasksForLead(db, actor, proposal.lead_id, `Superseded - proposal ${status}`, ["proposal_follow_up"]);
   }
 
   if (routing.task) {

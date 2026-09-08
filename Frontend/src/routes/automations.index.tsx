@@ -4,13 +4,13 @@ import { WorkflowsPage } from "@/features/automations/workflows-page";
 export const Route = createFileRoute("/automations/")({
   head: () => ({
     meta: [
-      { title: "Automations — MOTM Flow" },
+      { title: "Automations - MOTM Flow" },
       {
         name: "description",
         content:
           "Nurture workflows managers can edit without a developer: triggers, sequential steps and message templates.",
       },
-      { property: "og:title", content: "Automations — MOTM Flow" },
+      { property: "og:title", content: "Automations - MOTM Flow" },
       {
         property: "og:description",
         content:

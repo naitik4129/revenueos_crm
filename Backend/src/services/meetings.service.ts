@@ -127,7 +127,7 @@ export async function scheduleMeeting(db: Queryable, actor: Actor, input: Schedu
   // Edge case ("Meeting Booked During Nurture"): the objective of any
   // in-flight nurture was to get a meeting booked — now that it has been,
   // the old meeting-CTA nurture and its follow-up tasks are obsolete.
-  await cancelRunsForLead(db, input.leadId, "Meeting booked — nurture objective reached");
+  await cancelRunsForLead(db, input.leadId, "Meeting booked - nurture objective reached");
   await cancelOpenTasksForLead(db, actor, input.leadId, "Superseded by scheduled meeting", [
     "follow_up",
     "nurture",

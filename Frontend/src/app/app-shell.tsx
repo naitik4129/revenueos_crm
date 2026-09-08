@@ -124,7 +124,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
             <div className="mt-1 flex items-center gap-2 rounded-md px-2 py-2">
               <div className="grid size-7 place-items-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
-                {currentUser?.initials ?? "—"}
+                {currentUser?.initials ?? "-"}
               </div>
               <div className="min-w-0 flex-1 text-xs">
                 <div className="truncate font-medium">{currentUser?.name ?? "Loading…"}</div>

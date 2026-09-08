@@ -505,7 +505,7 @@ export function useAutomations() {
       templateAttachmentDelete,
     ].some((mutation) => mutation.isPending),
     templateName: (id?: string) =>
-      templates.data?.data.find((template) => template.id === id)?.name ?? "—",
+      templates.data?.data.find((template) => template.id === id)?.name ?? "-",
     addWorkflow: (input: CreateWorkflowInput) => workflowCreate.mutateAsync(input),
     updateWorkflow: (id: string, input: UpdateWorkflowInput) =>
       workflowUpdate.mutateAsync({ id, input }),

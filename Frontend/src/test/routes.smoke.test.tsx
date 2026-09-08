@@ -74,7 +74,7 @@ vi.mock("@/store", () => {
       isLoading: false,
       error: null,
       isPending: false,
-      templateName: () => "—",
+      templateName: () => "-",
       addWorkflow: noop,
       updateWorkflow: noop,
       createDraft: noop,

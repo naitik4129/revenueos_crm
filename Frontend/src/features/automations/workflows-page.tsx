@@ -29,7 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
-import { label } from "@/lib/labels";
+import { workflowTriggerLabel } from "@/lib/labels";
 import { BackendError } from "@/lib/backend-client";
 import { WORKFLOW_TRIGGERS, type Workflow, type WorkflowTrigger } from "@/types";
 
@@ -107,7 +107,7 @@ export function WorkflowsPage() {
 
                     <div className="rounded-md border px-3 py-2 text-xs">
                       <div className="text-muted-foreground">Trigger</div>
-                      <div className="pt-0.5 font-medium">{label(w.trigger)}</div>
+                      <div className="pt-0.5 font-medium">{workflowTriggerLabel(w.trigger)}</div>
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 text-center text-xs">
@@ -159,7 +159,7 @@ export function WorkflowsPage() {
                 <Bot className="mx-auto size-5 text-muted-foreground" />
                 <p className="text-sm font-medium">Managers own the automation</p>
                 <p className="text-xs text-muted-foreground">
-                  Add or reorder steps, change delays and swap templates here — no developer needs
+                  Add or reorder steps, change delays and swap templates here - no developer needs
                   to touch code.
                 </p>
               </CardContent>
@@ -178,7 +178,7 @@ export function WorkflowsPage() {
           if (!value) setDeleteTarget(null);
         }}
         title={`Delete "${deleteTarget?.name ?? ""}"?`}
-        description="This removes the workflow and all of its versions and steps. Workflows that leads have ever been enrolled in need a second confirmation — pausing is the non-destructive alternative."
+        description="This removes the workflow and all of its versions and steps. Workflows that leads have ever been enrolled in need a second confirmation - pausing is the non-destructive alternative."
         disabled={isPending}
         onConfirm={() => {
           if (!deleteTarget) return;
@@ -205,7 +205,7 @@ export function WorkflowsPage() {
           if (!value) setForceDeleteTarget(null);
         }}
         title={`Force delete "${forceDeleteTarget?.name ?? ""}"?`}
-        description="Leads have been enrolled in this workflow. Force-deleting permanently erases that enrollment history (which runs, when, what happened) — this cannot be undone. Pausing the workflow is the reversible alternative."
+        description="Leads have been enrolled in this workflow. Force-deleting permanently erases that enrollment history (which runs, when, what happened) - this cannot be undone. Pausing the workflow is the reversible alternative."
         confirmLabel="Force delete"
         disabled={isPending}
         onConfirm={() => {
@@ -262,7 +262,7 @@ function NewWorkflowDialog({
               <SelectContent>
                 {WORKFLOW_TRIGGERS.map((value) => (
                   <SelectItem key={value} value={value}>
-                    {label(value)}
+                    {workflowTriggerLabel(value)}
                   </SelectItem>
                 ))}
               </SelectContent>

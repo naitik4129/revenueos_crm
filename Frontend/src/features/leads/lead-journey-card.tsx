@@ -97,7 +97,7 @@ export function LeadJourneyCard({
         </div>
 
         {doNotContact ? (
-          <p className="text-sm text-muted-foreground">Lead is suppressed — no action needed.</p>
+          <p className="text-sm text-muted-foreground">Lead is suppressed - no action needed.</p>
         ) : phase === "new" || phase === "call" ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm">Call this lead and log the result.</p>

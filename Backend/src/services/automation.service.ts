@@ -349,7 +349,7 @@ async function advanceRun(db: Queryable, run: RunRow) {
 export async function executeInternalAction(db: Queryable, actionId: string) {
   const action = await getActionRowOr404(db, actionId);
   if (!INTERNAL_ACTION_TYPES.includes(action.action_type)) {
-    throw new ConflictError(`Action type "${action.action_type}" is not an internal action — report it via POST /automation/actions/:id/result instead.`);
+    throw new ConflictError(`Action type "${action.action_type}" is not an internal action - report it via POST /automation/actions/:id/result instead.`);
   }
   if (action.status !== "executing") {
     throw new ConflictError(`Scheduled action is "${action.status}", expected "executing". It may already have been processed.`);
@@ -471,7 +471,7 @@ export async function recordActionResult(db: Queryable, actionId: string, input:
     await addTimelineEvent(db, {
       leadId: action.lead_id,
       kind: "automation",
-      title: "Automation Step Failed — Retry Scheduled",
+      title: "Automation Step Failed - Retry Scheduled",
       detail: input.error,
       ...AUTOMATION_ACTOR,
       relatedWorkflowRunId: run.id,

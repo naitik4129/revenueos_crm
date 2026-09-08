@@ -139,7 +139,7 @@ export async function createAndSendProposal(actor: Actor, input: CreateAndSendPr
   const emailEligible = Boolean(lead.email);
   const whatsappEligible = Boolean(lead.phone_e164);
   if (!emailEligible && !whatsappEligible) {
-    throw new ValidationError("This lead has no email address or WhatsApp-capable phone number — nothing to send.");
+    throw new ValidationError("This lead has no email address or WhatsApp-capable phone number - nothing to send.");
   }
 
   const storagePath = `${input.leadId}/${randomUUID()}-${sanitizeFileName(file.originalName)}`;

@@ -165,7 +165,7 @@ export function validateLeadFields(input: LeadFieldsInput): ValidatedLeadFields 
     throw new ValidationError("Enter a valid phone number. Indian local numbers default to +91; international numbers must include their country code.", { field: "phone" });
   }
   if (!(LEAD_SOURCES as readonly string[]).includes(input.source)) {
-    throw new ValidationError(`Unknown source "${input.source}" — must be one of: ${LEAD_SOURCES.join(", ")}.`, { field: "source" });
+    throw new ValidationError(`Unknown source "${input.source}" - must be one of: ${LEAD_SOURCES.join(", ")}.`, { field: "source" });
   }
 
   return {
@@ -245,7 +245,7 @@ export async function createLead(db: Queryable, actor: Actor, input: CreateLeadI
   // starts immediately in parallel with the human BD call task above, not
   // after it. Enrollment is a quiet no-op if no active published workflow
   // is configured for this trigger yet (see autoEnroll).
-  await autoEnroll(db, id, "lead_created", "New lead entered CRM — Stage 1 welcome sequence");
+  await autoEnroll(db, id, "lead_created", "New lead entered CRM - Stage 1 welcome sequence");
 
   return getLeadRowOr404(db, id);
 }
@@ -383,7 +383,7 @@ export async function importLeads(db: Queryable, actor: Actor, rows: ImportLeadR
 
     // Same Stage 1 welcome sequence as a single lead create — every
     // imported row gets it, not just leads added one at a time.
-    await autoEnroll(db, id, "lead_created", "New lead entered CRM — Stage 1 welcome sequence (CSV import)");
+    await autoEnroll(db, id, "lead_created", "New lead entered CRM - Stage 1 welcome sequence (CSV import)");
 
     created.push(await getLeadRowOr404(db, id));
   }
@@ -557,7 +557,7 @@ export async function updateLead(
   }
   if (patch.source !== undefined) {
     if (!(LEAD_SOURCES as readonly string[]).includes(patch.source)) {
-      throw new ValidationError(`Unknown source "${patch.source}" — must be one of: ${LEAD_SOURCES.join(", ")}.`, { field: "source" });
+      throw new ValidationError(`Unknown source "${patch.source}" - must be one of: ${LEAD_SOURCES.join(", ")}.`, { field: "source" });
     }
     push("source", patch.source);
   }
@@ -798,7 +798,7 @@ export async function moveToLongTermNurture(db: Queryable, actor: Actor | null, 
 export async function reactivateLead(db: Queryable, actor: Actor, leadId: string, reason?: string) {
   const current = await getLeadRowOr404(db, leadId);
   if (current.lifecycle_state === "do_not_contact") {
-    throw new ConflictError("This lead is Do Not Contact — use the DNC reactivation endpoint instead.");
+    throw new ConflictError("This lead is Do Not Contact - use the DNC reactivation endpoint instead.");
   }
   if (current.lifecycle_state === "merged") {
     throw new ConflictError("This lead was merged into another lead and cannot be reactivated directly.");

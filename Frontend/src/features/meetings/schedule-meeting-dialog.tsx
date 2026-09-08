@@ -153,7 +153,7 @@ export function ScheduleMeetingDialog({
             <Label className="mb-1.5 block text-xs">Meeting URL</Label>
             <Input value={url} onChange={(event) => setUrl(event.target.value)} />
             <p className="mt-1 text-xs text-muted-foreground">
-              Only used if Google Calendar isn&apos;t connected — otherwise a Meet link is generated
+              Only used if Google Calendar isn&apos;t connected - otherwise a Meet link is generated
               automatically.
             </p>
           </div>

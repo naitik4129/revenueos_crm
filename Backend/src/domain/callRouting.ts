@@ -140,7 +140,7 @@ export function routeConnectedOutcome(
       return {
         stage: "connected_qualifying",
         automation: "active",
-        task: { type: "follow_up", title: "Call after info sequence — gauge relevance", dueInDays: 10 },
+        task: { type: "follow_up", title: "Call after info sequence - gauge relevance", dueInDays: 10 },
         workflowTrigger: "call_outcome_information_requested",
       };
     case "commission_only":
@@ -170,7 +170,7 @@ export function routeConnectedOutcome(
       // behavior" philosophy already used for wrong_person/no_proposal_required.
       return {
         automation: "manual",
-        task: { type: "general_task", title: "Confirm fit — archive or reroute", dueInDays: 2 },
+        task: { type: "general_task", title: "Confirm fit - archive or reroute", dueInDays: 2 },
         objectionType: "wrong_fit",
       };
     case "wrong_person":

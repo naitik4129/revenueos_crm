@@ -223,7 +223,7 @@ export async function cancelOpenTasksForLead(
       leadId,
       kind: "task",
       title: "Task Cancelled",
-      detail: `${task.title} — ${reason}`,
+      detail: `${task.title} - ${reason}`,
       actorId: who.actorId,
       actorName: who.actorName,
       actorSource: who.actorSource,

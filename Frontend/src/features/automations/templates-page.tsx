@@ -165,7 +165,7 @@ export function TemplatesPage() {
           if (!v) setDeleteTarget(null);
         }}
         title={`Delete "${deleteTarget?.name ?? ""}"?`}
-        description="This removes the template. Templates still used by a published workflow step can't be deleted — remove them from that step first."
+        description="This removes the template. Templates still used by a published workflow step can't be deleted - remove them from that step first."
         disabled={isPending}
         onConfirm={() => {
           if (!deleteTarget) return;
@@ -384,7 +384,7 @@ function TemplateDialog({
               </div>
               <p className="text-xs text-muted-foreground">
                 Automatically sent to the lead whenever a meeting is scheduled. Only one {type}{" "}
-                template can hold this at a time — enabling it here disables it on any other.
+                template can hold this at a time - enabling it here disables it on any other.
               </p>
             </div>
           </div>

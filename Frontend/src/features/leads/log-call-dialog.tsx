@@ -103,7 +103,7 @@ export function LogCallDialog({
           : {}),
         taskId,
       });
-      toast.success(connected ? `Call logged — ${label(outcome)}` : "Call logged — Not Connected");
+      toast.success(connected ? `Call logged - ${label(outcome)}` : "Call logged - Not Connected");
       onOpenChange(false);
       reset();
       if (result?.workflowTrigger) onEnrollPrompt?.(result.workflowTrigger);
@@ -124,7 +124,7 @@ export function LogCallDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            Log call — {lead.firstName} {lead.lastName}
+            Log call - {lead.firstName} {lead.lastName}
           </DialogTitle>
           <DialogDescription>
             The backend records the call and applies the resulting lead, task, and automation
@@ -202,7 +202,7 @@ export function LogCallDialog({
           {outcome === "interested_later" && (
             <div className="space-y-3 rounded-md border p-3">
               <p className="text-xs font-medium text-muted-foreground">
-                Interested – Later details
+                Interested - Later details
               </p>
               <div>
                 <Label className="mb-1.5 block text-xs">Reason for delay</Label>

@@ -117,7 +117,7 @@ export function ProposalsPage() {
                           {proposal.ownerName ?? userName(proposal.ownerId)}
                         </td>
                         <td className="num px-3 py-2">
-                          {proposal.amount ? money(proposal.amount) : "—"}
+                          {proposal.amount ? money(proposal.amount) : "-"}
                         </td>
                         <td className="px-3 py-2">
                           <StatusBadge value={proposal.status} />
@@ -145,10 +145,10 @@ export function ProposalsPage() {
                           </div>
                         </td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {proposal.sentDate ? relDay(proposal.sentDate) : "—"}
+                          {proposal.sentDate ? relDay(proposal.sentDate) : "-"}
                         </td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {proposal.followUpDate ? relDay(proposal.followUpDate) : "—"}
+                          {proposal.followUpDate ? relDay(proposal.followUpDate) : "-"}
                         </td>
                         <td className="px-3 py-2">
                           <Select
