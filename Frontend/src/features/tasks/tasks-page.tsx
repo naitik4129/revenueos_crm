@@ -14,20 +14,26 @@ import {
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
 import { isOverdue, isToday, relDay } from "@/lib/format";
-import { useLeads, useSession, useTasks } from "@/store";
+import { useLeads, useMeetings, useSession, useTasks } from "@/store";
 import { messageFromError } from "@/store";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { LogCallDialog } from "@/features/leads/log-call-dialog";
+import { ScheduleMeetingDialog } from "@/features/meetings/schedule-meeting-dialog";
 
 type View = "today" | "overdue" | "upcoming" | "done";
 
 export function TasksPage() {
   const { tasks, completeTask, isLoading, error, isPending } = useTasks();
   const { leads } = useLeads();
+  const meetingStore = useMeetings();
   const { users, userName } = useSession();
   const [view, setView] = useState<View>("today");
   const [owner, setOwner] = useState("all");
   const [callTask, setCallTask] = useState<{ leadId: string; taskId: string } | null>(null);
+  const [scheduleMeetingTask, setScheduleMeetingTask] = useState<{ leadId: string } | null>(
+    null,
+  );
+  const [schedulingMeeting, setSchedulingMeeting] = useState(false);
 
   const filtered = tasks.filter((t) => {
     if (owner !== "all" && t.ownerId !== owner) return false;
@@ -111,6 +117,10 @@ export function TasksPage() {
                                 setCallTask({ leadId: t.leadId, taskId: t.id });
                                 return;
                               }
+                              if (t.type === "schedule_meeting") {
+                                setScheduleMeetingTask({ leadId: t.leadId });
+                                return;
+                              }
                               void completeTask(t.id).catch((reason) => toastError(reason));
                             }}
                           />
@@ -177,6 +187,30 @@ export function TasksPage() {
           onOpenChange={(value) => {
             if (!value) setCallTask(null);
           }}
+        />
+      )}
+      {scheduleMeetingTask && (
+        <ScheduleMeetingDialog
+          leadId={scheduleMeetingTask.leadId}
+          meeting={null}
+          open={true}
+          isSaving={schedulingMeeting}
+          onOpenChange={(value) => {
+            if (!value) setScheduleMeetingTask(null);
+          }}
+          onSave={(value) =>
+            void (async () => {
+              setSchedulingMeeting(true);
+              try {
+                await meetingStore.addMeeting(value);
+                toast.success("Meeting scheduled");
+              } catch (error) {
+                toastError(error);
+              } finally {
+                setSchedulingMeeting(false);
+              }
+            })()
+          }
         />
       )}
     </div>

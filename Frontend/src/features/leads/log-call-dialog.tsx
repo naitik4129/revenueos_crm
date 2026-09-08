@@ -46,8 +46,14 @@ export function LogCallDialog({
   onOpenChange: (v: boolean) => void;
   /** Called instead of the plain success toast when the outcome moves the lead into nurture — the rep is always asked which workflow to enroll in, nothing is auto-enrolled silently. */
   onEnrollPrompt?: (trigger: WorkflowTrigger) => void;
-  /** Called when the outcome is Positive — chains straight into scheduling a meeting instead of leaving the rep to notice the "Schedule discovery meeting" task on their own. */
-  onScheduleMeetingPrompt?: () => void;
+  /**
+   * Called when the outcome is Positive or Meeting Agreed — chains straight
+   * into scheduling a meeting instead of leaving the rep to notice the
+   * "Schedule meeting" task on their own. For Meeting Agreed, a workflow
+   * trigger is also pending: the caller should enroll into it only after the
+   * meeting is actually scheduled (see onEnrollPrompt).
+   */
+  onScheduleMeetingPrompt?: (pendingTrigger?: WorkflowTrigger) => void;
 }) {
   const { getLead, logCall, isPending } = useLeads();
   const lead = getLead(leadId);
@@ -106,8 +112,14 @@ export function LogCallDialog({
       toast.success(connected ? `Call logged - ${label(outcome)}` : "Call logged - Not Connected");
       onOpenChange(false);
       reset();
-      if (result?.workflowTrigger) onEnrollPrompt?.(result.workflowTrigger);
-      if (result?.promptScheduleMeeting) onScheduleMeetingPrompt?.();
+      // Schedule-first, enroll-after: when both are pending (Meeting Agreed),
+      // hand the trigger to the schedule-meeting prompt instead of firing the
+      // enroll prompt immediately — see onScheduleMeetingPrompt.
+      if (result?.promptScheduleMeeting) {
+        onScheduleMeetingPrompt?.(result.workflowTrigger);
+      } else if (result?.workflowTrigger) {
+        onEnrollPrompt?.(result.workflowTrigger);
+      }
     } catch (error) {
       toast.error(messageFromError(error));
     }

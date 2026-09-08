@@ -38,6 +38,7 @@ describe("routeConnectedOutcome", () => {
     expect(r.automation).toBe("active");
     expect(r.workflowTrigger).toBe("meeting_agreed");
     expect(r.task).toMatchObject({ type: "schedule_meeting", dueInDays: 1 });
+    expect(r.promptScheduleMeeting).toBe(true);
   });
 
   it("routes Interested - Later with a 30-day follow-up when no restart date is captured", () => {

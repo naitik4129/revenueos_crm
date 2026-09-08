@@ -100,6 +100,12 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
   );
   const [scheduleMeetingOpen, setScheduleMeetingOpen] = useState(false);
   const [schedulingMeeting, setSchedulingMeeting] = useState(false);
+  // Set when Meeting Agreed opens the schedule dialog — enrolling into this
+  // trigger's workflow is deferred until the meeting is actually saved (see
+  // ScheduleMeetingDialog's onSave below).
+  const [pendingWorkflowTrigger, setPendingWorkflowTrigger] = useState<
+    WorkflowTrigger | undefined
+  >(undefined);
   const [note, setNote] = useState("");
   const openEnroll = (trigger?: WorkflowTrigger) => {
     setEnrollTriggerFilter(trigger);
@@ -258,6 +264,10 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                         setCallOpen(true);
                         return;
                       }
+                      if (lead.nextAction!.type === "schedule_meeting") {
+                        setScheduleMeetingOpen(true);
+                        return;
+                      }
                       void mutate(
                         () => taskStore.completeTask(lead.nextAction!.taskId),
                         "Next action completed",
@@ -382,6 +392,10 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
                           if (task.type === "call") {
                             setCallTaskId(task.id);
                             setCallOpen(true);
+                            return;
+                          }
+                          if (task.type === "schedule_meeting") {
+                            setScheduleMeetingOpen(true);
                             return;
                           }
                           void mutate(() => taskStore.completeTask(task.id), "Task completed");
@@ -830,19 +844,35 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
           if (!value) setCallTaskId(undefined);
         }}
         onEnrollPrompt={(trigger) => openEnroll(trigger)}
-        onScheduleMeetingPrompt={() => setScheduleMeetingOpen(true)}
+        onScheduleMeetingPrompt={(trigger) => {
+          setPendingWorkflowTrigger(trigger);
+          setScheduleMeetingOpen(true);
+        }}
       />
       <ScheduleMeetingDialog
         leadId={leadId}
         meeting={null}
         open={scheduleMeetingOpen}
         isSaving={schedulingMeeting}
-        onOpenChange={setScheduleMeetingOpen}
+        onOpenChange={(value) => {
+          setScheduleMeetingOpen(value);
+          if (!value) setPendingWorkflowTrigger(undefined);
+        }}
         onSave={(value) =>
           void (async () => {
             setSchedulingMeeting(true);
             try {
-              await mutate(() => meetingStore.addMeeting(value), "Meeting scheduled");
+              await meetingStore.addMeeting(value);
+              toast.success("Meeting scheduled");
+              // Only now (meeting confirmed) prompt enrollment — scheduling
+              // cancels every active run for the lead, so enrolling earlier
+              // would just get undone.
+              if (pendingWorkflowTrigger) {
+                openEnroll(pendingWorkflowTrigger);
+                setPendingWorkflowTrigger(undefined);
+              }
+            } catch (error) {
+              toast.error(messageFromError(error));
             } finally {
               setSchedulingMeeting(false);
             }

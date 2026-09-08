@@ -32,7 +32,7 @@ export interface CallRoutingResult {
   task?: TaskSpec;
   /** Nurture workflow trigger to auto-enroll into, if any. */
   workflowTrigger?: WorkflowTrigger;
-  /** True when the outcome should immediately prompt the rep to schedule a meeting (Positive only). */
+  /** True when the outcome should immediately prompt the rep to schedule a meeting (Positive and Meeting Agreed). */
   promptScheduleMeeting?: boolean;
   /** Phone contactability status to record, if the reason implies the number itself is bad. */
   phoneContactStatus?: "invalid" | "wrong_number";
@@ -96,11 +96,17 @@ export function routeConnectedOutcome(
         promptScheduleMeeting: true,
       };
     case "meeting_agreed":
+      // Schedule-first, enroll-after: promptScheduleMeeting opens the
+      // scheduling dialog immediately, and the workflowTrigger is only acted
+      // on once that meeting is actually booked (frontend chains it) —
+      // scheduleMeeting() cancels every active workflow run for the lead, so
+      // enrolling before the meeting exists would get silently undone.
       return {
         stage: "meeting_scheduling",
         automation: "active",
         task: { type: "schedule_meeting", title: "Schedule agreed meeting", dueInDays: 1 },
         workflowTrigger: "meeting_agreed",
+        promptScheduleMeeting: true,
       };
     case "interested_later":
       // The capture (reason/restart date/next action/decision owner) is
