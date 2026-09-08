@@ -56,10 +56,39 @@ describe("renderTemplate", () => {
     expect(result.unknownTokens).toEqual([]);
   });
 
-  it("treats meeting tokens as unknown when no meeting is provided", () => {
-    const result = renderTemplate({ subject: null, body: "{{meeting.title}}" }, lead);
-    expect(result.body).toBe("{{meeting.title}}");
-    expect(result.unknownTokens).toEqual(["meeting.title"]);
+  it.each(["meeting.date", "meeting.time", "meeting.title", "meeting.duration", "meeting.link"])("rejects %s without meeting context in either subject or body", (token) => {
+    expect(() => renderTemplate({ subject: null, body: `{{${token}}}` }, lead)).toThrow("require a scheduled meeting");
+    expect(() => renderTemplate({ subject: `{{ ${token} }}`, body: "Hello" }, lead)).toThrow("require a scheduled meeting");
+  });
+
+  it.each([
+    ["2026-12-31T18:29:00Z", "31 Dec 2026", "1 Jan 2027", "11:59 pm"],
+    ["2026-12-31T18:30:00Z", "1 Jan 2027", "2 Jan 2027", "12:00 am"],
+    ["2028-02-28T08:00:00Z", "28 Feb 2028", "29 Feb 2028", "1:30 pm"],
+  ])("uses IST and handles calendar rollover at %s", (instant, today, tomorrow, time) => {
+    const text = "{{current.date}} / {{tomorrow.date}} / {{current.time}}";
+    const result = renderTemplate({ subject: text, body: text }, lead, undefined, new Date(instant));
+    expect(result.body).toBe(`${today} / ${tomorrow} / ${time}`);
+    expect(result.subject).toBe(result.body);
+    expect(result.unknownTokens).toEqual([]);
+    expect(findUnknownTemplateTokens(text)).toEqual([]);
+  });
+
+  it("maps meeting date/time to the meeting instant independently of the send date", () => {
+    const result = renderTemplate(
+      { subject: "{{meeting.date}} at {{meeting.time}}", body: "Today {{current.date}}; meeting {{meeting.date}} at {{meeting.time}}" },
+      lead,
+      { ...meeting, at: "2030-01-03T19:00:00Z" },
+      new Date("2026-09-08T08:00:00Z"),
+    );
+    expect(result.subject).toBe("4 Jan 2030 at 12:30 am");
+    expect(result.body).toBe("Today 8 Sept 2026; meeting 4 Jan 2030 at 12:30 am");
+  });
+
+  it("escapes meeting fields in HTML bodies while retaining plain subject values", () => {
+    const result = renderTemplate({ subject: "{{meeting.title}}", body: "{{meeting.title}}" }, lead, { ...meeting, title: "<Call> & chat" });
+    expect(result.subject).toBe("<Call> & chat");
+    expect(result.body).toBe("&lt;Call&gt; &amp; chat");
   });
 
   it("renders a null meeting link as empty string rather than throwing", () => {

@@ -97,7 +97,14 @@ afterAll(() => {
 });
 
 describe("TemplatesPage", () => {
-  it("inserts a dynamic variable into the email subject", async () => {
+  it.each([
+    ["Lead first name", "lead.firstName"],
+    ["Current date", "current.date"],
+    ["Tomorrow's date", "tomorrow.date"],
+    ["Current time", "current.time"],
+    ["Meeting time", "meeting.time"],
+    ["Meeting date", "meeting.date"],
+  ])("inserts %s into the email subject", async (label, token) => {
     await renderTemplatesPage();
 
     fireEvent.click(screen.getByRole("button", { name: /new template/i }));
@@ -110,10 +117,10 @@ describe("TemplatesPage", () => {
     const variableSelect = screen.getByLabelText("Insert subject variable");
     variableSelect.focus();
     fireEvent.keyDown(variableSelect, { key: "ArrowDown" });
-    fireEvent.click(await screen.findByRole("option", { name: "Lead first name" }));
+    fireEvent.click(await screen.findByRole("option", { name: label }));
 
     await waitFor(() => {
-      expect(subjectInput).toHaveValue("Hi {{lead.firstName}}");
+      expect(subjectInput).toHaveValue(`Hi {{${token}}}`);
     });
   });
 });

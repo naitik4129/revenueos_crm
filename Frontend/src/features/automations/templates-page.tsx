@@ -417,7 +417,10 @@ function TemplateDialog({
               </TabsContent>
             </Tabs>
             <p className="pt-1 text-xs text-muted-foreground">
-              Use the "Insert variable" menus to personalise with lead/owner details.
+              Insert lead, owner, date/time, or meeting details in the subject or body. Dates and
+              times use IST (Asia/Kolkata). Current date/time and tomorrow's date are calculated
+              when sending. Meeting details use the scheduled meeting and are only available for
+              Meeting Scheduled notifications; other sends using meeting variables will fail.
             </p>
           </div>
 

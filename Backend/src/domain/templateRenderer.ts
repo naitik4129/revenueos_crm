@@ -58,7 +58,7 @@ function formatMeetingTime(at: string): string {
   return new Intl.DateTimeFormat("en-IN", { timeZone: MEETING_TIME_ZONE, timeStyle: "short" }).format(new Date(at));
 }
 
-function buildVariableMap(lead: TemplateRenderLead, meeting?: TemplateRenderMeeting): Map<string, string> {
+function buildVariableMap(lead: TemplateRenderLead, meeting: TemplateRenderMeeting | undefined, now: Date): Map<string, string> {
   const fullName = [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim();
   // A Map (not a plain object) so a token like "constructor" or "toString"
   // can't accidentally resolve via JS's Object.prototype chain instead of
@@ -71,6 +71,9 @@ function buildVariableMap(lead: TemplateRenderLead, meeting?: TemplateRenderMeet
     ["lead.email", lead.email ?? ""],
     ["lead.phone", lead.phone ?? ""],
     ["owner.name", lead.ownerName ?? ""],
+    ["current.date", formatMeetingDate(now.toISOString())],
+    ["tomorrow.date", formatMeetingDate(new Date(now.getTime() + 86_400_000).toISOString())],
+    ["current.time", formatMeetingTime(now.toISOString())],
     ...(meeting
       ? ([
           ["meeting.title", meeting.title],
@@ -88,14 +91,11 @@ function buildVariableMap(lead: TemplateRenderLead, meeting?: TemplateRenderMeet
  * of truth for UI variable pickers and publish-time validation (see
  * findUnknownTemplateTokens/workflows.service.ts publishVersion).
  *
- * Caveat: `meeting.*` only actually resolves when renderTemplate is called
- * with a meeting (the "meeting scheduled" notification path — see
- * meetingScheduledNotification.service.ts). A workflow-step template is
- * always rendered without one, so if such a template references
- * `{{meeting.*}}` it will still pass publish validation here but render as
- * literal, unresolved text at send time (logged as an unknown-token
- * warning in worker.ts). Accepted as a narrow, non-crashing edge case
- * rather than adding a per-render-context variable allowlist.
+ * Meeting variables require the specific meeting from the meeting-scheduled
+ * notification path. Rendering fails without that context, so unrelated
+ * workflow/proposal sends cannot send unresolved meeting placeholders.
+ * Current/tomorrow values use one send-time instant in Asia/Kolkata (fixed
+ * UTC+05:30, no daylight saving), matching the application's calendar.
  */
 export const KNOWN_TEMPLATE_VARIABLES = [
   "lead.firstName",
@@ -105,6 +105,9 @@ export const KNOWN_TEMPLATE_VARIABLES = [
   "lead.email",
   "lead.phone",
   "owner.name",
+  "current.date",
+  "tomorrow.date",
+  "current.time",
   "meeting.title",
   "meeting.date",
   "meeting.time",
@@ -135,8 +138,14 @@ function renderText(text: string, variables: Map<string, string>, unknownTokens:
   });
 }
 
-export function renderTemplate(template: RenderableTemplate, lead: TemplateRenderLead, meeting?: TemplateRenderMeeting): RenderedTemplate {
-  const variables = buildVariableMap(lead, meeting);
+export function renderTemplate(template: RenderableTemplate, lead: TemplateRenderLead, meeting?: TemplateRenderMeeting, now = new Date()): RenderedTemplate {
+  const meetingTokens = [...`${template.subject ?? ""}\n${template.body}`.matchAll(TOKEN_PATTERN)]
+    .map((match) => match[1]!)
+    .filter((key) => key.startsWith("meeting.") && KNOWN_TEMPLATE_VARIABLES.includes(key as typeof KNOWN_TEMPLATE_VARIABLES[number]));
+  if (meetingTokens.length && !meeting) {
+    throw new Error("Meeting variables require a scheduled meeting. Use this template for Meeting Scheduled notifications.");
+  }
+  const variables = buildVariableMap(lead, meeting, now);
   const unknownTokens = new Set<string>();
   // body is HTML (see module doc-comment above) — escape substituted values.
   // subject is a plain-text email header — substitute as-is, never escaped.
