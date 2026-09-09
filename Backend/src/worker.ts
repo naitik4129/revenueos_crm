@@ -32,7 +32,7 @@ async function dispatchMessage(ctx: automationService.ActionContext): Promise<Se
     throw new Error("No template resolved for a message action that passed eligibility (invariant violation).");
   }
 
-  const rendered = renderTemplate(ctx.template, ctx.lead);
+  const rendered = renderTemplate(ctx.template, ctx.lead, ctx.meeting ?? undefined);
   if (rendered.unknownTokens.length > 0) {
     console.warn(
       `[worker] Template "${ctx.template.name}" (action ${ctx.action.id}) has unrecognized token(s): ${rendered.unknownTokens.join(", ")} — sent as literal text.`,

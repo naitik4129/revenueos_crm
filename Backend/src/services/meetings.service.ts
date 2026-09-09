@@ -2,6 +2,7 @@ import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import type { MeetingOutcome, MeetingStatus } from "../domain/enums.js";
+import type { TemplateRenderMeeting } from "../domain/templateRenderer.js";
 import { routeMeetingOutcome } from "../domain/meetingRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
 import { cancelOpenTasksForLead, createTask } from "./tasks.service.js";
@@ -159,6 +160,24 @@ export async function getMeetingRowOr404(db: Queryable, id: string): Promise<Mee
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Meeting");
   return row;
+}
+
+/** The meeting a lead's automation should render against — most recently created, excluding ones that never happened or won't. */
+export async function getLatestMeetingForLead(db: Queryable, leadId: string): Promise<MeetingRow | null> {
+  const result = await db.query<MeetingRow>(
+    `select * from public.meetings where lead_id = $1 and status not in ('cancelled', 'failed') order by created_at desc limit 1`,
+    [leadId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export function toRenderMeeting(meeting: MeetingRow): TemplateRenderMeeting {
+  return {
+    title: meeting.title,
+    at: meeting.scheduled_at.toISOString(),
+    durationMin: meeting.duration_minutes,
+    link: meeting.meet_link ?? meeting.meeting_url,
+  };
 }
 
 export interface ListMeetingsFilters {

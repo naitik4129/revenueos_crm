@@ -1,8 +1,8 @@
 import type { Queryable } from "../dto.js";
 import { pool } from "../db.js";
 import { getLeadRowOr404, type LeadRow } from "./leads.service.js";
-import { getMeetingRowOr404, type MeetingRow } from "./meetings.service.js";
-import { renderTemplate, type TemplateRenderLead, type TemplateRenderMeeting } from "../domain/templateRenderer.js";
+import { getMeetingRowOr404, toRenderMeeting, type MeetingRow } from "./meetings.service.js";
+import { renderTemplate, type TemplateRenderLead } from "../domain/templateRenderer.js";
 import { htmlToWhatsAppText } from "../domain/htmlToWhatsAppText.js";
 import { sendEmail } from "../providers/email.provider.js";
 import { sendWhatsApp } from "../providers/whatsapp.provider.js";
@@ -47,15 +47,6 @@ function toRenderLead(lead: LeadRow): TemplateRenderLead {
     email: lead.email,
     phone: lead.phone,
     ownerName: lead.owner_name,
-  };
-}
-
-function toRenderMeeting(meeting: MeetingRow): TemplateRenderMeeting {
-  return {
-    title: meeting.title,
-    at: meeting.scheduled_at.toISOString(),
-    durationMin: meeting.duration_minutes,
-    link: meeting.meet_link ?? meeting.meeting_url,
   };
 }
 

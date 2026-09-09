@@ -6,6 +6,8 @@ import { addTimelineEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { getRunRowOr404, scheduleStepAfter, type RunRow } from "./runs.service.js";
 import { getLeadRowOr404, type LeadRow } from "./leads.service.js";
 import { createTask } from "./tasks.service.js";
+import { getLatestMeetingForLead, toRenderMeeting } from "./meetings.service.js";
+import type { TemplateRenderMeeting } from "../domain/templateRenderer.js";
 
 /**
  * This module is the ONLY place business rules run for automation
@@ -138,6 +140,7 @@ export interface ActionContext {
         attachments: { id: string; storagePath: string; fileName: string; mimeType: string }[];
       }
     | null;
+  meeting: TemplateRenderMeeting | null;
   eligibility: Eligibility;
 }
 
@@ -176,6 +179,7 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
   }
 
   let contactStatus: string | undefined;
+  let meeting: TemplateRenderMeeting | null = null;
   if (action.action_type === "send_email" || action.action_type === "send_whatsapp") {
     const channel = action.action_type === "send_email" ? "email" : "whatsapp";
     const contactResult = await db.query<{ status: string }>(
@@ -183,6 +187,9 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
       [lead.id, channel],
     );
     contactStatus = contactResult.rows[0]?.status;
+
+    const meetingRow = await getLatestMeetingForLead(db, lead.id);
+    meeting = meetingRow ? toRenderMeeting(meetingRow) : null;
   }
 
   const eligibility = computeEligibility(action, lead, run, template, contactStatus);
@@ -224,6 +231,7 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
           attachments: templateAttachments,
         }
       : null,
+    meeting,
     eligibility,
   };
 }
