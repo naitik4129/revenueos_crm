@@ -406,7 +406,7 @@ function TemplateDialog({
               <TabsContent value="preview" className="mt-1.5">
                 {type === "email" ? (
                   <div
-                    className="min-h-[150px] rounded-md border p-3 text-sm"
+                    className="min-h-[150px] rounded-md border p-3 text-sm [&_a]:text-blue-600 [&_a]:underline"
                     dangerouslySetInnerHTML={{ __html: body }}
                   />
                 ) : (
