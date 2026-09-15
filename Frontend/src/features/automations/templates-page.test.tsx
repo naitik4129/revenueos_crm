@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -18,22 +18,6 @@ vi.mock("sonner", () => ({
     success: vi.fn(),
     error: vi.fn(),
   },
-}));
-
-vi.mock("@/features/automations/template-body-editor", () => ({
-  TemplateBodyEditor: ({
-    value,
-    onChange,
-  }: {
-    value: string;
-    onChange: (html: string) => void;
-  }) => (
-    <textarea
-      aria-label="Body editor"
-      value={value}
-      onChange={(event) => onChange(event.currentTarget.value)}
-    />
-  ),
 }));
 
 vi.mock("@/store", () => ({
@@ -123,4 +107,105 @@ describe("TemplatesPage", () => {
       expect(subjectInput).toHaveValue(`Hi {{${token}}}`);
     });
   });
+});
+
+const design =
+  '<!doctype html><html><head><style>.email {color:red}</style></head><body><table class="email"><tr><td>{{lead.firstName}}<img src="https://example.com/image.png"></td></tr></table></body></html>';
+function existingTemplate() {
+  return {
+    id: "email-1",
+    name: "Designed email",
+    type: "email",
+    subject: "Hello",
+    body: design,
+    active: true,
+    attachments: [],
+    isDefaultMeetingScheduled: false,
+  };
+}
+function state() {
+  return storeState.current as {
+    templates: ReturnType<typeof existingTemplate>[];
+    updateTemplate: ReturnType<typeof vi.fn>;
+  };
+}
+function selectTab(name: string) {
+  fireEvent.mouseDown(screen.getByRole("tab", { name }), { button: 0, ctrlKey: false });
+}
+
+it("preserves complete HTML through preview, cancelled conversion, save and reopen", async () => {
+  const template = existingTemplate();
+  state().templates = [template];
+  state().updateTemplate.mockResolvedValue(template);
+  await renderTemplatesPage();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(screen.getByLabelText("HTML source")).toHaveValue(design);
+  selectTab("Preview");
+  const frame = screen.getByTitle("Email template preview");
+  expect(frame).toHaveAttribute("sandbox", "");
+  expect(frame.getAttribute("srcdoc")).toContain(".email {color:red}");
+  selectTab("Visual");
+  const confirmation = screen.getByRole("dialog", { name: "Convert to visual editor?" });
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+  selectTab("HTML");
+  expect(screen.getByLabelText("HTML source")).toHaveValue(design);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(state().updateTemplate).toHaveBeenCalledWith(
+      "email-1",
+      expect.objectContaining({ body: design }),
+    ),
+  );
+  await waitFor(() => expect(screen.queryByLabelText("HTML source")).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(screen.getByLabelText("HTML source")).toHaveValue(design);
+});
+
+it("keeps edited HTML on a failed save", async () => {
+  state().templates = [existingTemplate()];
+  state().updateTemplate.mockRejectedValue(new Error("Offline"));
+  await renderTemplatesPage();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const edited = design.replace("color:red", "color:blue");
+  fireEvent.change(screen.getByLabelText("HTML source"), { target: { value: edited } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+  expect(screen.getByLabelText("HTML source")).toHaveValue(edited);
+});
+
+it("converts HTML only after confirmation", async () => {
+  state().templates = [existingTemplate()];
+  await renderTemplatesPage();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  selectTab("Visual");
+  fireEvent.click(screen.getByRole("button", { name: "Convert" }));
+  expect(screen.getByRole("tab", { name: "Visual" })).toHaveAttribute("aria-selected", "true");
+  selectTab("HTML");
+  const source = screen.getByLabelText("HTML source") as HTMLTextAreaElement;
+  expect(source.value).toContain("{{lead.firstName}}");
+  expect(source.value).not.toMatch(/<table|<img|<style/);
+});
+
+it("inserts HTML variables at the cursor and confirms conversion when switching to WhatsApp", async () => {
+  await renderTemplatesPage();
+  fireEvent.click(screen.getByRole("button", { name: /new template/i }));
+  expect(screen.getByRole("tab", { name: "Visual" })).toHaveAttribute("aria-selected", "true");
+  selectTab("HTML");
+  const source = screen.getByLabelText("HTML source") as HTMLTextAreaElement;
+  fireEvent.change(source, { target: { value: "<p>Hello </p>" } });
+  source.setSelectionRange(9, 9);
+  const picker = screen.getByLabelText("Insert HTML variable");
+  fireEvent.keyDown(picker, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "Lead first name" }));
+  expect(source).toHaveValue("<p>Hello {{lead.firstName}}</p>");
+  const channel = screen.getAllByRole("combobox").find((node) => node.textContent === "Email")!;
+  fireEvent.keyDown(channel, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "WhatsApp" }));
+  const confirmation = screen.getByRole("dialog", { name: "Convert to visual editor?" });
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+  expect(screen.getByLabelText("HTML source")).toHaveValue("<p>Hello {{lead.firstName}}</p>");
+  fireEvent.keyDown(channel, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "WhatsApp" }));
+  fireEvent.click(screen.getByRole("button", { name: "Convert" }));
+  expect(screen.queryByRole("tab", { name: "HTML" })).not.toBeInTheDocument();
 });

@@ -1,7 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import LinkExtension from "@tiptap/extension-link";
-import { EditorContent, useEditor } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
+import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import {
   Bold,
   Italic,
@@ -25,27 +23,13 @@ import {
 import { cn } from "@/lib/utils";
 import { TEMPLATE_VARIABLES } from "@/lib/template-variables";
 
-const LINK_STYLE = "color: #2563eb;";
+import { normalizeLegacyBody } from "@/lib/template-html";
 
-/** Existing plain-text rows (pre-rich-text) have no tags at all — turn their line breaks into real <br> so spacing survives once loaded into the editor. */
-function normalizeLegacyBody(value: string): string {
-  if (value.includes("<")) return value;
-  const escaped = value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return escaped.replace(/\n/g, "<br>");
-}
-
-function normalizeHttpUrl(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const withScheme = /^[a-z][a-z\d+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  try {
-    const url = new URL(withScheme);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
+import {
+  LINK_STYLE,
+  normalizeHttpUrl,
+  templateEditorExtensions,
+} from "@/lib/template-editor-schema";
 
 function getSelectedText(editor: NonNullable<ReturnType<typeof useEditor>>) {
   const { from, to } = editor.state.selection;
@@ -79,49 +63,30 @@ export function TemplateBodyEditor({
   const [linkError, setLinkError] = useState("");
 
   const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: false,
-        codeBlock: false,
-        blockquote: false,
-        strike: false,
-        horizontalRule: false,
-        code: false,
-        link: false,
-      }),
-      LinkExtension.configure({
-        autolink: false,
-        openOnClick: false,
-        linkOnPaste: true,
-        HTMLAttributes: {
-          rel: "noopener noreferrer",
-          style: LINK_STYLE,
-          target: "_blank",
-        },
-        isAllowedUri: (url) => normalizeHttpUrl(url) !== null,
-      }),
-    ],
+    extensions: templateEditorExtensions,
     content: normalizeLegacyBody(value),
     editable: !disabled,
     onUpdate: ({ editor: e }) => onChange(e.getHTML()),
     editorProps: {
       attributes: {
         class:
-          "min-h-[150px] max-h-[320px] overflow-y-auto rounded-b-md px-3 py-2 text-sm focus:outline-none [&_a]:text-blue-600 [&_a]:underline",
+          "template-rich-text min-w-0 min-h-[150px] max-h-[320px] overflow-y-auto [overflow-wrap:anywhere] rounded-b-md px-3 py-2 text-sm focus:outline-none [&_a]:text-blue-600 [&_a]:underline",
       },
     },
   });
 
   useEffect(() => {
     if (!editor) return;
-    editor.commands.setContent(normalizeLegacyBody(value));
+    editor.commands.setContent(normalizeLegacyBody(value), { emitUpdate: false });
     // Only re-sync when switching to a different template (loadKey) — not on every value change, since onUpdate above already keeps `value` and the editor's own content in sync as the user types.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, loadKey]);
 
   useEffect(() => {
-    editor?.setEditable(!disabled);
+    editor?.setEditable(!disabled, false);
   }, [editor, disabled]);
+
+  useEditorState({ editor, selector: ({ editor: current }) => current?.state });
 
   if (!editor) return null;
 
@@ -187,7 +152,7 @@ export function TemplateBodyEditor({
   );
 
   return (
-    <div className="rounded-md border">
+    <div className="min-w-0 rounded-md border">
       <div className="flex flex-wrap items-center gap-1 border-b bg-muted/40 p-1">
         {toolbarButton("Bold", <Bold className="size-3.5" />, editor.isActive("bold"), () =>
           editor.chain().focus().toggleBold().run(),
@@ -305,7 +270,7 @@ export function TemplateBodyEditor({
           </Select>
         </div>
       </div>
-      <EditorContent editor={editor} />
+      <EditorContent editor={editor} className="min-w-0" />
     </div>
   );
 }

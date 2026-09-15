@@ -20,3 +20,11 @@ describe("htmlToWhatsAppText", () => {
     );
   });
 });
+
+it("preserves ordered starts and nested mixed lists", () => {
+  expect(
+    htmlToWhatsAppText(
+      '<ol start="3"><li><p>Third</p><ul><li><p>Child</p></li></ul></li><li><p>Fourth</p></li></ol>',
+    ),
+  ).toBe("3. Third\n  - Child\n4. Fourth");
+});

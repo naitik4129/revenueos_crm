@@ -23,7 +23,7 @@ describe("htmlToWhatsAppText", () => {
   });
 
   it("converts numbered list items to '- ' prefixed lines (no native numbering)", () => {
-    expect(htmlToWhatsAppText("<ol><li>First</li><li>Second</li></ol>")).toBe("- First\n- Second");
+    expect(htmlToWhatsAppText("<ol><li>First</li><li>Second</li></ol>")).toBe("1. First\n2. Second");
   });
 
   it("decodes HTML entities", () => {
@@ -55,3 +55,7 @@ describe("htmlToWhatsAppText", () => {
     expect(htmlToWhatsAppText(html)).toBe("Hi *Asha*,\n\nNext steps:\n\n- _Review_ the doc\n- Reply here");
   });
 });
+
+  it("preserves ordered starts and nested mixed lists", () => {
+    expect(htmlToWhatsAppText('<ol start="3"><li><p>Third</p><ul><li><p>Child</p></li></ul></li><li><p>Fourth</p></li></ol>')).toBe("3. Third\n  - Child\n4. Fourth");
+  });

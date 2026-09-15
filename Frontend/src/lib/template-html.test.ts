@@ -1,0 +1,35 @@
+import { describe, expect, it } from "vitest";
+import {
+  emailPreviewDocument,
+  isTemplateBodyEmpty,
+  needsHtmlMode,
+  normalizeLegacyBody,
+  templateSummary,
+} from "./template-html";
+
+describe("template HTML", () => {
+  it("detects designs without classifying basic editor content as custom", () => {
+    expect(
+      needsHtmlMode('<p>Hello <strong>there</strong></p><ol start="3"><li><p>Item</p></li></ol>'),
+    ).toBe(false);
+    expect(needsHtmlMode('<table><tr><td style="color:red">Hello</td></tr></table>')).toBe(true);
+    expect(needsHtmlMode('<p class="design">Hello</p>')).toBe(true);
+    expect(needsHtmlMode("<style>p { color:red }</style><p>Hello</p>")).toBe(true);
+  });
+  it("handles legacy text, entities, styles and image-only templates", () => {
+    expect(normalizeLegacyBody("A < B\nC & D")).toBe("A &lt; B<br>C &amp; D");
+    expect(isTemplateBodyEmpty("<style>p{color:red}</style><p>&nbsp;</p>")).toBe(true);
+    expect(isTemplateBodyEmpty('<img src="https://example.com/banner.png">')).toBe(false);
+    expect(templateSummary("<style>p{color:red}</style><p>A &amp; B</p><p>C</p>")).toBe("A & B C");
+  });
+  it("isolates preview without altering source styles or placeholders", () => {
+    const source =
+      '<html><head><style>body{background:red}</style></head><body><script>alert(1)</script><meta http-equiv="refresh" content="0;url=https://example.com"><iframe src="https://example.com"></iframe><a href="https://example.com" onclick="alert(1)">{{lead.firstName}}</a><img src="https://example.com/a.png"></body></html>';
+    const preview = emailPreviewDocument(source);
+    expect(preview).toContain("body{background:red}");
+    expect(preview).toContain("{{lead.firstName}}");
+    expect(preview).toContain("Content-Security-Policy");
+    expect(preview).not.toMatch(/<script|<iframe|onclick=|href=|http-equiv="refresh"/);
+    expect(source).toContain("<script>");
+  });
+});

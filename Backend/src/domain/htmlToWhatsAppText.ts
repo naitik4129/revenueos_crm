@@ -44,6 +44,26 @@ function safeHttpHref(attrs: string): string | null {
   }
 }
 
+/** Render list structure before stripping tags, retaining per-level counters. */
+function renderLists(html: string): string {
+  const stack: { ordered: boolean; next: number }[] = [];
+  return html.replace(/<\/?(?:ul|ol|li|p)\b[^>]*>/gi, (tag) => {
+    const name = tag.match(/^<\/?(\w+)/)![1]!.toLowerCase();
+    const closing = tag.startsWith("</");
+    if (name === "ul" || name === "ol") {
+      if (closing) { stack.pop(); return stack.length ? "" : "\n"; }
+      const start = tag.match(/\bstart\s*=\s*["']?(-?\d+)/i);
+      stack.push({ ordered: name === "ol", next: start ? Number(start[1]) : 1 });
+      return "\n";
+    }
+    if (name === "p") return stack.length ? "" : tag;
+    if (closing) return "";
+    const level = stack[stack.length - 1];
+    const marker = level?.ordered ? `${level.next++}.` : "-";
+    return `\n${"  ".repeat(Math.max(0, stack.length - 1))}${marker} `;
+  }).replace(/\n[ \t]*\n(?=[ \t]*(?:- |[0-9]+\. ))/g, "\n");
+}
+
 export function htmlToWhatsAppText(html: string): string {
   let text = html;
 
@@ -59,9 +79,7 @@ export function htmlToWhatsAppText(html: string): string {
   text = text.replace(/<(em|i)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi, "_$2_");
   text = text.replace(/<\/?u(?:\s[^>]*)?>/gi, "");
 
-  text = text.replace(/<li(?:\s[^>]*)?>([\s\S]*?)<\/li>/gi, "- $1\n");
-  text = text.replace(/<(ul|ol)(?:\s[^>]*)?>/gi, "\n");
-  text = text.replace(/<\/(ul|ol)>/gi, "\n");
+  text = renderLists(text);
 
   text = text.replace(/<br\s*\/?>/gi, "\n");
   // Every paragraph ends with a blank line, so consecutive paragraphs and a
