@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   Bell,
@@ -32,6 +32,7 @@ import { AddLeadDialog } from "@/features/leads/add-lead-dialog";
 import { messageFromError, useLeads, useNotifications, useSession } from "@/store";
 import { cn } from "@/lib/utils";
 import { relDay } from "@/lib/format";
+import { label } from "@/lib/labels";
 import { supabase } from "@/lib/supabase-client";
 
 const NAV = [
@@ -47,6 +48,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [addOpen, setAddOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const searchBoxRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const { leads } = useLeads();
   const { notifications, markNotificationsRead } = useNotifications();
@@ -64,15 +68,48 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    if (!searchOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (!searchBoxRef.current?.contains(e.target as Node)) {
+        setSearchOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [searchOpen]);
+
   const unread = notifications.filter((n) => !n.read).length;
-  const results =
-    query.length > 1
-      ? leads
-          .filter((l) =>
-            `${l.firstName} ${l.lastName} ${l.company}`.toLowerCase().includes(query.toLowerCase()),
-          )
-          .slice(0, 6)
-      : [];
+  const trimmedQuery = query.trim();
+  const results = useMemo(() => {
+    const tokens = trimmedQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return [];
+    return leads
+      .filter((l) => {
+        const text = [
+          l.firstName,
+          l.lastName,
+          l.company,
+          l.email,
+          l.phone,
+          l.jobTitle,
+          l.industry,
+          l.serviceInterest,
+          label(l.pipelineStage),
+        ]
+          .join(" ")
+          .toLowerCase();
+        return tokens.every((t) => text.includes(t));
+      })
+      .slice(0, 6);
+  }, [leads, trimmedQuery]);
+  const showSearchPanel = searchOpen && trimmedQuery.length > 0;
+
+  const resetSearch = () => {
+    setQuery("");
+    setSearchOpen(false);
+    setActiveIndex(-1);
+  };
 
   return (
     <AddLeadContext.Provider value={{ open: () => setAddOpen(true) }}>
@@ -150,30 +187,81 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Link to="/" aria-label="MOTM Flow home" className="shrink-0 lg:hidden">
               <BrandLogo variant="mark" className="size-8" />
             </Link>
-            <div className="relative w-full max-w-md">
+            <div ref={searchBoxRef} className="relative w-full max-w-md">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
+                role="combobox"
+                aria-expanded={showSearchPanel}
+                aria-controls="header-search-results"
+                aria-activedescendant={
+                  activeIndex >= 0 ? `header-search-result-${activeIndex}` : undefined
+                }
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setSearchOpen(true);
+                  setActiveIndex(-1);
+                }}
+                onFocus={() => {
+                  if (trimmedQuery) setSearchOpen(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setSearchOpen(false);
+                    e.currentTarget.blur();
+                  } else if (e.key === "ArrowDown") {
+                    if (results.length === 0) return;
+                    e.preventDefault();
+                    setActiveIndex((i) => Math.min(i + 1, results.length - 1));
+                  } else if (e.key === "ArrowUp") {
+                    if (results.length === 0) return;
+                    e.preventDefault();
+                    setActiveIndex((i) => Math.max(i - 1, 0));
+                  } else if (e.key === "Enter") {
+                    const target = activeIndex >= 0 ? results[activeIndex] : results[0];
+                    if (target) {
+                      e.preventDefault();
+                      resetSearch();
+                      void navigate({ to: "/leads/$leadId", params: { leadId: target.id } });
+                    }
+                  }
+                }}
                 placeholder="Search leads and companies…"
                 className="h-9 pl-8"
               />
-              {results.length > 0 && (
-                <div className="absolute left-0 right-0 top-11 z-40 overflow-hidden rounded-md border bg-popover shadow-lg">
-                  {results.map((l) => (
-                    <Link
-                      key={l.id}
-                      to="/leads/$leadId"
-                      params={{ leadId: l.id }}
-                      onClick={() => setQuery("")}
-                      className="flex items-center justify-between px-3 py-2 text-sm hover:bg-accent"
-                    >
-                      <span>
-                        {l.firstName} {l.lastName}
-                      </span>
-                      <span className="text-xs text-muted-foreground">{l.company}</span>
-                    </Link>
-                  ))}
+              {showSearchPanel && (
+                <div
+                  id="header-search-results"
+                  role="listbox"
+                  className="absolute left-0 right-0 top-11 z-40 overflow-hidden rounded-md border bg-popover shadow-lg"
+                >
+                  {results.length > 0 ? (
+                    results.map((l, i) => (
+                      <Link
+                        key={l.id}
+                        id={`header-search-result-${i}`}
+                        role="option"
+                        aria-selected={i === activeIndex}
+                        to="/leads/$leadId"
+                        params={{ leadId: l.id }}
+                        onClick={resetSearch}
+                        onMouseEnter={() => setActiveIndex(i)}
+                        className={cn(
+                          "flex items-center justify-between px-3 py-2 text-sm hover:bg-accent",
+                          i === activeIndex && "bg-accent",
+                        )}
+                      >
+                        <span>
+                          {l.firstName} {l.lastName}
+                        </span>
+                        <span className="text-xs text-muted-foreground">{l.company}</span>
+                      </Link>
+                    ))
+                  ) : (
+                    <div className="px-3 py-2.5 text-sm text-muted-foreground">
+                      No leads match &ldquo;{trimmedQuery}&rdquo;
+                    </div>
+                  )}
                 </div>
               )}
             </div>
