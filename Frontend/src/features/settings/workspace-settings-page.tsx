@@ -99,7 +99,16 @@ function EmailPanel({ workspaceId }: { workspaceId: string }) {
     return (
       <Card>
         <CardContent className="p-6 text-sm text-muted-foreground">
-          Loading email connection…
+          {query.isError ? (
+            <div className="space-y-2">
+              <p className="text-destructive">Couldn't load the email connection: {message(query.error)}</p>
+              <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
+                <RefreshCw className="size-3.5" /> Retry
+              </Button>
+            </div>
+          ) : (
+            "Loading email connection…"
+          )}
         </CardContent>
       </Card>
     );
@@ -276,7 +285,16 @@ function WhatsAppPanel({ workspaceId }: { workspaceId: string }) {
       </CardHeader>
       <CardContent className="space-y-5">
         {!data ? (
-          <p className="text-sm text-muted-foreground">Loading WhatsApp health…</p>
+          query.isError ? (
+            <div className="space-y-2">
+              <p className="text-sm text-destructive">Couldn't load WhatsApp status: {message(query.error)}</p>
+              <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
+                <RefreshCw className="size-3.5" /> Retry
+              </Button>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Loading WhatsApp health…</p>
+          )
         ) : (
           <>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -476,7 +494,16 @@ function GoogleCalendarPanel({ workspaceId }: { workspaceId: string }) {
       </CardHeader>
       <CardContent className="space-y-5">
         {!data ? (
-          <p className="text-sm text-muted-foreground">Loading Google Calendar status…</p>
+          query.isError ? (
+            <div className="space-y-2">
+              <p className="text-sm text-destructive">Couldn't load Google Calendar status: {message(query.error)}</p>
+              <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
+                <RefreshCw className="size-3.5" /> Retry
+              </Button>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Loading Google Calendar status…</p>
+          )
         ) : (
           <>
             <Notice>

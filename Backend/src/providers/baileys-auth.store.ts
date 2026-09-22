@@ -36,9 +36,16 @@ export async function loadBaileysAuthState(workspaceId: string): Promise<{ state
     `select ciphertext, iv, tag, key_version from public.whatsapp_auth_credentials where workspace_id = $1`,
     [workspaceId],
   );
-  const creds = result.rows[0]
-    ? decode<AuthenticationCreds>(result.rows[0], `whatsapp:auth:creds:${workspaceId}`)
-    : initAuthCreds();
+  // AAD strings here are deliberately NOT workspace-namespaced (unlike the
+  // SQL, which is already workspace_id-scoped at the row/PK level): existing
+  // production secrets were encrypted under these exact static AAD values
+  // before multi-workspace support shipped, and AES-GCM authentication
+  // fails closed (throws "Unsupported state or unable to authenticate
+  // data") if the AAD used to decrypt doesn't byte-for-byte match the AAD
+  // used to encrypt. Changing these would permanently break every
+  // already-stored secret. Row-level workspace isolation is already fully
+  // enforced by the `where workspace_id = $1` queries below.
+  const creds = result.rows[0] ? decode<AuthenticationCreds>(result.rows[0], "whatsapp:auth:creds") : initAuthCreds();
 
   const keys: SignalKeyStore = {
     async get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
@@ -51,7 +58,7 @@ export async function loadBaileysAuthState(workspaceId: string): Promise<{ state
       );
       const values: Partial<Record<string, SignalDataTypeMap[T]>> = {};
       for (const row of rows.rows) {
-        let value = decode<SignalDataTypeMap[T]>(row, `whatsapp:auth:key:${workspaceId}:${type}:${row.key_id}`);
+        let value = decode<SignalDataTypeMap[T]>(row, `whatsapp:auth:key:${type}:${row.key_id}`);
         if (type === "app-state-sync-key" && value) {
           value = proto.Message.AppStateSyncKeyData.fromObject(value as never) as unknown as SignalDataTypeMap[T];
         }
@@ -67,7 +74,7 @@ export async function loadBaileysAuthState(workspaceId: string): Promise<{ state
               await db.query(`delete from public.whatsapp_auth_keys where workspace_id = $1 and key_type = $2 and key_id = $3`, [workspaceId, type, id]);
               continue;
             }
-            const encrypted = encode(value, `whatsapp:auth:key:${workspaceId}:${type}:${id}`);
+            const encrypted = encode(value, `whatsapp:auth:key:${type}:${id}`);
             await db.query(
               `insert into public.whatsapp_auth_keys
                 (workspace_id, key_type, key_id, ciphertext, iv, tag, key_version)
@@ -89,7 +96,7 @@ export async function loadBaileysAuthState(workspaceId: string): Promise<{ state
   return {
     state: { creds, keys },
     saveCreds: async () => {
-      const encrypted = encode(creds, `whatsapp:auth:creds:${workspaceId}`);
+      const encrypted = encode(creds, "whatsapp:auth:creds");
       await pool.query(
         `insert into public.whatsapp_auth_credentials (workspace_id, ciphertext, iv, tag, key_version)
          values ($1,$2,$3,$4,$5)

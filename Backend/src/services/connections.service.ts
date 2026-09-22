@@ -44,7 +44,12 @@ export async function loadEmailConnection(workspaceId: string, db: Queryable = p
   );
   const row = result.rows[0]!;
   const encrypted = encryptedFromRow(row);
-  const secrets = encrypted ? decryptJson<EmailSecrets>(encrypted, `integration:email:${workspaceId}`) : {};
+  // AAD is deliberately a fixed string, not workspace-namespaced — see
+  // baileys-auth.store.ts's comment for why: existing secrets were
+  // encrypted under this exact AAD before per-workspace scoping shipped,
+  // and AES-GCM throws on any AAD mismatch. Row-level isolation is already
+  // enforced by the `where workspace_id = $1` query above.
+  const secrets = encrypted ? decryptJson<EmailSecrets>(encrypted, "integration:email") : {};
   return { row, secrets };
 }
 
@@ -91,7 +96,7 @@ export async function updateEmailConnection(actor: Actor, workspaceId: string, i
     }
   }
 
-  const encrypted = encryptJson(secrets, `integration:email:${workspaceId}`);
+  const encrypted = encryptJson(secrets, "integration:email");
   await withTransaction(async (db) => {
     await db.query(
       `update public.integration_connections
@@ -153,7 +158,7 @@ export async function getWhatsAppConnection(workspaceId: string) {
     row.qr_ciphertext && row.qr_iv && row.qr_tag && row.qr_expires_at && row.qr_expires_at.getTime() > Date.now()
       ? decryptText(
           { ciphertext: row.qr_ciphertext, iv: row.qr_iv, tag: row.qr_tag, keyVersion: row.qr_key_version },
-          `whatsapp:pairing-qr:${workspaceId}`,
+          "whatsapp:pairing-qr",
         )
       : null;
   const [counts, invalid, review] = await Promise.all([
@@ -281,11 +286,16 @@ async function loadGoogleCalendarRow(workspaceId: string, db: Queryable = pool):
   return result.rows[0]!;
 }
 
-function decryptClientSecret(row: GoogleCalendarRow, workspaceId: string): string | null {
+// AAD strings below are deliberately fixed, not workspace-namespaced — see
+// baileys-auth.store.ts's comment: existing secrets were encrypted under
+// these exact AAD values before per-workspace scoping shipped, and AES-GCM
+// throws on any AAD mismatch. Row-level isolation is already enforced by
+// the `where workspace_id = $1` queries these values are read through.
+function decryptClientSecret(row: GoogleCalendarRow): string | null {
   if (!row.client_secret_ciphertext || !row.client_secret_iv || !row.client_secret_tag) return null;
   return decryptText(
     { ciphertext: row.client_secret_ciphertext, iv: row.client_secret_iv, tag: row.client_secret_tag, keyVersion: row.client_secret_key_version },
-    `integration:google_calendar:client_secret:${workspaceId}`,
+    "integration:google_calendar:client_secret",
   );
 }
 
@@ -303,10 +313,10 @@ export async function loadGoogleCalendarConnection(workspaceId: string, db: Quer
     row.refresh_token_ciphertext && row.refresh_token_iv && row.refresh_token_tag
       ? decryptText(
           { ciphertext: row.refresh_token_ciphertext, iv: row.refresh_token_iv, tag: row.refresh_token_tag, keyVersion: row.refresh_token_key_version },
-          `integration:google_calendar:refresh_token:${workspaceId}`,
+          "integration:google_calendar:refresh_token",
         )
       : null;
-  const clientSecret = decryptClientSecret(row, workspaceId);
+  const clientSecret = decryptClientSecret(row);
   const oauthConfig: GoogleOAuthClientConfig | null =
     row.client_id && clientSecret && row.redirect_uri
       ? { clientId: row.client_id, clientSecret, redirectUri: row.redirect_uri }
@@ -351,7 +361,7 @@ export async function updateGoogleCalendarCredentials(actor: Actor, workspaceId:
 
   await withTransaction(async (db) => {
     if (input.clientSecret) {
-      const encrypted = encryptText(input.clientSecret, `integration:google_calendar:client_secret:${workspaceId}`);
+      const encrypted = encryptText(input.clientSecret, "integration:google_calendar:client_secret");
       await db.query(
         `update public.google_calendar_connection
             set client_id = $1, redirect_uri = $2,
@@ -420,7 +430,7 @@ export async function completeGoogleCalendarOAuth(code: string, state: string): 
 
   try {
     const { refreshToken, email } = await exchangeCodeForTokens(oauthConfig, code);
-    const encrypted = encryptText(refreshToken, `integration:google_calendar:refresh_token:${workspaceId}`);
+    const encrypted = encryptText(refreshToken, "integration:google_calendar:refresh_token");
     await withTransaction(async (db) => {
       await db.query(
         `update public.google_calendar_connection

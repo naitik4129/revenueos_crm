@@ -281,7 +281,10 @@ export class BaileysManager {
   }
 
   private async storeQr(qr: string) {
-    const encrypted = encryptBytes(Buffer.from(qr, "utf8"), `whatsapp:pairing-qr:${this.workspaceId}`);
+    // Not workspace-namespaced — see baileys-auth.store.ts's comment: AAD
+    // must stay a fixed string so it matches whatever pre-existing rows
+    // were encrypted under before per-workspace scoping shipped.
+    const encrypted = encryptBytes(Buffer.from(qr, "utf8"), "whatsapp:pairing-qr");
     const expiresAt = new Date(Date.now() + 90_000);
     await pool.query(
       `update public.whatsapp_connection
