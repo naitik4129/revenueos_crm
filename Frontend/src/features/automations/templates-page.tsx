@@ -1,7 +1,7 @@
 import { convertToVisualHtml } from "@/lib/template-editor-schema";
-import { useRef, useState, type ChangeEvent } from "react";
+import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
-import { Paperclip, Plus, Trash2, X } from "lucide-react";
+import { Paperclip, Plus, Search, Trash2, X } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { AutomationTabs } from "@/features/automations/automation-tabs";
 import { Button } from "@/components/ui/button";
@@ -64,6 +64,15 @@ export function TemplatesPage() {
   const [editing, setEditing] = useState<Template | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Template | null>(null);
+  const [q, setQ] = useState("");
+
+  const filteredTemplates = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    if (!query) return templates;
+    return templates.filter((t) =>
+      `${t.name} ${t.subject ?? ""} ${t.type}`.toLowerCase().includes(query),
+    );
+  }, [templates, q]);
 
   return (
     <div className="pb-10">
@@ -78,14 +87,30 @@ export function TemplatesPage() {
         }
       />
 
+      <div className="px-6 pt-6">
+        <div className="relative w-64">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search templates"
+            className="pl-8"
+          />
+        </div>
+      </div>
+
       <div className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-3">
         {isLoading ? (
           <LoadingBlock label="Loading templates…" />
         ) : error ? (
           <ErrorBlock error={error} />
+        ) : filteredTemplates.length === 0 ? (
+          <p className="col-span-full py-8 text-center text-sm text-muted-foreground">
+            No templates match &quot;{q}&quot;.
+          </p>
         ) : (
           <>
-            {templates.map((t) => (
+            {filteredTemplates.map((t) => (
               <Card key={t.id} className="flex min-w-0 flex-col [overflow-wrap:anywhere]">
                 <CardHeader className="pb-2">
                   <div className="flex items-start justify-between gap-2">

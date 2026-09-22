@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Bot, Copy, Plus, Trash2 } from "lucide-react";
+import { Bot, Copy, Plus, Search, Trash2 } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { AutomationTabs } from "@/features/automations/automation-tabs";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,7 @@ export function WorkflowsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Workflow | null>(null);
   const [forceDeleteTarget, setForceDeleteTarget] = useState<Workflow | null>(null);
+  const [q, setQ] = useState("");
   const mutate = async (work: () => Promise<unknown>, success: string) => {
     try {
       await work();
@@ -56,6 +57,16 @@ export function WorkflowsPage() {
       toast.error(messageFromError(failure));
     }
   };
+
+  const filteredWorkflows = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    if (!query) return workflows;
+    return workflows.filter((w) =>
+      `${w.name} ${w.description ?? ""} ${workflowTriggerLabel(w.trigger)}`
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [workflows, q]);
 
   return (
     <div className="pb-10">
@@ -70,14 +81,30 @@ export function WorkflowsPage() {
         }
       />
 
+      <div className="px-6 pt-6">
+        <div className="relative w-64">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search workflows"
+            className="pl-8"
+          />
+        </div>
+      </div>
+
       <div className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-3">
         {isLoading ? (
           <LoadingBlock label="Loading workflows…" />
         ) : error ? (
           <ErrorBlock error={error} />
+        ) : filteredWorkflows.length === 0 ? (
+          <p className="col-span-full py-8 text-center text-sm text-muted-foreground">
+            No workflows match &quot;{q}&quot;.
+          </p>
         ) : (
           <>
-            {workflows.map((w) => {
+            {filteredWorkflows.map((w) => {
               const draft = w.versions.find((v) => v.status === "draft");
               const published = w.versions.find((v) => v.version === w.currentVersion);
               return (
