@@ -37,6 +37,7 @@ import {
   emailPreviewDocument,
   isTemplateBodyEmpty,
   needsHtmlMode,
+  sanitizeEmailHtml,
   templateSummary,
 } from "@/lib/template-html";
 
@@ -309,6 +310,7 @@ function TemplateDialog({
       return;
     }
     const effectiveSubject = type === "email" ? subject.trim() : "";
+    const effectiveBody = type === "email" ? sanitizeEmailHtml(body) : body;
     setSaving(true);
     let saved: Template;
     try {
@@ -316,11 +318,16 @@ function TemplateDialog({
         saved = await updateTemplate(template.id, {
           name: name.trim(),
           subject: effectiveSubject,
-          body,
+          body: effectiveBody,
           isDefaultMeetingScheduled,
         });
       } else {
-        saved = await addTemplate({ name: name.trim(), type, subject: effectiveSubject, body });
+        saved = await addTemplate({
+          name: name.trim(),
+          type,
+          subject: effectiveSubject,
+          body: effectiveBody,
+        });
         if (isDefaultMeetingScheduled) {
           saved = await updateTemplate(saved.id, { isDefaultMeetingScheduled: true });
         }

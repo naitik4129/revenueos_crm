@@ -4,6 +4,7 @@ import {
   isTemplateBodyEmpty,
   needsHtmlMode,
   normalizeLegacyBody,
+  sanitizeEmailHtml,
   templateSummary,
 } from "./template-html";
 
@@ -31,5 +32,30 @@ describe("template HTML", () => {
     expect(preview).toContain("Content-Security-Policy");
     expect(preview).not.toMatch(/<script|<iframe|onclick=|href=|http-equiv="refresh"/);
     expect(source).toContain("<script>");
+  });
+  it("lets pasted base64 images through the preview's image policy", () => {
+    const preview = emailPreviewDocument('<img src="data:image/png;base64,AAAA">');
+    expect(preview).toContain("img-src https: data:");
+    expect(preview).toContain('src="data:image/png;base64,AAAA"');
+  });
+  it("sanitizes only genuinely dangerous markup, preserving tables, styles and images", () => {
+    const fragment =
+      '<table><tr><td style="color:red" colspan="2"><img src="data:image/png;base64,AAAA" width="10"></td></tr></table>' +
+      '<script>alert(1)</script><a href="javascript:alert(1)" onclick="alert(1)">bad</a>' +
+      '<a href="https://example.com">ok</a>';
+    const cleaned = sanitizeEmailHtml(fragment);
+    expect(cleaned).toContain('<td style="color:red" colspan="2">');
+    expect(cleaned).toContain('<img src="data:image/png;base64,AAAA" width="10">');
+    expect(cleaned).toContain('<a href="https://example.com">ok</a>');
+    expect(cleaned).not.toMatch(/<script|onclick=|javascript:/);
+
+    const fullDocument =
+      "<!doctype html><html><head><style>body{color:red}</style>" +
+      '<meta http-equiv="refresh" content="0;url=https://evil.example"></head>' +
+      '<body><iframe src="https://evil.example"></iframe><p>Hi</p></body></html>';
+    const cleanedDoc = sanitizeEmailHtml(fullDocument);
+    expect(cleanedDoc).toContain("body{color:red}");
+    expect(cleanedDoc).toContain("<p>Hi</p>");
+    expect(cleanedDoc).not.toMatch(/<iframe|http-equiv="refresh"/);
   });
 });
