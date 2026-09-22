@@ -227,6 +227,11 @@ export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
  * `call_outcome_maybe`/`call_outcome_negative` are intentionally omitted
  * (see CALL_CONNECTED_OUTCOMES comment) — replaced by
  * `call_outcome_interested_later`/`call_outcome_future_possibility`.
+ *
+ * `meeting_highly_interested`/`meeting_proposal_requested`/`meeting_not_a_fit`
+ * are the dedicated triggers for those three meeting outcomes (see
+ * meetingRouting.ts). `needs_internal_discussion` deliberately has no
+ * trigger of its own — it reuses `objection_internal_approval`.
  */
 export const WORKFLOW_TRIGGERS = [
   "lead_created",
@@ -242,6 +247,9 @@ export const WORKFLOW_TRIGGERS = [
   "objection_internal_approval",
   "meeting_needs_more_information",
   "meeting_not_ready",
+  "meeting_highly_interested",
+  "meeting_proposal_requested",
+  "meeting_not_a_fit",
   "proposal_pending",
   "manual_enrollment",
 ] as const;

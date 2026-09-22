@@ -43,9 +43,12 @@ const SPECIAL: Record<string, string> = {
   objection_internal_hiring: "Objection: Internal Hiring",
   objection_existing_team: "Objection: Existing Team",
   objection_budget_price: "Objection: Budget / Price",
-  objection_internal_approval: "Objection: Internal Approval",
+  objection_internal_approval: "Objection: Internal Approval (also used for Meeting: Needs Internal Discussion)",
   meeting_needs_more_information: "Meeting: Needs More Information",
-  meeting_not_ready: "Meeting: Not Ready",
+  meeting_not_ready: "Meeting: Not Ready (Timed Nurture)",
+  meeting_highly_interested: "Meeting: Highly Interested",
+  meeting_proposal_requested: "Meeting: Proposal Requested",
+  meeting_not_a_fit: "Meeting: Not a Fit (Archive / Alternate Service)",
 };
 export function label(value?: string | null) {
   if (!value) return "-";

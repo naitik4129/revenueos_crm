@@ -26,16 +26,19 @@ export function routeMeetingOutcome(outcome: MeetingOutcome): MeetingRoutingResu
     case "highly_interested":
       // "Highly interested -> Proposal / solution discussion" — moves
       // toward a proposal like proposal_required, but the immediate next
-      // action is a discussion, not preparing a document yet.
+      // action is a discussion, not preparing a document yet. Also enrolls
+      // a dedicated nurture sequence for this outcome.
       return {
         stage: "proposal_preparation",
         task: { type: "general_task", title: "Schedule proposal/solution discussion", dueInDays: 2 },
+        workflowTrigger: "meeting_highly_interested",
       };
     case "proposal_required":
       // "Proposal requested -> Proposal stage nurture".
       return {
         stage: "proposal_preparation",
         task: { type: "prepare_proposal", title: "Prepare and upload proposal", dueInDays: 2 },
+        workflowTrigger: "meeting_proposal_requested",
       };
     case "needs_internal_discussion":
       // "Needs internal discussion -> Decision-maker support" — the same
@@ -74,10 +77,11 @@ export function routeMeetingOutcome(outcome: MeetingOutcome): MeetingRoutingResu
       // philosophy (see module doc-comment) is not to invent
       // destructive/aggressive automatic behavior. A rep who judges the
       // lead truly dead can still Discard it explicitly from the lead
-      // detail page.
+      // detail page. Now also enrolls a nurture/alternate-service sequence.
       return {
         lifecycle: "long_term_nurture",
         task: { type: "re_engage", title: "Long-term re-engagement", dueInDays: 45 },
+        workflowTrigger: "meeting_not_a_fit",
       };
     case "no_proposal_required":
       return {

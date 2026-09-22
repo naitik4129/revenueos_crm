@@ -1,4 +1,8 @@
-/** `call_outcome_maybe`/`call_outcome_negative` intentionally omitted — see types/lead.ts comment. */
+/**
+ * `call_outcome_maybe`/`call_outcome_negative` intentionally omitted — see types/lead.ts comment.
+ * `meeting_highly_interested`/`meeting_proposal_requested`/`meeting_not_a_fit` are the dedicated
+ * triggers for those meeting outcomes; `needs_internal_discussion` reuses `objection_internal_approval`.
+ */
 export const WORKFLOW_TRIGGERS = [
   "lead_created",
   "meeting_agreed",
@@ -13,6 +17,9 @@ export const WORKFLOW_TRIGGERS = [
   "objection_internal_approval",
   "meeting_needs_more_information",
   "meeting_not_ready",
+  "meeting_highly_interested",
+  "meeting_proposal_requested",
+  "meeting_not_a_fit",
   "proposal_pending",
   "manual_enrollment",
 ] as const;

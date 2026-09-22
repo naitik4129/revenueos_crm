@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { routeMeetingOutcome } from "../../src/domain/meetingRouting.js";
 
 describe("routeMeetingOutcome", () => {
-  it("Proposal Required -> Proposal Preparation + prepare task", () => {
+  it("Proposal Required -> Proposal Preparation + prepare task + Proposal Requested workflow", () => {
     const r = routeMeetingOutcome("proposal_required");
     expect(r.stage).toBe("proposal_preparation");
     expect(r.task).toMatchObject({ type: "prepare_proposal", dueInDays: 2 });
+    expect(r.workflowTrigger).toBe("meeting_proposal_requested");
   });
 
   it("Follow-up Required -> Meeting Follow-up stage", () => {
@@ -19,11 +20,12 @@ describe("routeMeetingOutcome", () => {
     expect(r.task?.type).toBe("schedule_meeting");
   });
 
-  it("Not Interested -> lifecycle Long-Term Nurture, not a pipeline stage", () => {
+  it("Not Interested -> lifecycle Long-Term Nurture, not a pipeline stage, enrolls Not a Fit workflow", () => {
     const r = routeMeetingOutcome("not_interested");
     expect(r.lifecycle).toBe("long_term_nurture");
     expect(r.stage).toBeUndefined();
     expect(r.task).toMatchObject({ dueInDays: 45 });
+    expect(r.workflowTrigger).toBe("meeting_not_a_fit");
   });
 
   it("Won -> lifecycle Won, no stage change, no task", () => {
@@ -33,10 +35,11 @@ describe("routeMeetingOutcome", () => {
     expect(r.task).toBeUndefined();
   });
 
-  it("Highly Interested -> Proposal Preparation + discussion task", () => {
+  it("Highly Interested -> Proposal Preparation + discussion task + Highly Interested workflow", () => {
     const r = routeMeetingOutcome("highly_interested");
     expect(r.stage).toBe("proposal_preparation");
     expect(r.task?.type).toBe("general_task");
+    expect(r.workflowTrigger).toBe("meeting_highly_interested");
   });
 
   it("Needs Internal Discussion -> Objection Nurture / internal_approval, reusing the call-stage track", () => {

@@ -63,6 +63,8 @@ The migration files are the schema source of truth. The current migration stack 
 - `012_lead_fields.sql`: adds `leads.objection_type`, the four `leads.interested_later_*` capture columns, and `leads.loss_reason`/`loss_notes`, plus `leads_lost_has_reason` and `leads_objection_stage_has_type` constraints.
 - `013_proposal_loss_fields.sql`: adds `proposals.loss_reason`/`loss_notes` (captured on `rejected`/`expired`, since those don't move the lead to `lost`).
 - `014_meeting_agreed_call_outcome.sql`: adds `meeting_agreed` to `public.call_connected_outcome` and `public.workflow_trigger`.
+- `015_workspaces.sql`: introduces `public.workspaces` and `workspace_id` scoping across the CRM.
+- `016_meeting_outcome_triggers.sql`: adds `meeting_highly_interested`, `meeting_proposal_requested`, `meeting_not_a_fit` to `public.workflow_trigger` — dedicated triggers for those three meeting outcomes, which previously had none.
 
 Private Supabase Storage buckets currently used by the backend:
 
@@ -171,7 +173,7 @@ Important enum concepts are intentionally separate:
 - Contact channels: `phone`, `email`, `whatsapp`, each with channel-specific status values.
 - Objection type (set alongside `pipeline_stage = objection_nurture`): `commission_only`, `internal_hiring`, `existing_team`, `budget_price`, `internal_approval`, `wrong_fit`.
 - Lead loss reason (required when `lifecycle_state = lost`, or on a proposal `rejected`/`expired`): `price_budget`, `internal_hiring`, `project_postponed`, `competitor_selected`, `management_rejected`, `no_urgency`, `no_response`, `other`.
-- Workflow triggers: `lead_created`, `meeting_agreed`, `call_not_connected`, `call_outcome_interested_later`, `call_outcome_future_possibility`, `call_outcome_information_requested`, `objection_commission_only`, `objection_internal_hiring`, `objection_existing_team`, `objection_budget_price`, `objection_internal_approval`, `meeting_needs_more_information`, `meeting_not_ready`, `proposal_pending`, `manual_enrollment`. (`call_outcome_maybe`/`call_outcome_negative` retired — see migration `010`.)
+- Workflow triggers: `lead_created`, `meeting_agreed`, `call_not_connected`, `call_outcome_interested_later`, `call_outcome_future_possibility`, `call_outcome_information_requested`, `objection_commission_only`, `objection_internal_hiring`, `objection_existing_team`, `objection_budget_price`, `objection_internal_approval`, `meeting_needs_more_information`, `meeting_not_ready`, `meeting_highly_interested`, `meeting_proposal_requested`, `meeting_not_a_fit`, `proposal_pending`, `manual_enrollment`. (`call_outcome_maybe`/`call_outcome_negative` retired — see migration `010`.)
 - Workflow step actions: `send_email`, `send_whatsapp`, `create_call_task`, `create_follow_up_task`, `change_lead_stage`, `stop_workflow`.
 
 Backend values stay lowercase. Friendly labels are presentation-only and generated in `Frontend/src/lib/labels.ts`.
@@ -197,13 +199,13 @@ Meeting routing (the Post-Meeting / Demo Nurture outcome table):
 
 - Scheduling a meeting saves participants, attempts Google Calendar sync outside the transaction, then sends/queues meeting-scheduled notifications.
 - Cancellation attempts calendar cleanup/reschedule sync outside the transaction.
-- `highly_interested` moves to `proposal_preparation` and creates a proposal/solution-discussion task.
-- `proposal_required` moves to `proposal_preparation` and creates a prepare-proposal task.
+- `highly_interested` moves to `proposal_preparation`, creates a proposal/solution-discussion task, and enrolls `meeting_highly_interested`.
+- `proposal_required` moves to `proposal_preparation`, creates a prepare-proposal task, and enrolls `meeting_proposal_requested`.
 - `needs_internal_discussion` moves to `objection_nurture` with `objection_type = 'internal_approval'`, creates a one-pager task, and enrolls `objection_internal_approval` — reusing the same track as the call-stage Internal Approval objection.
 - `needs_more_information` moves to `meeting_follow_up`, creates a send-case-study task, and enrolls `meeting_needs_more_information`.
 - `follow_up_required` ("Not ready") moves to `meeting_follow_up`, creates a follow-up task, and enrolls `meeting_not_ready`.
 - `second_meeting` moves back to `meeting_scheduling` and creates a scheduling task.
-- `not_interested` ("Not fit") moves lifecycle to `long_term_nurture` and creates a re-engagement task — deliberately not `discarded`, per this module's existing "don't invent aggressive/automatic behavior" philosophy; a rep can still Discard explicitly.
+- `not_interested` ("Not fit") moves lifecycle to `long_term_nurture`, creates a re-engagement task, and enrolls `meeting_not_a_fit` — deliberately not `discarded`, per this module's existing "don't invent aggressive/automatic behavior" philosophy; a rep can still Discard explicitly.
 - `no_proposal_required` creates an internal-review task.
 - `won` moves lifecycle to `won` and cancels open tasks via lead lifecycle handling.
 
