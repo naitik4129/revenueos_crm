@@ -18,7 +18,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { configurationError } from "@/lib/supabase-client";
 import { useSupabaseSession } from "@/lib/use-supabase-session";
 import { LoginPage } from "@/features/auth/login-page";
-import { backend } from "@/lib/backend-client";
+import { backend, BackendError } from "@/lib/backend-client";
 import { BrandLogo } from "@/components/common/brand-logo";
 
 function NotFoundComponent() {
@@ -177,6 +177,13 @@ function AuthGate({ children, queryClient }: { children: ReactNode; queryClient:
         <span>Checking access…</span>
       </div>
     );
+  }
+  // An expired/invalid session (backend-client.ts already signs out locally
+  // on any 401) is a login-required state, not an app crash — show the login
+  // page instead of throwing to the router's generic error boundary. Any
+  // other failure (network, 500s) still throws so it's visibly surfaced.
+  if (me.isError && me.error instanceof BackendError && me.error.status === 401) {
+    return <LoginPage adminMode={adminPath} />;
   }
   if (me.isError || !me.data) throw me.error;
   if (me.data.role === "admin") {
