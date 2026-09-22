@@ -120,6 +120,7 @@ export interface ActionContext {
     firstName: string;
     lastName: string;
     company: string;
+    industry: string | null;
     email: string | null;
     phone: string | null;
     phoneE164: string | null;
@@ -212,6 +213,7 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
       firstName: lead.first_name,
       lastName: lead.last_name,
       company: lead.company,
+      industry: lead.industry,
       email: lead.email,
       phone: lead.phone,
       phoneE164: lead.phone_e164,

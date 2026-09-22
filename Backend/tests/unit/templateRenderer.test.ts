@@ -5,6 +5,7 @@ const lead: TemplateRenderLead = {
   firstName: "Asha",
   lastName: "Rao",
   company: "Rao Textiles",
+  industry: "Textiles",
   email: "asha@raotextiles.example",
   phone: "+919876543210",
   ownerName: "Priya Singh",
@@ -29,6 +30,12 @@ describe("renderTemplate", () => {
   it("renders missing email/phone as empty string rather than throwing", () => {
     const result = renderTemplate({ subject: null, body: "{{lead.email}} {{lead.phone}}" }, { ...lead, email: null, phone: null });
     expect(result.body).toBe(" ");
+  });
+
+  it("substitutes lead.industry, falling back to empty string when missing", () => {
+    const result = renderTemplate({ subject: null, body: "{{lead.industry}}" }, lead);
+    expect(result.body).toBe("Textiles");
+    expect(renderTemplate({ subject: null, body: "{{lead.industry}}" }, { ...lead, industry: null }).body).toBe("");
   });
 
   it("leaves unknown tokens as literal text and reports them", () => {

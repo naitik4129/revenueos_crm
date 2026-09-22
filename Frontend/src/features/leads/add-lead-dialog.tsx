@@ -75,6 +75,7 @@ export function AddLeadDialog({
     firstName: "",
     lastName: "",
     company: "",
+    industry: "",
     phone: "",
     email: "",
     source: "website" as LeadSource,
@@ -115,6 +116,7 @@ export function AddLeadDialog({
         firstName: form.firstName.trim(),
         lastName: form.lastName.trim(),
         company: form.company.trim(),
+        industry: form.industry.trim(),
         phone: form.phone.trim() ? (normalizePhone(form.phone).value ?? form.phone.trim()) : "",
         email: form.email.trim() ? (normalizeEmail(form.email).value ?? form.email.trim()) : "",
         source: form.source,
@@ -145,6 +147,7 @@ export function AddLeadDialog({
       firstName: "",
       lastName: "",
       company: "",
+      industry: "",
       phone: "",
       email: "",
       notes: "",
@@ -190,6 +193,9 @@ export function AddLeadDialog({
               onBlur={() => touch("company")}
               aria-invalid={Boolean(fieldError("company"))}
             />
+          </Field>
+          <Field label="Industry">
+            <Input value={form.industry} onChange={(e) => set("industry", e.target.value)} />
           </Field>
           <Field label="Phone" error={fieldError("phone")}>
             <Input

@@ -23,6 +23,7 @@ export interface TemplateRenderLead {
   firstName: string;
   lastName: string;
   company: string;
+  industry: string | null;
   email: string | null;
   phone: string | null;
   ownerName: string | null;
@@ -68,6 +69,7 @@ function buildVariableMap(lead: TemplateRenderLead, meeting: TemplateRenderMeeti
     ["lead.lastName", lead.lastName],
     ["lead.fullName", fullName || lead.firstName],
     ["lead.company", lead.company],
+    ["lead.industry", lead.industry ?? ""],
     ["lead.email", lead.email ?? ""],
     ["lead.phone", lead.phone ?? ""],
     ["owner.name", lead.ownerName ?? ""],
@@ -102,6 +104,7 @@ export const KNOWN_TEMPLATE_VARIABLES = [
   "lead.lastName",
   "lead.fullName",
   "lead.company",
+  "lead.industry",
   "lead.email",
   "lead.phone",
   "owner.name",

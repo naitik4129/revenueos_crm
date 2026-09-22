@@ -52,6 +52,7 @@ function toRenderLead(lead: LeadRow & { owner_name?: string | null }): TemplateR
     firstName: lead.first_name,
     lastName: lead.last_name,
     company: lead.company,
+    industry: lead.industry,
     email: lead.email,
     phone: lead.phone,
     ownerName: lead.owner_name ?? null,

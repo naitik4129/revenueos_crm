@@ -59,6 +59,7 @@ function toRenderLead(lead: LeadRow): TemplateRenderLead {
     firstName: lead.first_name,
     lastName: lead.last_name,
     company: lead.company,
+    industry: lead.industry,
     email: lead.email,
     phone: lead.phone,
     ownerName: lead.owner_name,

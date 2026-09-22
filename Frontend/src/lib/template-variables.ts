@@ -8,6 +8,7 @@ export const TEMPLATE_VARIABLES = [
   { token: "lead.lastName", label: "Lead last name" },
   { token: "lead.fullName", label: "Lead full name" },
   { token: "lead.company", label: "Lead company" },
+  { token: "lead.industry", label: "Lead industry" },
   { token: "lead.email", label: "Lead email" },
   { token: "lead.phone", label: "Lead phone" },
   { token: "owner.name", label: "Owner name" },
