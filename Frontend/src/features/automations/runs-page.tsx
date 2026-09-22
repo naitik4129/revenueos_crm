@@ -1,15 +1,21 @@
 import { Link } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { AutomationTabs } from "@/features/automations/automation-tabs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { findCurrentStep } from "@/lib/workflow-timeline";
 import { messageFromError, useAutomations, useLeads } from "@/store";
+
+const RUNS_PAGE_SIZE = 10;
+const ACTIONS_PAGE_SIZE = 10;
 
 export function RunsPage() {
   const {
@@ -25,6 +31,50 @@ export function RunsPage() {
     isPending,
   } = useAutomations();
   const { leads } = useLeads();
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [actionsPage, setActionsPage] = useState(1);
+
+  const filteredRuns = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    if (!query) return runs;
+    return runs.filter((run) => {
+      const lead = leads.find((item) => item.id === run.leadId);
+      const haystack = lead ? `${lead.firstName} ${lead.lastName} ${lead.company}` : run.leadId;
+      return haystack.toLowerCase().includes(query);
+    });
+  }, [runs, leads, q]);
+
+  const filteredScheduledActions = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    if (!query) return scheduledActions;
+    return scheduledActions.filter((action) => {
+      const lead = leads.find((item) => item.id === action.leadId);
+      const haystack = lead ? `${lead.firstName} ${lead.lastName} ${lead.company}` : action.leadId;
+      return haystack.toLowerCase().includes(query);
+    });
+  }, [scheduledActions, leads, q]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRuns.length / RUNS_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedRuns = useMemo(
+    () => filteredRuns.slice((currentPage - 1) * RUNS_PAGE_SIZE, currentPage * RUNS_PAGE_SIZE),
+    [filteredRuns, currentPage],
+  );
+
+  const totalActionsPages = Math.max(
+    1,
+    Math.ceil(filteredScheduledActions.length / ACTIONS_PAGE_SIZE),
+  );
+  const currentActionsPage = Math.min(actionsPage, totalActionsPages);
+  const pagedScheduledActions = useMemo(
+    () =>
+      filteredScheduledActions.slice(
+        (currentActionsPage - 1) * ACTIONS_PAGE_SIZE,
+        currentActionsPage * ACTIONS_PAGE_SIZE,
+      ),
+    [filteredScheduledActions, currentActionsPage],
+  );
 
   return (
     <div className="pb-10">
@@ -41,6 +91,25 @@ export function RunsPage() {
           <ErrorBlock error={error} />
         ) : (
           <>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="relative w-64">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={q}
+                  onChange={(e) => {
+                    setQ(e.target.value);
+                    setPage(1);
+                    setActionsPage(1);
+                  }}
+                  placeholder="Search by lead name"
+                  className="pl-8"
+                />
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {filteredRuns.length} of {runs.length} runs
+              </div>
+            </div>
+
             <Card className="p-0">
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[980px] text-sm">
@@ -62,7 +131,7 @@ export function RunsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {runs.map((run) => {
+                    {pagedRuns.map((run) => {
                       const lead = leads.find((item) => item.id === run.leadId);
                       const workflow = workflows.find((item) => item.id === run.workflowId);
                       const currentStep = findCurrentStep(workflow, run);
@@ -137,19 +206,51 @@ export function RunsPage() {
                         </tr>
                       );
                     })}
-                    {runs.length === 0 && (
+                    {filteredRuns.length === 0 && (
                       <tr>
                         <td
                           colSpan={7}
                           className="px-3 py-10 text-center text-sm text-muted-foreground"
                         >
-                          No workflow runs.
+                          {runs.length === 0 ? "No workflow runs." : `No runs match "${q}".`}
                         </td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
+              {filteredRuns.length > 0 && (
+                <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+                  <span>
+                    Showing {(currentPage - 1) * RUNS_PAGE_SIZE + 1}-
+                    {Math.min(currentPage * RUNS_PAGE_SIZE, filteredRuns.length)} of{" "}
+                    {filteredRuns.length}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={currentPage === 1}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      aria-label="Previous page"
+                    >
+                      <ChevronLeft className="size-4" />
+                    </Button>
+                    <span>
+                      Page {currentPage} of {totalPages}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={currentPage === totalPages}
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                      aria-label="Next page"
+                    >
+                      <ChevronRight className="size-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </Card>
 
             <Card className="overflow-hidden">
@@ -169,7 +270,7 @@ export function RunsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {scheduledActions.map((action) => {
+                      {pagedScheduledActions.map((action) => {
                         const lead = leads.find((item) => item.id === action.leadId);
                         return (
                           <tr key={action.id} className="border-t">
@@ -190,19 +291,56 @@ export function RunsPage() {
                           </tr>
                         );
                       })}
-                      {scheduledActions.length === 0 && (
+                      {filteredScheduledActions.length === 0 && (
                         <tr>
                           <td
                             colSpan={5}
                             className="px-3 py-8 text-center text-sm text-muted-foreground"
                           >
-                            No scheduled actions.
+                            {scheduledActions.length === 0
+                              ? "No scheduled actions."
+                              : `No scheduled actions match "${q}".`}
                           </td>
                         </tr>
                       )}
                     </tbody>
                   </table>
                 </div>
+                {filteredScheduledActions.length > 0 && (
+                  <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+                    <span>
+                      Showing {(currentActionsPage - 1) * ACTIONS_PAGE_SIZE + 1}-
+                      {Math.min(
+                        currentActionsPage * ACTIONS_PAGE_SIZE,
+                        filteredScheduledActions.length,
+                      )}{" "}
+                      of {filteredScheduledActions.length}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={currentActionsPage === 1}
+                        onClick={() => setActionsPage((p) => Math.max(1, p - 1))}
+                        aria-label="Previous page"
+                      >
+                        <ChevronLeft className="size-4" />
+                      </Button>
+                      <span>
+                        Page {currentActionsPage} of {totalActionsPages}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={currentActionsPage === totalActionsPages}
+                        onClick={() => setActionsPage((p) => Math.min(totalActionsPages, p + 1))}
+                        aria-label="Next page"
+                      >
+                        <ChevronRight className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </>
