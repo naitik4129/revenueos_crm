@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { fmtDateTime, relDay } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { stepsWithCumulativeDay } from "@/lib/workflow-timeline";
 import { findCurrentStep } from "@/lib/workflow-timeline";
@@ -154,14 +154,20 @@ function StepRow({
   order,
   day,
   actionType,
+  templateName,
   action,
   isNext,
+  estimatedDate,
 }: {
   order: number;
   day: number;
   actionType: string;
+  /** Name of the email/WhatsApp template this step sends, when it's a messaging step with a template set. */
+  templateName?: string | undefined;
   action: ScheduledAction | undefined;
   isNext: boolean;
+  /** Best-effort projected send date/time for a step that hasn't been scheduled yet (no ScheduledAction row). */
+  estimatedDate?: string | undefined;
 }) {
   const ChannelIcon = CHANNEL_ICON[actionType] ?? Bot;
 
@@ -190,7 +196,10 @@ function StepRow({
     icon = <Clock3 className="size-4 text-info" />;
     tone = "border-info/40 bg-info/5";
     statusText = isNext ? "Next up" : "Scheduled";
-    detail = `${relDay(action.scheduledFor)} · ${label(actionType)}`;
+    detail = `${fmtDateTime(action.scheduledFor)} · ${label(actionType)}`;
+  } else if (estimatedDate) {
+    detail = `Day ${day} · Est. ${fmtDateTime(estimatedDate)} · ${label(actionType)}`;
+    if (!isNext) tone = "opacity-60";
   } else if (!isNext) {
     tone = "opacity-60";
   }
@@ -206,6 +215,9 @@ function StepRow({
           Step {order + 1} · {statusText}
         </div>
         <div className="truncate text-xs text-muted-foreground">{detail}</div>
+        {templateName && (
+          <div className="truncate text-xs text-muted-foreground/80">Template: {templateName}</div>
+        )}
       </div>
     </div>
   );
@@ -273,6 +285,22 @@ export function ScheduledFollowupTimeline({
   const currentOrder = findCurrentStep(workflow, displayRun)?.order;
   const actionFor = (stepId: string) =>
     actionsForRun.find((action) => action.workflowStepId === stepId);
+  const templateNameFor = (step: (typeof rows)[number]["step"]) =>
+    (step.action === "send_email" || step.action === "send_whatsapp") && step.templateId
+      ? automationStore.templateName(step.templateId)
+      : undefined;
+
+  // Steps beyond the next one aren't scheduled yet (the backend only creates
+  // a ScheduledAction for the current step), so project their send date from
+  // the next step's real scheduledFor plus the day gap between them — a
+  // rough but useful estimate, clearly labeled "Est." in the row.
+  const currentRow = rows.find((row) => row.step.order === currentOrder);
+  const anchorIso = currentRow ? actionFor(currentRow.step.id)?.scheduledFor : undefined;
+  const anchorDay = currentRow?.day;
+  const estimateFor = (day: number) => {
+    if (!anchorIso || anchorDay === undefined || day < anchorDay) return undefined;
+    return new Date(Date.parse(anchorIso) + (day - anchorDay) * 86_400_000).toISOString();
+  };
 
   // Show the upcoming step and the one right after it, not just "the first
   // two rows" — once earlier steps have already sent, index 0 would be
@@ -299,8 +327,10 @@ export function ScheduledFollowupTimeline({
             order={step.order}
             day={day}
             actionType={step.action}
+            templateName={templateNameFor(step)}
             action={actionFor(step.id)}
             isNext={step.order === currentOrder}
+            estimatedDate={estimateFor(day)}
           />
         ))}
         {rows.length === 0 && (
@@ -329,8 +359,10 @@ export function ScheduledFollowupTimeline({
                 order={step.order}
                 day={day}
                 actionType={step.action}
+                templateName={templateNameFor(step)}
                 action={actionFor(step.id)}
                 isNext={step.order === currentOrder}
+                estimatedDate={estimateFor(day)}
               />
             ))}
           </div>
