@@ -5,6 +5,7 @@
  */
 export const WORKFLOW_TRIGGERS = [
   "lead_created",
+  "meeting_scheduled",
   "meeting_agreed",
   "call_not_connected",
   "call_outcome_interested_later",

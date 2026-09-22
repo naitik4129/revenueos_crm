@@ -146,6 +146,8 @@ export async function scheduleMeeting(db: Queryable, actor: Actor, workspaceId: 
     origin: "manual",
   });
 
+  await autoEnroll(db, workspaceId, input.leadId, "meeting_scheduled", `Meeting scheduled: ${input.title.trim()}`);
+
   return getMeetingOr404(db, workspaceId, id);
 }
 
