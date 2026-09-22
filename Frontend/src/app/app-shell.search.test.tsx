@@ -88,16 +88,30 @@ vi.mock("@/store", () => ({
   }),
 }));
 
+vi.mock("@/store/workspace-context", () => ({
+  useWorkspace: () => ({
+    workspaces: [],
+    currentWorkspaceId: null,
+    currentWorkspace: null,
+    setCurrentWorkspaceId: noop,
+    isLoading: false,
+  }),
+}));
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppShell } from "@/app/app-shell";
 
 afterEach(cleanup);
 
 async function renderShell() {
+  const queryClient = new QueryClient();
   const rootRoute = createRootRoute({
     component: () => (
-      <AppShell>
-        <Outlet />
-      </AppShell>
+      <QueryClientProvider client={queryClient}>
+        <AppShell>
+          <Outlet />
+        </AppShell>
+      </QueryClientProvider>
     ),
   });
   const indexRoute = createRoute({

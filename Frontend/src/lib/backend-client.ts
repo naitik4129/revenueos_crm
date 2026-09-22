@@ -43,6 +43,21 @@ export class BackendError extends Error {
   }
 }
 
+// The currently-selected workspace, set by WorkspaceProvider (see
+// store/workspace-context.tsx) whenever the user's selection changes.
+// Attached as X-Workspace-Id on every CRM request below — every route
+// except /me, /profiles, and /workspaces itself requires it server-side.
+let currentWorkspaceId: string | null = null;
+export function setCurrentWorkspaceId(id: string | null) {
+  currentWorkspaceId = id;
+}
+export function getCurrentWorkspaceId() {
+  return currentWorkspaceId;
+}
+function workspaceHeaders(): Record<string, string> {
+  return currentWorkspaceId ? { "X-Workspace-Id": currentWorkspaceId } : {};
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (configurationError || !backendBaseUrl || !supabase)
     throw new BackendError(
@@ -60,6 +75,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${data.session.access_token}`,
+        ...workspaceHeaders(),
         ...init.headers,
       },
     });
@@ -113,7 +129,7 @@ async function uploadFile<T>(path: string, formData: FormData): Promise<T> {
   try {
     response = await fetch(`${backendBaseUrl}/api/v1${path}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${data.session.access_token}` },
+      headers: { Authorization: `Bearer ${data.session.access_token}`, ...workspaceHeaders() },
       body: formData,
     });
   } catch (error) {
@@ -308,6 +324,15 @@ export interface AdminUser {
   createdAt: string;
 }
 
+export interface Workspace {
+  id: string;
+  name: string;
+  slug: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface EmailConnection {
   provider: "resend" | "smtp" | null;
   enabled: boolean;
@@ -383,8 +408,15 @@ export const backend = {
         input: { name?: string; email?: string; password?: string; active?: boolean },
       ) => send<AdminUser>("PATCH", `/admin/users/${id}`, input),
     },
+  },
+  workspaces: {
+    list: (signal?: AbortSignal) => get<{ data: Workspace[] }>("/workspaces", signal),
+    create: (name: string) => send<Workspace>("POST", "/workspaces", { name }),
+    rename: (id: string, name: string) => send<Workspace>("PATCH", `/workspaces/${id}`, { name }),
+  },
+  connections: {
     email: {
-      get: (signal?: AbortSignal) => get<EmailConnection>("/admin/connections/email", signal),
+      get: (signal?: AbortSignal) => get<EmailConnection>("/connections/email", signal),
       update: (input: {
         provider: "resend" | "smtp";
         enabled: boolean;
@@ -396,37 +428,32 @@ export const backend = {
         smtpSecurity?: "tls" | "starttls";
         smtpUsername?: string;
         smtpPassword?: string;
-      }) => send<EmailConnection>("PUT", "/admin/connections/email", input),
+      }) => send<EmailConnection>("PUT", "/connections/email", input),
       test: (to: string) =>
-        send<{ ok: boolean; providerMessageId: string }>("POST", "/admin/connections/email/test", {
+        send<{ ok: boolean; providerMessageId: string }>("POST", "/connections/email/test", {
           to,
         }),
     },
     whatsapp: {
       get: (signal?: AbortSignal) =>
-        get<WhatsAppConnection>("/admin/connections/whatsapp/settings", signal),
+        get<WhatsAppConnection>("/connections/whatsapp/settings", signal),
       update: (input: { enabled: boolean; dailyCap: number }) =>
-        send<WhatsAppConnection>("PUT", "/admin/connections/whatsapp/settings", input),
+        send<WhatsAppConnection>("PUT", "/connections/whatsapp/settings", input),
       command: (command: "connect" | "restart" | "logout") =>
-        send<WhatsAppConnection>("POST", `/admin/connections/whatsapp/${command}`),
+        send<WhatsAppConnection>("POST", `/connections/whatsapp/${command}`),
     },
     googleCalendar: {
       get: (signal?: AbortSignal) =>
-        get<GoogleCalendarConnection>("/admin/connections/google-calendar", signal),
+        get<GoogleCalendarConnection>("/connections/google-calendar", signal),
       updateCredentials: (input: {
         clientId: string;
         clientSecret?: string;
         redirectUri: string;
       }) =>
-        send<GoogleCalendarConnection>(
-          "PUT",
-          "/admin/connections/google-calendar/credentials",
-          input,
-        ),
-      oauthStart: () =>
-        send<{ url: string }>("POST", "/admin/connections/google-calendar/oauth/start"),
+        send<GoogleCalendarConnection>("PUT", "/connections/google-calendar/credentials", input),
+      oauthStart: () => send<{ url: string }>("POST", "/connections/google-calendar/oauth/start"),
       disconnect: () =>
-        send<GoogleCalendarConnection>("POST", "/admin/connections/google-calendar/disconnect"),
+        send<GoogleCalendarConnection>("POST", "/connections/google-calendar/disconnect"),
     },
   },
   leads: {

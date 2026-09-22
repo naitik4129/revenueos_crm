@@ -3,30 +3,59 @@ import type { Queryable } from "../dto.js";
 /**
  * Aggregates the counts the existing Dashboard UI needs (product brief,
  * "DASHBOARD REQUIREMENTS") — deliberately just these, not a general
- * reporting platform. Reuses the read-only views the migration already
- * defines (lead_next_actions, active_leads_missing_next_action,
- * overdue_tasks, tasks_due_today) rather than re-deriving that logic here.
+ * reporting platform. Every query here is scoped to workspaceId so a
+ * workspace's dashboard never leaks another workspace's numbers.
+ *
+ * Deliberately does NOT select from public.overdue_tasks /
+ * public.active_leads_missing_next_action (the read-only views
+ * 001_initial_migration.sql defines): those views were created with a bare
+ * `select *` / `select l.*` before workspace_id existed on tasks/leads, and
+ * Postgres freezes a view's column list at CREATE VIEW time — a later
+ * `alter table ... add column workspace_id` does NOT propagate into an
+ * already-created view. 015_workspaces.sql never recreates them, so neither
+ * view actually exposes a workspace_id column to filter on. The underlying
+ * table logic is inlined below instead of relying on those views.
  */
-export async function getDashboardSummary(db: Queryable) {
+export async function getDashboardSummary(db: Queryable, workspaceId: string) {
   const [activeLeads, dueToday, overdue, meetingsToday, proposalFollowUps, missingNextAction, automationFailures, funnel] = await Promise.all([
-    db.query<{ count: string }>(`select count(*)::text as count from public.leads where lifecycle_state = 'active'`),
+    db.query<{ count: string }>(`select count(*)::text as count from public.leads where workspace_id = $1 and lifecycle_state = 'active'`, [workspaceId]),
     db.query<{ count: string }>(
       `select count(*)::text as count from public.tasks
-        where status = 'open'
+        where workspace_id = $1
+          and status = 'open'
           and due_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
           and due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`,
+      [workspaceId],
     ),
-    db.query<{ count: string }>(`select count(*)::text as count from public.overdue_tasks`),
+    db.query<{ count: string }>(
+      `select count(*)::text as count from public.tasks where workspace_id = $1 and status = 'open' and due_at < now()`,
+      [workspaceId],
+    ),
     db.query<{ count: string }>(
       `select count(*)::text as count from public.meetings
-        where status not in ('cancelled')
+        where workspace_id = $1
+          and status not in ('cancelled')
           and scheduled_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
           and scheduled_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`,
+      [workspaceId],
     ),
-    db.query<{ count: string }>(`select count(*)::text as count from public.proposals where status in ('sent', 'revision_requested', 'revised')`),
-    db.query<{ count: string }>(`select count(*)::text as count from public.active_leads_missing_next_action`),
-    db.query<{ count: string }>(`select count(*)::text as count from public.workflow_runs where status = 'failed'`),
-    getPipelineFunnel(db),
+    db.query<{ count: string }>(
+      `select count(*)::text as count from public.proposals where workspace_id = $1 and status in ('sent', 'revision_requested', 'revised')`,
+      [workspaceId],
+    ),
+    db.query<{ count: string }>(
+      `select count(*)::text as count
+         from public.leads l
+        where l.workspace_id = $1
+          and l.lifecycle_state = 'active'
+          and not exists (select 1 from public.tasks t where t.lead_id = l.id and t.status = 'open')`,
+      [workspaceId],
+    ),
+    db.query<{ count: string }>(
+      `select count(*)::text as count from public.workflow_runs where workspace_id = $1 and status = 'failed'`,
+      [workspaceId],
+    ),
+    getPipelineFunnel(db, workspaceId),
   ]);
 
   return {
@@ -41,13 +70,28 @@ export async function getDashboardSummary(db: Queryable) {
   };
 }
 
-async function getPipelineFunnel(db: Queryable) {
-  const totalLeads = await db.query<{ count: string }>(`select count(*)::text as count from public.leads`);
-  const called = await db.query<{ count: string }>(`select count(distinct lead_id)::text as count from public.calls`);
-  const connected = await db.query<{ count: string }>(`select count(distinct lead_id)::text as count from public.calls where connected = true`);
-  const meetings = await db.query<{ count: string }>(`select count(distinct lead_id)::text as count from public.meetings`);
-  const proposals = await db.query<{ count: string }>(`select count(distinct lead_id)::text as count from public.proposals`);
-  const won = await db.query<{ count: string }>(`select count(*)::text as count from public.leads where lifecycle_state = 'won'`);
+async function getPipelineFunnel(db: Queryable, workspaceId: string) {
+  const totalLeads = await db.query<{ count: string }>(`select count(*)::text as count from public.leads where workspace_id = $1`, [workspaceId]);
+  const called = await db.query<{ count: string }>(
+    `select count(distinct lead_id)::text as count from public.calls where workspace_id = $1`,
+    [workspaceId],
+  );
+  const connected = await db.query<{ count: string }>(
+    `select count(distinct lead_id)::text as count from public.calls where workspace_id = $1 and connected = true`,
+    [workspaceId],
+  );
+  const meetings = await db.query<{ count: string }>(
+    `select count(distinct lead_id)::text as count from public.meetings where workspace_id = $1`,
+    [workspaceId],
+  );
+  const proposals = await db.query<{ count: string }>(
+    `select count(distinct lead_id)::text as count from public.proposals where workspace_id = $1`,
+    [workspaceId],
+  );
+  const won = await db.query<{ count: string }>(
+    `select count(*)::text as count from public.leads where workspace_id = $1 and lifecycle_state = 'won'`,
+    [workspaceId],
+  );
 
   return [
     { label: "Leads", value: Number(totalLeads.rows[0]?.count ?? 0) },
@@ -59,7 +103,7 @@ async function getPipelineFunnel(db: Queryable) {
   ];
 }
 
-export async function listTodaysQueue(db: Queryable) {
+export async function listTodaysQueue(db: Queryable, workspaceId: string) {
   const result = await db.query<{
     id: string;
     lead_id: string;
@@ -70,10 +114,12 @@ export async function listTodaysQueue(db: Queryable) {
   }>(
     `select id, lead_id, title, task_type, due_at, owner_id
        from public.tasks
-      where status = 'open'
+      where workspace_id = $1
+        and status = 'open'
         and due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'
       order by due_at asc
       limit 10`,
+    [workspaceId],
   );
   return result.rows.map((r) => ({
     id: r.id,

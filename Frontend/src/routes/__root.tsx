@@ -183,7 +183,19 @@ function AuthGate({ children, queryClient }: { children: ReactNode; queryClient:
     if (!adminPath) return <Navigate to="/admin" replace />;
     return <>{children}</>;
   }
-  if (adminPath) return <Navigate to="/" replace />;
+  if (adminPath) {
+    // The Google Calendar OAuth callback (Backend/src/routes/googleCalendarOAuth.routes.ts)
+    // always redirects the browser back to /admin?calendar=connected|error,
+    // since that's this app's one fixed frontend base URL — it doesn't know
+    // which page started the flow. Connections now live at /settings for
+    // salespeople (Admin is user-management only), so forward the landing
+    // query string there instead of dropping it on the floor.
+    if (typeof window !== "undefined" && window.location.search.includes("calendar=")) {
+      window.location.replace(`/settings${window.location.search}`);
+      return null;
+    }
+    return <Navigate to="/" replace />;
+  }
   return (
     <StoreProvider>
       <AppShell>{children}</AppShell>

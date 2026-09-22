@@ -47,11 +47,16 @@ async function sendViaResend(input: SendEmailInput, apiKey: string, senderName: 
   return { providerMessageId: data.id };
 }
 
-export async function sendEmail(input: SendEmailInput, options: { allowDisabled?: boolean } = {}): Promise<SendEmailResult> {
-  const { row, secrets } = await loadEmailConnection();
-  if (!options.allowDisabled && row.provider && !row.enabled) throw new ProviderDeferredError("Email sending is disabled by an administrator.");
+export async function sendEmail(workspaceId: string, input: SendEmailInput, options: { allowDisabled?: boolean } = {}): Promise<SendEmailResult> {
+  const { row, secrets } = await loadEmailConnection(workspaceId);
+  if (!options.allowDisabled && row.provider && !row.enabled) throw new ProviderDeferredError("Email sending is disabled for this workspace.");
 
   if (!row.provider) {
+    // Legacy env-var fallback: process-wide, not per-workspace, kept only
+    // until a workspace saves its own database email config (see
+    // context.md's "Production Rollout Notes" — matches the original
+    // single-tenant fallback behavior for whichever workspace hasn't
+    // configured email yet).
     const apiKey = process.env.RESEND_API_KEY;
     const senderAddress = process.env.SMTP_FROM_ADDRESS;
     const senderName = process.env.SMTP_FROM_NAME ?? "MOTM Technologies";

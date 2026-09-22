@@ -57,8 +57,8 @@ function callToDto(row: CallRow) {
  * lead state, task, and workflow enrollment either all land or none do
  * (Rule 16).
  */
-export async function logCall(db: Queryable, actor: Actor, leadId: string, input: LogCallInput) {
-  const lead = await getLeadRowOr404(db, leadId);
+export async function logCall(db: Queryable, actor: Actor, workspaceId: string, leadId: string, input: LogCallInput) {
+  const lead = await getLeadRowOr404(db, workspaceId, leadId);
   if (lead.lifecycle_state === "do_not_contact") {
     throw new DoNotContactError("This lead is Do Not Contact - no further contact can be logged.");
   }
@@ -78,10 +78,11 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
 
   const callResult = await db.query<CallRow>(
     `insert into public.calls
-      (lead_id, salesperson_id, salesperson_name, connected, not_connected_reason, connected_outcome, notes, callback_due_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8)
+      (workspace_id, lead_id, salesperson_id, salesperson_name, connected, not_connected_reason, connected_outcome, notes, callback_due_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      returning *`,
     [
+      workspaceId,
       leadId,
       actor.id,
       actor.fullName,
@@ -105,22 +106,22 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
 
   if (input.taskId) {
     const taskResult = await db.query<{ id: string; lead_id: string; task_type: string; status: string }>(
-      `select id, lead_id, task_type, status from public.tasks where id = $1`,
-      [input.taskId],
+      `select id, lead_id, task_type, status from public.tasks where id = $1 and workspace_id = $2`,
+      [input.taskId, workspaceId],
     );
     const task = taskResult.rows[0];
     if (!task) throw new NotFoundError("Task");
     if (task.lead_id !== leadId) throw new ValidationError("Task does not belong to this lead.");
     if (task.task_type !== "call") throw new ValidationError("Only a call task can be completed by logging a call.");
     if (task.status !== "open") throw new ValidationError("This task is no longer open.");
-    await completeTask(db, actor, input.taskId);
+    await completeTask(db, actor, workspaceId, input.taskId);
   }
 
   // Do Not Contact overrides everything else — shares the same path as the
   // lead-level DNC endpoint (Rule 6).
   if (input.connected && input.connectedOutcome === "do_not_contact") {
-    await markDnc(db, actor, leadId, { reason: input.notes?.trim() || "Requested on call" });
-    return { call: callToDto(call), lead: await getLeadRowOr404(db, leadId), workflowTrigger: undefined, promptScheduleMeeting: false };
+    await markDnc(db, actor, workspaceId, leadId, { reason: input.notes?.trim() || "Requested on call" });
+    return { call: callToDto(call), lead: await getLeadRowOr404(db, workspaceId, leadId), workflowTrigger: undefined, promptScheduleMeeting: false };
   }
 
   const routing = input.connected
@@ -131,7 +132,7 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
     : routeNotConnected(input.notConnectedReason!);
 
   if (routing.phoneContactStatus) {
-    await setContactability(db, actor, leadId, { channel: "phone", status: routing.phoneContactStatus, reason: `Call outcome: ${input.notConnectedReason}` });
+    await setContactability(db, actor, workspaceId, leadId, { channel: "phone", status: routing.phoneContactStatus, reason: `Call outcome: ${input.notConnectedReason}` });
   }
 
   // stage and objectionType (and, for interested_later, the capture fields)
@@ -139,7 +140,7 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
   // requires objection_type whenever pipeline_stage = 'objection_nurture',
   // and that constraint is checked against the row as written, not per-column.
   if (routing.stage || routing.objectionType) {
-    await updateLead(db, actor, leadId, {
+    await updateLead(db, actor, workspaceId, leadId, {
       ...(routing.stage ? { pipelineStage: routing.stage } : {}),
       ...(routing.objectionType ? { objectionType: routing.objectionType } : {}),
       ...(input.connectedOutcome === "interested_later" && input.interestedLater
@@ -153,7 +154,7 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
     });
   }
   if (routing.automation) {
-    await setAutomationMode(db, actor, leadId, routing.automation, `Call outcome: ${input.connected ? input.connectedOutcome : "Not Connected"}`);
+    await setAutomationMode(db, actor, workspaceId, leadId, routing.automation, `Call outcome: ${input.connected ? input.connectedOutcome : "Not Connected"}`);
   }
 
   if (routing.task) {
@@ -161,7 +162,7 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
       input.connectedOutcome === "callback_requested" && input.callbackDueAt
         ? input.callbackDueAt
         : addDaysIso(routing.task.dueInDays ?? 1);
-    await createTask(db, actor, {
+    await createTask(db, actor, workspaceId, {
       leadId,
       ownerId: lead.owner_id,
       type: routing.task.type,
@@ -187,13 +188,16 @@ export async function logCall(db: Queryable, actor: Actor, leadId: string, input
   // always prompts a choice).
   return {
     call: callToDto(call),
-    lead: await getLeadRowOr404(db, leadId),
+    lead: await getLeadRowOr404(db, workspaceId, leadId),
     workflowTrigger: routing.workflowTrigger,
     promptScheduleMeeting: routing.promptScheduleMeeting,
   };
 }
 
-export async function listCallsForLead(db: Queryable, leadId: string) {
-  const result = await db.query<CallRow>(`select * from public.calls where lead_id = $1 order by created_at desc`, [leadId]);
+export async function listCallsForLead(db: Queryable, workspaceId: string, leadId: string) {
+  const result = await db.query<CallRow>(
+    `select * from public.calls where workspace_id = $1 and lead_id = $2 order by created_at desc`,
+    [workspaceId, leadId],
+  );
   return result.rows.map(callToDto);
 }

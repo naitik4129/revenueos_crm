@@ -21,6 +21,7 @@ const INTERNAL_ACTION_TYPES: WorkflowStepAction[] = ["create_call_task", "create
 
 interface ScheduledActionRow {
   id: string;
+  workspace_id: string;
   lead_id: string;
   workflow_run_id: string;
   workflow_step_id: string;
@@ -104,6 +105,7 @@ function computeEligibility(
 }
 
 export interface ActionContext {
+  workspaceId: string;
   action: {
     id: string;
     actionType: WorkflowStepAction;
@@ -145,8 +147,8 @@ export interface ActionContext {
 }
 
 async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<ActionContext> {
-  const run = await getRunRowOr404(db, action.workflow_run_id);
-  const leadRow = await getLeadRowOr404(db, action.lead_id);
+  const run = await getRunRowOr404(db, action.workspace_id, action.workflow_run_id);
+  const leadRow = await getLeadRowOr404(db, action.workspace_id, action.lead_id);
   const lead = leadRow as LeadRow & { owner_name: string | null };
 
   const stepResult = await db.query<StepRow>(
@@ -195,6 +197,7 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
   const eligibility = computeEligibility(action, lead, run, template, contactStatus);
 
   return {
+    workspaceId: action.workspace_id,
     action: {
       id: action.id,
       actionType: action.action_type,
@@ -277,7 +280,7 @@ export async function skipAction(db: Queryable, actionId: string, reason: string
   if (action.status !== "executing") {
     throw new ConflictError(`Scheduled action is "${action.status}", expected "executing".`);
   }
-  const run = await getRunRowOr404(db, action.workflow_run_id);
+  const run = await getRunRowOr404(db, action.workspace_id, action.workflow_run_id);
   if (run.status === "paused") {
     await db.query(`update public.scheduled_actions set status = 'paused', last_error = $2 where id = $1`, [actionId, reason]);
     await addTimelineEvent(db, {
@@ -327,7 +330,7 @@ async function advanceRun(db: Queryable, run: RunRow) {
     afterOrder = stepResult.rows[0]?.step_order ?? -1;
   }
 
-  const result = await scheduleStepAfter(db, run.id, run.lead_id, run.workflow_version_id, afterOrder);
+  const result = await scheduleStepAfter(db, run.workspace_id, run.id, run.lead_id, run.workflow_version_id, afterOrder);
 
   if (result.stepFound) {
     await db.query(
@@ -343,7 +346,7 @@ async function advanceRun(db: Queryable, run: RunRow) {
     await addTimelineEvent(db, { leadId: run.lead_id, kind: "automation", title: "Workflow Completed", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
   }
 
-  return getRunRowOr404(db, run.id);
+  return getRunRowOr404(db, run.workspace_id, run.id);
 }
 
 /**
@@ -363,21 +366,21 @@ export async function executeInternalAction(db: Queryable, actionId: string) {
     throw new ConflictError(`Scheduled action is "${action.status}", expected "executing". It may already have been processed.`);
   }
 
-  const run = await getRunRowOr404(db, action.workflow_run_id);
-  const leadRow = await getLeadRowOr404(db, action.lead_id);
+  const run = await getRunRowOr404(db, action.workspace_id, action.workflow_run_id);
+  const leadRow = await getLeadRowOr404(db, action.workspace_id, action.lead_id);
   const lead = leadRow as LeadRow & { owner_name: string | null };
 
   if (lead.lifecycle_state !== "active" || !["running", "waiting"].includes(run.status)) {
     const reason = `Lead/run no longer eligible at execution time (lifecycle=${lead.lifecycle_state}, run=${run.status}).`;
     const context = await skipAction(db, actionId, reason);
-    return { action: context.action, run: await getRunRowOr404(db, run.id), skipped: true };
+    return { action: context.action, run: await getRunRowOr404(db, action.workspace_id, run.id), skipped: true };
   }
 
   const config = ((action.payload as { config?: string | null }).config ?? null)?.trim() || null;
 
   if (action.action_type === "create_call_task" || action.action_type === "create_follow_up_task") {
     const taskType: TaskType = action.action_type === "create_call_task" ? "call" : "follow_up";
-    await createTask(db, null, {
+    await createTask(db, null, action.workspace_id, {
       leadId: lead.id,
       ownerId: lead.owner_id,
       ownerName: lead.owner_name,
@@ -407,7 +410,7 @@ export async function executeInternalAction(db: Queryable, actionId: string) {
 
   await db.query(`update public.scheduled_actions set status = 'completed', executed_at = now() where id = $1`, [actionId]);
 
-  let finalRun = await getRunRowOr404(db, run.id);
+  let finalRun = await getRunRowOr404(db, action.workspace_id, run.id);
   if (action.action_type !== "stop_workflow" && !["completed", "cancelled", "failed"].includes(finalRun.status)) {
     finalRun = await advanceRun(db, finalRun);
   }
@@ -439,7 +442,7 @@ export async function recordActionResult(db: Queryable, actionId: string, input:
     throw new ConflictError(`"${action.action_type}" must report success via POST /automation/actions/:id/execute-internal, not /result.`);
   }
 
-  const run = await getRunRowOr404(db, action.workflow_run_id);
+  const run = await getRunRowOr404(db, action.workspace_id, action.workflow_run_id);
 
   if (input.outcome === "deferred") {
     await deferAction(db, actionId, input.error ?? "Provider is temporarily unavailable.", input.retryAt ?? new Date(Date.now() + 60_000));
@@ -497,6 +500,6 @@ export async function recordActionResult(db: Queryable, actionId: string, input:
     ...AUTOMATION_ACTOR,
     relatedWorkflowRunId: run.id,
   });
-  return { action: (await getActionContext(db, actionId)).action, run: await getRunRowOr404(db, run.id) };
+  return { action: (await getActionContext(db, actionId)).action, run: await getRunRowOr404(db, action.workspace_id, run.id) };
 }
 

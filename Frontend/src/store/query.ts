@@ -1,41 +1,50 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { BackendError } from "@/lib/backend-client";
 
+// Workspace-scoped keys take the current workspace id as their first
+// argument and fold it into the key so TanStack Query's cache naturally
+// separates data per workspace — switching workspaces changes the key,
+// which triggers a fresh fetch instead of momentarily showing the previous
+// workspace's cached data. `session`/`profiles`/`workspaces` are
+// workspace-agnostic (you need them before a workspace is even selected) and
+// stay plain keys.
 export const keys = {
   session: ["session"] as const,
   profiles: ["profiles"] as const,
-  leads: ["leads"] as const,
-  lead: (id: string) => ["lead", id] as const,
-  notes: (id: string) => ["notes", id] as const,
-  contactability: (id: string) => ["contactability", id] as const,
-  calls: (id: string) => ["calls", id] as const,
-  timeline: (id: string) => ["timeline", id] as const,
-  tasks: ["tasks"] as const,
-  meetings: ["meetings"] as const,
-  proposals: ["proposals"] as const,
-  workflows: ["workflows"] as const,
-  templates: ["templates"] as const,
-  runs: ["runs"] as const,
-  scheduledActions: ["scheduledActions"] as const,
-  dashboard: ["dashboard"] as const,
-  notifications: ["notifications"] as const,
+  workspaces: ["workspaces"] as const,
+  leads: (workspaceId: string | null) => ["leads", workspaceId] as const,
+  lead: (workspaceId: string | null, id: string) => ["lead", workspaceId, id] as const,
+  notes: (workspaceId: string | null, id: string) => ["notes", workspaceId, id] as const,
+  contactability: (workspaceId: string | null, id: string) =>
+    ["contactability", workspaceId, id] as const,
+  calls: (workspaceId: string | null, id: string) => ["calls", workspaceId, id] as const,
+  timeline: (workspaceId: string | null, id: string) => ["timeline", workspaceId, id] as const,
+  tasks: (workspaceId: string | null) => ["tasks", workspaceId] as const,
+  meetings: (workspaceId: string | null) => ["meetings", workspaceId] as const,
+  proposals: (workspaceId: string | null) => ["proposals", workspaceId] as const,
+  workflows: (workspaceId: string | null) => ["workflows", workspaceId] as const,
+  templates: (workspaceId: string | null) => ["templates", workspaceId] as const,
+  runs: (workspaceId: string | null) => ["runs", workspaceId] as const,
+  scheduledActions: (workspaceId: string | null) => ["scheduledActions", workspaceId] as const,
+  dashboard: (workspaceId: string | null) => ["dashboard", workspaceId] as const,
+  notifications: (workspaceId: string | null) => ["notifications", workspaceId] as const,
 };
 
-export function refreshLead(client: QueryClient, leadId: string) {
+export function refreshLead(client: QueryClient, workspaceId: string | null, leadId: string) {
   const targets = [
-    keys.leads,
-    keys.lead(leadId),
-    keys.notes(leadId),
-    keys.contactability(leadId),
-    keys.calls(leadId),
-    keys.timeline(leadId),
-    keys.tasks,
-    keys.meetings,
-    keys.proposals,
-    keys.runs,
-    keys.scheduledActions,
-    keys.notifications,
-    keys.dashboard,
+    keys.leads(workspaceId),
+    keys.lead(workspaceId, leadId),
+    keys.notes(workspaceId, leadId),
+    keys.contactability(workspaceId, leadId),
+    keys.calls(workspaceId, leadId),
+    keys.timeline(workspaceId, leadId),
+    keys.tasks(workspaceId),
+    keys.meetings(workspaceId),
+    keys.proposals(workspaceId),
+    keys.runs(workspaceId),
+    keys.scheduledActions(workspaceId),
+    keys.notifications(workspaceId),
+    keys.dashboard(workspaceId),
   ];
   return Promise.all(targets.map((queryKey) => client.invalidateQueries({ queryKey })));
 }

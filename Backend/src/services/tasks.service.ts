@@ -63,10 +63,16 @@ export interface CreateTaskInput {
  * the next-action mechanism (see migration SECTION 8) — there is no
  * separate "next action" write; callers that also want to log a
  * lead-level activity note for a stage/automation change do so themselves.
+ *
+ * Verifies input.leadId belongs to workspaceId before inserting (tasks has
+ * no direct FK enforcement of that relationship) — this is the one place a
+ * task's workspace is decided, so every task always carries its parent
+ * lead's workspace_id.
  */
 export async function createTask(
   db: Queryable,
   actor: Actor | null,
+  workspaceId: string,
   input: CreateTaskInput,
 ): Promise<TaskRow> {
   if (!input.title.trim()) throw new ValidationError("Task title is required.");
@@ -75,13 +81,17 @@ export async function createTask(
     throw new ValidationError("Automation-originated tasks require sourceWorkflowRunId.");
   }
 
+  const lead = await db.query<{ id: string }>(`select id from public.leads where id = $1 and workspace_id = $2`, [input.leadId, workspaceId]);
+  if (!lead.rows[0]) throw new NotFoundError("Lead");
+
   const result = await db.query<TaskRow>(
     `insert into public.tasks
-      (lead_id, owner_id, owner_name, task_type, title, due_at, origin,
+      (workspace_id, lead_id, owner_id, owner_name, task_type, title, due_at, origin,
        source_workflow_run_id, source_workflow_step_id, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      returning *`,
     [
+      workspaceId,
       input.leadId,
       input.ownerId ?? null,
       input.ownerName ?? null,
@@ -112,8 +122,8 @@ export async function createTask(
   return task;
 }
 
-async function getTaskOr404(db: Queryable, id: string): Promise<TaskRow> {
-  const result = await db.query<TaskRow>(`select * from public.tasks where id = $1`, [id]);
+async function getTaskOr404(db: Queryable, workspaceId: string, id: string): Promise<TaskRow> {
+  const result = await db.query<TaskRow>(`select * from public.tasks where id = $1 and workspace_id = $2`, [id, workspaceId]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Task");
   return row;
@@ -126,8 +136,8 @@ export interface UpdateTaskInput {
   dueAt?: string;
 }
 
-export async function updateTask(db: Queryable, actor: Actor, id: string, patch: UpdateTaskInput) {
-  const current = await getTaskOr404(db, id);
+export async function updateTask(db: Queryable, actor: Actor, workspaceId: string, id: string, patch: UpdateTaskInput) {
+  const current = await getTaskOr404(db, workspaceId, id);
   if (current.status !== "open") throw new ConflictError("Only an open task can be edited.");
   if (patch.title !== undefined && !patch.title.trim()) throw new ValidationError("Task title is required.");
 
@@ -148,8 +158,8 @@ export async function updateTask(db: Queryable, actor: Actor, id: string, patch:
   return taskToDto(task);
 }
 
-export async function completeTask(db: Queryable, actor: Actor, id: string): Promise<TaskRow> {
-  const existing = await getTaskOr404(db, id);
+export async function completeTask(db: Queryable, actor: Actor, workspaceId: string, id: string): Promise<TaskRow> {
+  const existing = await getTaskOr404(db, workspaceId, id);
   if (existing.status !== "open") return existing;
 
   const result = await db.query<TaskRow>(
@@ -171,10 +181,11 @@ export async function completeTask(db: Queryable, actor: Actor, id: string): Pro
 export async function cancelTask(
   db: Queryable,
   actor: Actor | null,
+  workspaceId: string,
   id: string,
   reason?: string,
 ): Promise<TaskRow> {
-  const existing = await getTaskOr404(db, id);
+  const existing = await getTaskOr404(db, workspaceId, id);
   if (existing.status !== "open") return existing;
 
   const result = await db.query<TaskRow>(
@@ -199,7 +210,13 @@ export async function cancelTask(
   return task;
 }
 
-/** Cancels every currently-open task for a lead — used on terminal lifecycle transitions. */
+/**
+ * Cancels every currently-open task for a lead — used on terminal lifecycle
+ * transitions. Takes leadId only (no workspaceId): every caller already
+ * validated the lead's workspace via getLeadRowOr404 (or equivalent)
+ * immediately before calling this, and `lead_id` is a UUID never reused
+ * across workspaces, so no additional check is needed here.
+ */
 export async function cancelOpenTasksForLead(
   db: Queryable,
   actor: Actor | null,
@@ -243,10 +260,10 @@ export interface ListTasksFilters {
   dueTodayOnly?: boolean;
 }
 
-export async function listTasks(db: Queryable, filters: ListTasksFilters) {
-  const clauses: string[] = [];
-  const params: unknown[] = [];
-  let i = 1;
+export async function listTasks(db: Queryable, workspaceId: string, filters: ListTasksFilters) {
+  const clauses: string[] = [`workspace_id = $1`];
+  const params: unknown[] = [workspaceId];
+  let i = 2;
 
   if (filters.ownerId) {
     clauses.push(`owner_id = $${i++}`);
@@ -273,7 +290,7 @@ export async function listTasks(db: Queryable, filters: ListTasksFilters) {
       and due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`);
   }
 
-  const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
+  const where = `where ${clauses.join(" and ")}`;
   const result = await db.query<TaskRow>(
     `select * from public.tasks ${where} order by due_at asc`,
     params,
@@ -281,6 +298,11 @@ export async function listTasks(db: Queryable, filters: ListTasksFilters) {
   return result.rows.map(taskToDto);
 }
 
+/**
+ * Takes leadId only (no workspaceId) for the same reason as
+ * cancelOpenTasksForLead above: every caller already has a workspace-
+ * validated lead in hand before asking for its next action.
+ */
 export async function getLeadNextAction(db: Queryable, leadId: string) {
   const result = await db.query<{
     task_id: string;

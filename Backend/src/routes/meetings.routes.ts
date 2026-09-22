@@ -22,7 +22,7 @@ meetingsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const filters = parseQuery(listQuerySchema, req.query);
-    res.json({ data: await listMeetings(pool, filters) });
+    res.json({ data: await listMeetings(pool, req.workspaceId!, filters) });
   }),
 );
 
@@ -45,14 +45,14 @@ meetingsRouter.post(
   "/",
   asyncHandler(async (req, res) => {
     const input = parseBody(createSchema, req.body);
-    const meeting = await withTransaction((client) => scheduleMeeting(client, req.actor!, input));
+    const meeting = await withTransaction((client) => scheduleMeeting(client, req.actor!, req.workspaceId!, input));
     // Best-effort, outside the transaction — Calendar being disconnected or
     // erroring must not roll back or block the meeting that's already saved.
     await syncMeetingCreated(meeting.id);
     // Also best-effort: sends the email inline and queues WhatsApp for the
     // worker; a notification failure must not undo the booking either.
     await notifyMeetingScheduled(meeting.id);
-    res.status(201).json(await getMeetingOr404(pool, meeting.id));
+    res.status(201).json(await getMeetingOr404(pool, req.workspaceId!, meeting.id));
   }),
 );
 
@@ -69,14 +69,14 @@ meetingsRouter.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const patch = parseBody(updateSchema, req.body);
-    const meeting = await withTransaction((client) => updateMeeting(client, req.actor!, req.params.id!, patch));
+    const meeting = await withTransaction((client) => updateMeeting(client, req.actor!, req.workspaceId!, req.params.id!, patch));
     // Same best-effort, non-transactional sync split as the create route.
     if (patch.status === "cancelled") {
       await syncMeetingCancelled(meeting.id);
     } else if (patch.at !== undefined || patch.title !== undefined || patch.durationMin !== undefined) {
       await syncMeetingRescheduled(meeting.id);
     }
-    res.json(await getMeetingOr404(pool, meeting.id));
+    res.json(await getMeetingOr404(pool, req.workspaceId!, meeting.id));
   }),
 );
 
@@ -86,7 +86,7 @@ meetingsRouter.post(
   "/:id/outcome",
   asyncHandler(async (req, res) => {
     const { outcome, notes } = parseBody(outcomeSchema, req.body);
-    const meeting = await withTransaction((client) => recordMeetingOutcome(client, req.actor!, req.params.id!, outcome, notes));
+    const meeting = await withTransaction((client) => recordMeetingOutcome(client, req.actor!, req.workspaceId!, req.params.id!, outcome, notes));
     res.json(meeting);
   }),
 );

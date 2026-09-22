@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { pool } from "./db.js";
 import { supabaseAdmin } from "./supabaseAdmin.js";
-import { AuthenticationError, ForbiddenError } from "./errors.js";
+import { AuthenticationError, ForbiddenError, NotFoundError } from "./errors.js";
 import { asyncHandler } from "./asyncHandler.js";
 
 /** The authenticated CRM actor (salesperson) for the lifetime of one request. */
@@ -16,6 +16,7 @@ export interface Actor {
 declare module "express-serve-static-core" {
   interface Request {
     actor?: Actor;
+    workspaceId?: string;
   }
 }
 
@@ -90,3 +91,28 @@ export function requireSalesperson(req: Request, _res: Response, next: NextFunct
   }
   next();
 }
+
+/**
+ * Resolves the workspace a CRM request is operating in from the
+ * `X-Workspace-Id` header the frontend attaches to every request (see
+ * Frontend/src/lib/backend-client.ts). Any active salesperson may address
+ * any active workspace — there is no per-user workspace membership (see the
+ * multi-workspace architecture plan) — so this only validates that the
+ * header names a real, active workspace; it is not an authorization check
+ * beyond that. Must run after requireAuth + requireSalesperson.
+ */
+export const requireWorkspace = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  const header = req.header("x-workspace-id");
+  if (!header) {
+    throw new NotFoundError("Workspace");
+  }
+  const result = await pool.query<{ id: string }>(
+    `select id from public.workspaces where id = $1 and is_active = true`,
+    [header],
+  );
+  if (!result.rows[0]) {
+    throw new NotFoundError("Workspace");
+  }
+  req.workspaceId = result.rows[0].id;
+  next();
+});

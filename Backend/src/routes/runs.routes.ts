@@ -22,7 +22,7 @@ runsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const filters = parseQuery(listQuerySchema, req.query);
-    res.json({ data: await runsService.listRuns(pool, filters) });
+    res.json({ data: await runsService.listRuns(pool, req.workspaceId!, filters) });
   }),
 );
 
@@ -41,7 +41,7 @@ runsRouter.post(
     const enrolledReason = reason ?? "Manually enrolled";
 
     if (workflowId) {
-      const run = await withTransaction((client) => enrollLeadInWorkflow(client, leadId, workflowId, enrolledReason));
+      const run = await withTransaction((client) => enrollLeadInWorkflow(client, req.workspaceId!, leadId, workflowId, enrolledReason));
       if (!run) {
         throw new ValidationError("This lead already has an active run for that workflow.");
       }
@@ -49,7 +49,7 @@ runsRouter.post(
       return;
     }
 
-    const created = await withTransaction((client) => autoEnroll(client, leadId, "manual_enrollment", enrolledReason));
+    const created = await withTransaction((client) => autoEnroll(client, req.workspaceId!, leadId, "manual_enrollment", enrolledReason));
     if (created.length === 0) {
       throw new ValidationError("No active published workflow with trigger 'manual_enrollment' is available to enroll this lead in.");
     }
@@ -63,14 +63,14 @@ runsRouter.post(
   "/:id/pause",
   asyncHandler(async (req, res) => {
     const { reason } = parseBody(reasonSchema, req.body ?? {});
-    res.json(await withTransaction((client) => runsService.pauseRun(client, req.actor!, req.params.id!, reason)));
+    res.json(await withTransaction((client) => runsService.pauseRun(client, req.actor!, req.workspaceId!, req.params.id!, reason)));
   }),
 );
 
 runsRouter.post(
   "/:id/resume",
   asyncHandler(async (req, res) => {
-    res.json(await withTransaction((client) => runsService.resumeRun(client, req.actor!, req.params.id!)));
+    res.json(await withTransaction((client) => runsService.resumeRun(client, req.actor!, req.workspaceId!, req.params.id!)));
   }),
 );
 
@@ -78,14 +78,14 @@ runsRouter.post(
   "/:id/cancel",
   asyncHandler(async (req, res) => {
     const { reason } = parseBody(reasonSchema, req.body ?? {});
-    res.json(await withTransaction((client) => runsService.cancelRun(client, req.actor!, req.params.id!, reason)));
+    res.json(await withTransaction((client) => runsService.cancelRun(client, req.actor!, req.workspaceId!, req.params.id!, reason)));
   }),
 );
 
 runsRouter.post(
   "/:id/retry",
   asyncHandler(async (req, res) => {
-    res.json(await withTransaction((client) => runsService.retryRun(client, req.actor!, req.params.id!)));
+    res.json(await withTransaction((client) => runsService.retryRun(client, req.actor!, req.workspaceId!, req.params.id!)));
   }),
 );
 
@@ -104,6 +104,6 @@ scheduledActionsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const filters = parseQuery(scheduledQuerySchema, req.query);
-    res.json({ data: await runsService.listScheduledActions(pool, filters) });
+    res.json({ data: await runsService.listScheduledActions(pool, req.workspaceId!, filters) });
   }),
 );

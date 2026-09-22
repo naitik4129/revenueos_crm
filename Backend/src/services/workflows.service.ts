@@ -18,6 +18,7 @@ function sanitizeFileName(name: string): string {
 
 export interface WorkflowRow {
   id: string;
+  workspace_id: string;
   name: string;
   description: string | null;
   trigger: WorkflowTrigger;
@@ -117,33 +118,33 @@ async function workflowToDto(db: Queryable, row: WorkflowRow) {
   };
 }
 
-export async function getWorkflowRowOr404(db: Queryable, id: string): Promise<WorkflowRow> {
-  const result = await db.query<WorkflowRow>(`select * from public.workflows where id = $1`, [id]);
+export async function getWorkflowRowOr404(db: Queryable, workspaceId: string, id: string): Promise<WorkflowRow> {
+  const result = await db.query<WorkflowRow>(`select * from public.workflows where id = $1 and workspace_id = $2`, [id, workspaceId]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Workflow");
   return row;
 }
 
-export async function listWorkflows(db: Queryable) {
-  const result = await db.query<WorkflowRow>(`select * from public.workflows order by updated_at desc`);
+export async function listWorkflows(db: Queryable, workspaceId: string) {
+  const result = await db.query<WorkflowRow>(`select * from public.workflows where workspace_id = $1 order by updated_at desc`, [workspaceId]);
   const out = [];
   for (const row of result.rows) out.push(await workflowToDto(db, row));
   return out;
 }
 
-export async function getWorkflow(db: Queryable, id: string) {
-  const row = await getWorkflowRowOr404(db, id);
+export async function getWorkflow(db: Queryable, workspaceId: string, id: string) {
+  const row = await getWorkflowRowOr404(db, workspaceId, id);
   return workflowToDto(db, row);
 }
 
-/** Finds this trigger's currently-active workflows with a published version — used by runs.service for auto-enrollment. */
-export async function findActiveWorkflowsForTrigger(db: Queryable, trigger: WorkflowTrigger) {
+/** Finds this trigger's currently-active workflows with a published version, scoped to one workspace — used by runs.service for auto-enrollment (a lead is only ever eligible for its own workspace's workflows). */
+export async function findActiveWorkflowsForTrigger(db: Queryable, workspaceId: string, trigger: WorkflowTrigger) {
   const result = await db.query<{ workflow_id: string; version_id: string; version_number: number }>(
     `select w.id as workflow_id, wv.id as version_id, wv.version_number
        from public.workflows w
        join public.workflow_versions wv on wv.workflow_id = w.id and wv.status = 'published'
-      where w.trigger = $1 and w.status = 'active'`,
-    [trigger],
+      where w.workspace_id = $1 and w.trigger = $2 and w.status = 'active'`,
+    [workspaceId, trigger],
   );
   return result.rows;
 }
@@ -155,12 +156,12 @@ export interface CreateWorkflowInput {
   ownerId?: string;
 }
 
-export async function createWorkflow(db: Queryable, actor: Actor, input: CreateWorkflowInput) {
+export async function createWorkflow(db: Queryable, actor: Actor, workspaceId: string, input: CreateWorkflowInput) {
   if (!input.name.trim()) throw new ValidationError("Workflow name is required.");
   const result = await db.query<{ id: string }>(
-    `insert into public.workflows (name, description, trigger, status, owner_id, created_by, created_by_name)
-     values ($1,$2,$3,'paused',$4,$5,$6) returning id`,
-    [input.name.trim(), input.description?.trim() ?? null, input.trigger, input.ownerId ?? actor.id, actor.id, actor.fullName],
+    `insert into public.workflows (workspace_id, name, description, trigger, status, owner_id, created_by, created_by_name)
+     values ($1,$2,$3,$4,'paused',$5,$6,$7) returning id`,
+    [workspaceId, input.name.trim(), input.description?.trim() ?? null, input.trigger, input.ownerId ?? actor.id, actor.id, actor.fullName],
   );
   const id = result.rows[0]!.id;
 
@@ -170,11 +171,11 @@ export async function createWorkflow(db: Queryable, actor: Actor, input: CreateW
     [id, actor.id, actor.fullName],
   );
 
-  return getWorkflow(db, id);
+  return getWorkflow(db, workspaceId, id);
 }
 
-export async function updateWorkflow(db: Queryable, id: string, patch: { name?: string; description?: string; status?: WorkflowStatus; ownerId?: string; trigger?: WorkflowTrigger }) {
-  await getWorkflowRowOr404(db, id);
+export async function updateWorkflow(db: Queryable, workspaceId: string, id: string, patch: { name?: string; description?: string; status?: WorkflowStatus; ownerId?: string; trigger?: WorkflowTrigger }) {
+  await getWorkflowRowOr404(db, workspaceId, id);
   const sets: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -204,18 +205,18 @@ export async function updateWorkflow(db: Queryable, id: string, patch: { name?: 
     params.push(id);
     await db.query(`update public.workflows set ${sets.join(", ")} where id = $${i}`, params);
   }
-  return getWorkflow(db, id);
+  return getWorkflow(db, workspaceId, id);
 }
 
 /** Idempotent: returns the existing draft if one exists, otherwise clones the published version's steps. */
-export async function createDraft(db: Queryable, actor: Actor, workflowId: string) {
-  await getWorkflowRowOr404(db, workflowId);
+export async function createDraft(db: Queryable, actor: Actor, workspaceId: string, workflowId: string) {
+  await getWorkflowRowOr404(db, workspaceId, workflowId);
   const versions = await db.query<WorkflowVersionRow>(
     `select * from public.workflow_versions where workflow_id = $1 order by version_number desc`,
     [workflowId],
   );
   const existingDraft = versions.rows.find((v) => v.status === "draft");
-  if (existingDraft) return getWorkflow(db, workflowId);
+  if (existingDraft) return getWorkflow(db, workspaceId, workflowId);
 
   const published = versions.rows.find((v) => v.status === "published");
   const nextNumber = (versions.rows[0]?.version_number ?? 0) + 1;
@@ -238,7 +239,7 @@ export async function createDraft(db: Queryable, actor: Actor, workflowId: strin
     }
   }
 
-  return getWorkflow(db, workflowId);
+  return getWorkflow(db, workspaceId, workflowId);
 }
 
 export interface StepInput {
@@ -264,7 +265,8 @@ export interface StepInput {
  * version row first forces a second overlapping call to wait for the first to
  * fully commit, so its delete+insert always runs against the true latest state.
  */
-export async function updateDraftSteps(db: Queryable, workflowId: string, version: number, steps: StepInput[]) {
+export async function updateDraftSteps(db: Queryable, workspaceId: string, workflowId: string, version: number, steps: StepInput[]) {
+  await getWorkflowRowOr404(db, workspaceId, workflowId);
   const versionRow = await db.query<WorkflowVersionRow>(
     `select * from public.workflow_versions where workflow_id = $1 and version_number = $2 for update`,
     [workflowId, version],
@@ -273,6 +275,17 @@ export async function updateDraftSteps(db: Queryable, workflowId: string, versio
   if (!v) throw new NotFoundError("Workflow version");
   if (v.status !== "draft") {
     throw new InvalidTransitionError(`Version ${version} is "${v.status}" - only a Draft version's steps can be edited.`);
+  }
+
+  const templateIds = [...new Set(steps.flatMap((s) => (s.templateId ? [s.templateId] : [])))];
+  if (templateIds.length > 0) {
+    const owned = await db.query<{ id: string }>(
+      `select id from public.message_templates where id = any($1::uuid[]) and workspace_id = $2`,
+      [templateIds, workspaceId],
+    );
+    if (owned.rows.length !== templateIds.length) {
+      throw new ValidationError("One or more templates do not belong to this workspace.");
+    }
   }
 
   await db.query(`delete from public.workflow_steps where workflow_version_id = $1`, [v.id]);
@@ -289,7 +302,7 @@ export async function updateDraftSteps(db: Queryable, workflowId: string, versio
     order++;
   }
 
-  return getWorkflow(db, workflowId);
+  return getWorkflow(db, workspaceId, workflowId);
 }
 
 /**
@@ -307,8 +320,8 @@ export async function updateDraftSteps(db: Queryable, workflowId: string, versio
  * finds it already handled, or is blocked until this commits, after which it
  * 404s instead of racing) and we need the full list anyway to count versions.
  */
-export async function deleteWorkflowVersion(db: Queryable, workflowId: string, version: number) {
-  await getWorkflowRowOr404(db, workflowId);
+export async function deleteWorkflowVersion(db: Queryable, workspaceId: string, workflowId: string, version: number) {
+  await getWorkflowRowOr404(db, workspaceId, workflowId);
   const versions = await db.query<WorkflowVersionRow>(
     `select * from public.workflow_versions where workflow_id = $1 order by version_number asc for update`,
     [workflowId],
@@ -327,7 +340,7 @@ export async function deleteWorkflowVersion(db: Queryable, workflowId: string, v
 
   await db.query(`delete from public.workflow_steps where workflow_version_id = $1`, [target.id]);
   await db.query(`delete from public.workflow_versions where id = $1`, [target.id]);
-  return getWorkflow(db, workflowId);
+  return getWorkflow(db, workspaceId, workflowId);
 }
 
 export type EnrollmentMode = "keep_existing" | "migrate_to_new_version" | "restart_from_start";
@@ -370,13 +383,14 @@ async function assertNoUnknownTemplateVariables(db: Queryable, versionId: string
  * for a future phase, but rejected explicitly rather than silently
  * pretending to do something they don't.
  */
-export async function publishVersion(db: Queryable, actor: Actor, workflowId: string, version: number, enrollmentMode: EnrollmentMode = "keep_existing") {
+export async function publishVersion(db: Queryable, actor: Actor, workspaceId: string, workflowId: string, version: number, enrollmentMode: EnrollmentMode = "keep_existing") {
   if (enrollmentMode !== "keep_existing") {
     throw new InvalidTransitionError(
       `Enrollment mode "${enrollmentMode}" is not implemented yet - existing runs always keep the version they were enrolled against. Use "keep_existing".`,
     );
   }
 
+  await getWorkflowRowOr404(db, workspaceId, workflowId);
   const versionRow = await db.query<WorkflowVersionRow>(
     `select * from public.workflow_versions where workflow_id = $1 and version_number = $2`,
     [workflowId, version],
@@ -405,11 +419,11 @@ export async function publishVersion(db: Queryable, actor: Actor, workflowId: st
     [v.id],
   );
 
-  return getWorkflow(db, workflowId);
+  return getWorkflow(db, workspaceId, workflowId);
 }
 
-export async function duplicateWorkflow(db: Queryable, actor: Actor, workflowId: string) {
-  const source = await getWorkflowRowOr404(db, workflowId);
+export async function duplicateWorkflow(db: Queryable, actor: Actor, workspaceId: string, workflowId: string) {
+  const source = await getWorkflowRowOr404(db, workspaceId, workflowId);
   const versions = await db.query<WorkflowVersionRow>(
     `select * from public.workflow_versions where workflow_id = $1 order by version_number desc`,
     [workflowId],
@@ -417,9 +431,9 @@ export async function duplicateWorkflow(db: Queryable, actor: Actor, workflowId:
   const base = versions.rows.find((v) => v.status === "published") ?? versions.rows[0];
 
   const created = await db.query<{ id: string }>(
-    `insert into public.workflows (name, description, trigger, status, owner_id, created_by, created_by_name)
-     values ($1,$2,$3,'paused',$4,$5,$6) returning id`,
-    [`${source.name} (copy)`, source.description, source.trigger, source.owner_id, actor.id, actor.fullName],
+    `insert into public.workflows (workspace_id, name, description, trigger, status, owner_id, created_by, created_by_name)
+     values ($1,$2,$3,$4,'paused',$5,$6,$7) returning id`,
+    [workspaceId, `${source.name} (copy)`, source.description, source.trigger, source.owner_id, actor.id, actor.fullName],
   );
   const newId = created.rows[0]!.id;
 
@@ -440,7 +454,7 @@ export async function duplicateWorkflow(db: Queryable, actor: Actor, workflowId:
     }
   }
 
-  return getWorkflow(db, newId);
+  return getWorkflow(db, workspaceId, newId);
 }
 
 /**
@@ -470,8 +484,8 @@ export async function duplicateWorkflow(db: Queryable, actor: Actor, workflowId:
  * workflow_versions_one_draft_per_workflow allows only one Draft per
  * workflow), so every step delete happens while its trigger check passes.
  */
-export async function deleteWorkflow(db: Queryable, id: string, options: { force?: boolean } = {}) {
-  await getWorkflowRowOr404(db, id);
+export async function deleteWorkflow(db: Queryable, workspaceId: string, id: string, options: { force?: boolean } = {}) {
+  await getWorkflowRowOr404(db, workspaceId, id);
   const runs = await db.query<{ count: string }>(`select count(*)::text as count from public.workflow_runs where workflow_id = $1`, [id]);
   const runCount = Number(runs.rows[0]?.count ?? 0);
   if (runCount > 0 && !options.force) {
@@ -505,6 +519,7 @@ export async function deleteWorkflow(db: Queryable, id: string, options: { force
 
 export interface TemplateRow {
   id: string;
+  workspace_id: string;
   name: string;
   channel: "email" | "whatsapp";
   subject: string | null;
@@ -538,14 +553,14 @@ function templateToDto(row: TemplateRow) {
   };
 }
 
-export async function listTemplates(db: Queryable) {
-  const result = await db.query<TemplateRow>(`select * from public.message_templates order by name asc`);
+export async function listTemplates(db: Queryable, workspaceId: string) {
+  const result = await db.query<TemplateRow>(`select * from public.message_templates where workspace_id = $1 order by name asc`, [workspaceId]);
   return result.rows.map(templateToDto);
 }
 
 /** Same as listTemplates but with each template's attachments (and a short-lived signed download URL per attachment) merged in — used by the templates list route. */
-export async function listTemplatesWithAttachments(db: Queryable) {
-  const templates = await listTemplates(db);
+export async function listTemplatesWithAttachments(db: Queryable, workspaceId: string) {
+  const templates = await listTemplates(db, workspaceId);
   if (templates.length === 0) return templates.map((t) => ({ ...t, attachments: [] as ReturnType<typeof attachmentToDto>[] }));
 
   const attachmentsResult = await db.query<TemplateAttachmentRow>(
@@ -568,28 +583,34 @@ export async function listTemplatesWithAttachments(db: Queryable) {
   );
 }
 
-export async function createTemplate(db: Queryable, actor: Actor, input: { name: string; channel: "email" | "whatsapp"; subject?: string; body: string }) {
+async function getTemplateRowOr404(db: Queryable, workspaceId: string, id: string): Promise<TemplateRow> {
+  const result = await db.query<TemplateRow>(`select * from public.message_templates where id = $1 and workspace_id = $2`, [id, workspaceId]);
+  const row = result.rows[0];
+  if (!row) throw new NotFoundError("Template");
+  return row;
+}
+
+export async function createTemplate(db: Queryable, actor: Actor, workspaceId: string, input: { name: string; channel: "email" | "whatsapp"; subject?: string; body: string }) {
   if (!input.name.trim()) throw new ValidationError("Template name is required.");
   if (!input.body.trim()) throw new ValidationError("Template body is required.");
   if (input.channel === "whatsapp" && input.subject) {
     throw new ValidationError("WhatsApp templates cannot have a subject.");
   }
   const result = await db.query<TemplateRow>(
-    `insert into public.message_templates (name, channel, subject, body, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6) returning *`,
-    [input.name.trim(), input.channel, input.channel === "email" ? input.subject?.trim() || null : null, input.body, actor.id, actor.fullName],
+    `insert into public.message_templates (workspace_id, name, channel, subject, body, created_by, created_by_name)
+     values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+    [workspaceId, input.name.trim(), input.channel, input.channel === "email" ? input.subject?.trim() || null : null, input.body, actor.id, actor.fullName],
   );
   return templateToDto(result.rows[0]!);
 }
 
 export async function updateTemplate(
   db: Queryable,
+  workspaceId: string,
   id: string,
   patch: { name?: string; subject?: string; body?: string; active?: boolean; isDefaultMeetingScheduled?: boolean },
 ) {
-  const existing = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [id]);
-  const current = existing.rows[0];
-  if (!current) throw new NotFoundError("Template");
+  const current = await getTemplateRowOr404(db, workspaceId, id);
 
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -611,9 +632,14 @@ export async function updateTemplate(
     params.push(patch.active);
   }
   if (patch.isDefaultMeetingScheduled !== undefined) {
-    // Only one template per channel may hold this flag — clear the
-    // previous default (if any) before setting this one, matching the
-    // partial unique index in 006_google_calendar_meeting_sync.sql.
+    // Only one template per channel (within this workspace) may hold this
+    // flag — clear the previous default (if any) before setting this one,
+    // matching the partial unique index in
+    // 006_google_calendar_meeting_sync.sql (that index is global, not
+    // workspace-scoped, so "default meeting-scheduled template" is
+    // currently a single cross-workspace flag — acceptable for now since
+    // only one workspace, MOTM, uses it today; a future workspace enabling
+    // this feature would need that index revisited to be workspace-scoped).
     const column = current.channel === "email" ? "is_default_meeting_scheduled_email" : "is_default_meeting_scheduled_whatsapp";
     if (patch.isDefaultMeetingScheduled) {
       await db.query(`update public.message_templates set ${column} = false where ${column} = true and id != $1`, [id]);
@@ -642,7 +668,8 @@ async function attachmentToDto(row: TemplateAttachmentRow) {
   };
 }
 
-export async function listTemplateAttachments(db: Queryable, templateId: string) {
+export async function listTemplateAttachments(db: Queryable, workspaceId: string, templateId: string) {
+  await getTemplateRowOr404(db, workspaceId, templateId);
   const result = await db.query<TemplateAttachmentRow>(
     `select * from public.template_attachments where template_id = $1 order by created_at asc`,
     [templateId],
@@ -652,12 +679,11 @@ export async function listTemplateAttachments(db: Queryable, templateId: string)
 
 export async function createTemplateAttachment(
   db: Queryable,
+  workspaceId: string,
   templateId: string,
   file: { buffer: Buffer; originalName: string; mimeType: string; size: number },
 ) {
-  const templateResult = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [templateId]);
-  const template = templateResult.rows[0];
-  if (!template) throw new NotFoundError("Template");
+  const template = await getTemplateRowOr404(db, workspaceId, templateId);
 
   if (template.channel === "whatsapp") {
     const existing = await db.query<{ count: string }>(
@@ -688,7 +714,8 @@ export async function createTemplateAttachment(
   return attachmentToDto(inserted.rows[0]!);
 }
 
-export async function deleteTemplateAttachment(db: Queryable, templateId: string, attachmentId: string) {
+export async function deleteTemplateAttachment(db: Queryable, workspaceId: string, templateId: string, attachmentId: string) {
+  await getTemplateRowOr404(db, workspaceId, templateId);
   const existing = await db.query<TemplateAttachmentRow>(
     `select * from public.template_attachments where id = $1 and template_id = $2`,
     [attachmentId, templateId],
@@ -711,9 +738,8 @@ export async function deleteTemplateAttachment(db: Queryable, templateId: string
  * template only referenced by draft steps is fine (that's normal workflow-
  * builder editing) and still allowed.
  */
-export async function deleteTemplate(db: Queryable, id: string) {
-  const existing = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [id]);
-  if (!existing.rows[0]) throw new NotFoundError("Template");
+export async function deleteTemplate(db: Queryable, workspaceId: string, id: string) {
+  await getTemplateRowOr404(db, workspaceId, id);
 
   const liveUsage = await db.query<{ count: string }>(
     `select count(*)::text as count

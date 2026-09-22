@@ -52,7 +52,7 @@ leadsRouter.post(
   asyncHandler(async (req, res) => {
     const input = parseBody(createLeadSchema, req.body);
     const lead = await withTransaction((client) =>
-      leadsService.createLead(client, req.actor!, {
+      leadsService.createLead(client, req.actor!, req.workspaceId!, {
         ...input,
         firstName: input.firstName ?? "",
         company: input.company ?? "",
@@ -94,7 +94,7 @@ leadsRouter.post(
   "/import",
   asyncHandler(async (req, res) => {
     const input = parseBody(importLeadsSchema, req.body);
-    const result = await withTransaction((client) => leadsService.importLeads(client, req.actor!, input.rows));
+    const result = await withTransaction((client) => leadsService.importLeads(client, req.actor!, req.workspaceId!, input.rows));
     res.status(201).json({
       data: {
         created: result.created.map((row) => leadToDto(row)),
@@ -121,7 +121,7 @@ leadsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const filters = parseQuery(listLeadsQuerySchema, req.query);
-    const leads = await leadsService.listLeads(pool, filters);
+    const leads = await leadsService.listLeads(pool, req.workspaceId!, filters);
     res.json({ data: leads });
   }),
 );
@@ -129,7 +129,7 @@ leadsRouter.get(
 leadsRouter.get(
   "/:id",
   asyncHandler(async (req, res) => {
-    const row = await leadsService.getLeadRowOr404(pool, req.params.id!);
+    const row = await leadsService.getLeadRowOr404(pool, req.workspaceId!, req.params.id!);
     res.json(await withNextAction(row));
   }),
 );
@@ -163,24 +163,24 @@ leadsRouter.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const patch = parseBody(updateLeadSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.updateLead(client, req.actor!, req.params.id!, patch));
+    const lead = await withTransaction((client) => leadsService.updateLead(client, req.actor!, req.workspaceId!, req.params.id!, patch));
     res.json(await withNextAction(lead));
   }),
 );
 
 /**
  * Permanent delete. Gated the same as every other lead-mutating route here
- * (requireAuth + requireSalesperson, applied at the crmRouter level in
- * routes/index.ts) -- admin accounts are walled off from all CRM data in
- * this app (see requireSalesperson), so there is no more-privileged tier
- * within leads to additionally require. Irreversible and cascades across
- * every related table -- see leadsService.deleteLead and
- * 007_lead_hard_delete.sql.
+ * (requireAuth + requireSalesperson + requireWorkspace, applied at the
+ * crmRouter level in routes/index.ts) -- admin accounts are walled off from
+ * all CRM data in this app (see requireSalesperson), so there is no
+ * more-privileged tier within leads to additionally require. Irreversible
+ * and cascades across every related table -- see leadsService.deleteLead
+ * and 007_lead_hard_delete.sql.
  */
 leadsRouter.delete(
   "/:id",
   asyncHandler(async (req, res) => {
-    await withTransaction((client) => leadsService.deleteLead(client, req.actor!, req.params.id!));
+    await withTransaction((client) => leadsService.deleteLead(client, req.actor!, req.workspaceId!, req.params.id!));
     res.status(204).send();
   }),
 );
@@ -190,7 +190,7 @@ leadsRouter.delete(
 leadsRouter.get(
   "/:id/notes",
   asyncHandler(async (req, res) => {
-    res.json({ data: await leadsService.listNotes(pool, req.params.id!) });
+    res.json({ data: await leadsService.listNotes(pool, req.workspaceId!, req.params.id!) });
   }),
 );
 
@@ -200,7 +200,7 @@ leadsRouter.post(
   "/:id/notes",
   asyncHandler(async (req, res) => {
     const { body } = parseBody(addNoteSchema, req.body);
-    const note = await withTransaction((client) => leadsService.addNote(client, req.actor!, req.params.id!, body));
+    const note = await withTransaction((client) => leadsService.addNote(client, req.actor!, req.workspaceId!, req.params.id!, body));
     res.status(201).json(note);
   }),
 );
@@ -213,7 +213,7 @@ leadsRouter.post(
   "/:id/automation",
   asyncHandler(async (req, res) => {
     const { mode, reason } = parseBody(automationSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.setAutomationMode(client, req.actor!, req.params.id!, mode, reason));
+    const lead = await withTransaction((client) => leadsService.setAutomationMode(client, req.actor!, req.workspaceId!, req.params.id!, mode, reason));
     res.json(await withNextAction(lead));
   }),
 );
@@ -224,7 +224,7 @@ leadsRouter.post(
   "/:id/dnc",
   asyncHandler(async (req, res) => {
     const input = parseBody(dncSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.markDnc(client, req.actor!, req.params.id!, input));
+    const lead = await withTransaction((client) => leadsService.markDnc(client, req.actor!, req.workspaceId!, req.params.id!, input));
     res.json(await withNextAction(lead));
   }),
 );
@@ -235,7 +235,7 @@ leadsRouter.post(
   "/:id/dnc/reactivate",
   asyncHandler(async (req, res) => {
     const { reason } = parseBody(reasonSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.reactivateFromDnc(client, req.actor!, req.params.id!, reason));
+    const lead = await withTransaction((client) => leadsService.reactivateFromDnc(client, req.actor!, req.workspaceId!, req.params.id!, reason));
     res.json(await withNextAction(lead));
   }),
 );
@@ -246,7 +246,7 @@ leadsRouter.post(
   "/:id/won",
   asyncHandler(async (req, res) => {
     const { reason } = parseBody(optionalReasonSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.markWon(client, req.actor!, req.params.id!, reason));
+    const lead = await withTransaction((client) => leadsService.markWon(client, req.actor!, req.workspaceId!, req.params.id!, reason));
     res.json(await withNextAction(lead));
   }),
 );
@@ -257,7 +257,7 @@ leadsRouter.post(
   "/:id/lost",
   asyncHandler(async (req, res) => {
     const { lossReason, notes } = parseBody(markLostSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.markLost(client, req.actor!, req.params.id!, lossReason, notes));
+    const lead = await withTransaction((client) => leadsService.markLost(client, req.actor!, req.workspaceId!, req.params.id!, lossReason, notes));
     res.json(await withNextAction(lead));
   }),
 );
@@ -266,7 +266,7 @@ leadsRouter.post(
   "/:id/discard",
   asyncHandler(async (req, res) => {
     const { reason } = parseBody(optionalReasonSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.markDiscarded(client, req.actor!, req.params.id!, reason));
+    const lead = await withTransaction((client) => leadsService.markDiscarded(client, req.actor!, req.workspaceId!, req.params.id!, reason));
     res.json(await withNextAction(lead));
   }),
 );
@@ -278,7 +278,7 @@ leadsRouter.post(
   "/:id/long-term-nurture",
   asyncHandler(async (req, res) => {
     const { reason } = parseBody(optionalReasonSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.moveToLongTermNurture(client, req.actor!, req.params.id!, reason));
+    const lead = await withTransaction((client) => leadsService.moveToLongTermNurture(client, req.actor!, req.workspaceId!, req.params.id!, reason));
     res.json(await withNextAction(lead));
   }),
 );
@@ -287,7 +287,7 @@ leadsRouter.post(
   "/:id/reactivate",
   asyncHandler(async (req, res) => {
     const { reason } = parseBody(optionalReasonSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.reactivateLead(client, req.actor!, req.params.id!, reason));
+    const lead = await withTransaction((client) => leadsService.reactivateLead(client, req.actor!, req.workspaceId!, req.params.id!, reason));
     res.json(await withNextAction(lead));
   }),
 );
@@ -298,7 +298,7 @@ leadsRouter.post(
   "/:id/merge",
   asyncHandler(async (req, res) => {
     const { targetLeadId, reason } = parseBody(mergeSchema, req.body);
-    const lead = await withTransaction((client) => leadsService.mergeLead(client, req.actor!, req.params.id!, targetLeadId, reason));
+    const lead = await withTransaction((client) => leadsService.mergeLead(client, req.actor!, req.workspaceId!, req.params.id!, targetLeadId, reason));
     res.json(await withNextAction(lead));
   }),
 );
@@ -310,7 +310,7 @@ const contactabilitySchema = z.object({ channel: z.enum(CONTACT_CHANNELS), statu
 leadsRouter.get(
   "/:id/contactability",
   asyncHandler(async (req, res) => {
-    res.json({ data: await leadsService.listContactability(pool, req.params.id!) });
+    res.json({ data: await leadsService.listContactability(pool, req.workspaceId!, req.params.id!) });
   }),
 );
 
@@ -318,7 +318,7 @@ leadsRouter.post(
   "/:id/contactability",
   asyncHandler(async (req, res) => {
     const input = parseBody(contactabilitySchema, req.body);
-    const data = await withTransaction((client) => leadsService.setContactability(client, req.actor!, req.params.id!, input));
+    const data = await withTransaction((client) => leadsService.setContactability(client, req.actor!, req.workspaceId!, req.params.id!, input));
     res.json({ data });
   }),
 );
@@ -347,7 +347,7 @@ const logCallSchema = z.object({
 leadsRouter.get(
   "/:id/calls",
   asyncHandler(async (req, res) => {
-    res.json({ data: await listCallsForLead(pool, req.params.id!) });
+    res.json({ data: await listCallsForLead(pool, req.workspaceId!, req.params.id!) });
   }),
 );
 
@@ -355,7 +355,7 @@ leadsRouter.post(
   "/:id/calls",
   asyncHandler(async (req, res) => {
     const input = parseBody(logCallSchema, req.body);
-    const result = await withTransaction((client) => logCall(client, req.actor!, req.params.id!, input));
+    const result = await withTransaction((client) => logCall(client, req.actor!, req.workspaceId!, req.params.id!, input));
     res.status(201).json({
       call: result.call,
       lead: await withNextAction(result.lead),
@@ -374,7 +374,7 @@ leadsRouter.post(
   "/:id/communications",
   asyncHandler(async (req, res) => {
     const input = parseBody(communicationSchema, req.body);
-    res.status(201).json(await withTransaction((client) => leadsService.logManualCommunication(client, req.actor!, req.params.id!, input)));
+    res.status(201).json(await withTransaction((client) => leadsService.logManualCommunication(client, req.actor!, req.workspaceId!, req.params.id!, input)));
   }),
 );
 
@@ -383,27 +383,27 @@ leadsRouter.post(
 leadsRouter.get(
   "/:id/timeline",
   asyncHandler(async (req, res) => {
-    res.json({ data: await listTimelineForLead(pool, req.params.id!) });
+    res.json({ data: await listTimelineForLead(pool, req.workspaceId!, req.params.id!) });
   }),
 );
 
 leadsRouter.get(
   "/:id/meetings",
   asyncHandler(async (req, res) => {
-    res.json({ data: await listMeetings(pool, { leadId: req.params.id! }) });
+    res.json({ data: await listMeetings(pool, req.workspaceId!, { leadId: req.params.id! }) });
   }),
 );
 
 leadsRouter.get(
   "/:id/proposals",
   asyncHandler(async (req, res) => {
-    res.json({ data: await listProposals(pool, { leadId: req.params.id! }) });
+    res.json({ data: await listProposals(pool, req.workspaceId!, { leadId: req.params.id! }) });
   }),
 );
 
 leadsRouter.get(
   "/:id/runs",
   asyncHandler(async (req, res) => {
-    res.json({ data: await listRuns(pool, { leadId: req.params.id! }) });
+    res.json({ data: await listRuns(pool, req.workspaceId!, { leadId: req.params.id! }) });
   }),
 );

@@ -5,6 +5,7 @@ import type { NotificationKind } from "../domain/enums.js";
 export interface NotificationRow {
   id: string;
   recipient_id: string;
+  workspace_id: string | null;
   title: string;
   detail: string | null;
   kind: NotificationKind;
@@ -27,25 +28,48 @@ function toDto(row: NotificationRow) {
   };
 }
 
-export async function listNotificationsFor(db: Queryable, recipientId: string) {
+/**
+ * notifications.workspace_id is NULLABLE (unlike every other workspace-owned
+ * table) — a notification is per-recipient, and a salesperson works across
+ * every workspace (no per-user membership), so a bell scoped ONLY to the
+ * currently-selected workspace would hide anything not tagged with it. We
+ * scope to "this workspace's own notifications, plus any untagged
+ * (legacy/system-wide) ones" rather than either extreme (all workspaces'
+ * notifications bleeding together, or losing untagged notifications
+ * entirely) — this keeps the bell consistent with "switching workspaces
+ * shows that workspace's context" while still surfacing anything not yet
+ * workspace-attributed.
+ */
+export async function listNotificationsFor(db: Queryable, recipientId: string, workspaceId: string) {
   const result = await db.query<NotificationRow>(
-    `select * from public.notifications where recipient_id = $1 order by created_at desc limit 100`,
-    [recipientId],
+    `select * from public.notifications
+      where recipient_id = $1 and (workspace_id = $2 or workspace_id is null)
+      order by created_at desc
+      limit 100`,
+    [recipientId, workspaceId],
   );
   return result.rows.map(toDto);
 }
 
-export async function markNotificationRead(db: Queryable, recipientId: string, id: string) {
+export async function markNotificationRead(db: Queryable, recipientId: string, workspaceId: string, id: string) {
   const result = await db.query<NotificationRow>(
-    `update public.notifications set read = true where id = $1 and recipient_id = $2 returning *`,
-    [id, recipientId],
+    `update public.notifications
+        set read = true
+      where id = $1 and recipient_id = $2 and (workspace_id = $3 or workspace_id is null)
+      returning *`,
+    [id, recipientId, workspaceId],
   );
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Notification");
   return toDto(row);
 }
 
-export async function markAllNotificationsRead(db: Queryable, recipientId: string) {
-  await db.query(`update public.notifications set read = true where recipient_id = $1 and read = false`, [recipientId]);
-  return listNotificationsFor(db, recipientId);
+export async function markAllNotificationsRead(db: Queryable, recipientId: string, workspaceId: string) {
+  await db.query(
+    `update public.notifications
+        set read = true
+      where recipient_id = $1 and read = false and (workspace_id = $2 or workspace_id is null)`,
+    [recipientId, workspaceId],
+  );
+  return listNotificationsFor(db, recipientId, workspaceId);
 }

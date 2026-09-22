@@ -8,7 +8,7 @@ import { htmlToWhatsAppText } from "./domain/htmlToWhatsAppText.js";
 import { sendEmail } from "./providers/email.provider.js";
 import { sendWhatsApp } from "./providers/whatsapp.provider.js";
 import type { WorkflowStepAction } from "./domain/enums.js";
-import { baileysManager } from "./providers/baileys.manager.js";
+import { baileysRegistry } from "./providers/baileys-registry.js";
 import { PermanentProviderError, ProviderDeferredError } from "./providers/provider-errors.js";
 import { supabaseAdmin } from "./supabaseAdmin.js";
 
@@ -59,7 +59,7 @@ async function dispatchMessage(ctx: automationService.ActionContext): Promise<Se
         return { filename: attachment.fileName, content: buffer.toString("base64") };
       }),
     );
-    const result = await sendEmail({
+    const result = await sendEmail(ctx.workspaceId, {
       to: ctx.lead.email,
       subject,
       html: rendered.body,
@@ -71,7 +71,7 @@ async function dispatchMessage(ctx: automationService.ActionContext): Promise<Se
   if (!ctx.lead.phoneE164) throw new PermanentProviderError("Eligible WhatsApp action has no normalized phone number.");
   const whatsappText = htmlToWhatsAppText(rendered.body);
   const attachment = ctx.template.attachments[0];
-  const result = await sendWhatsApp({
+  const result = await sendWhatsApp(ctx.workspaceId, {
     source: { type: "scheduled_action", id: ctx.action.id },
     to: ctx.lead.phoneE164,
     body: whatsappText,
@@ -164,9 +164,19 @@ async function tick(): Promise<void> {
 
 let stopped = false;
 
+// How often the worker re-scans for newly created/activated workspaces and
+// starts a BaileysManager for any that don't have one running yet (see
+// baileys-registry.ts) — deliberately less frequent than the action poll
+// itself, since new workspaces are rare compared to due scheduled actions.
+const WORKSPACE_SCAN_INTERVAL_TICKS = 6;
+let tickCount = 0;
+
 async function loop(): Promise<void> {
   while (!stopped) {
     await tick().catch((err) => console.error("[worker] Poll tick failed:", err));
+    if (tickCount++ % WORKSPACE_SCAN_INTERVAL_TICKS === 0) {
+      await baileysRegistry.ensureManagersForAllActiveWorkspaces().catch((err) => console.error("[worker] Workspace WhatsApp session scan failed:", err));
+    }
     if (stopped) break;
     await new Promise((resolve) => setTimeout(resolve, env.WORKER_POLL_INTERVAL_MS));
   }
@@ -175,12 +185,12 @@ async function loop(): Promise<void> {
 console.log(
   `Northbeam CRM automation worker starting (poll interval ${env.WORKER_POLL_INTERVAL_MS}ms, batch size ${env.WORKER_BATCH_SIZE}, dry run ${env.WORKER_DRY_RUN}).`,
 );
-void baileysManager
-  .start()
+void baileysRegistry
+  .ensureManagersForAllActiveWorkspaces()
   .then(() => loop())
   .catch(async (error) => {
-    console.error("Automation worker failed to acquire or initialize its singleton messaging session:", error);
-    await baileysManager.stop().catch(() => undefined);
+    console.error("Automation worker failed to initialize per-workspace WhatsApp sessions:", error);
+    await baileysRegistry.stopAll().catch(() => undefined);
     await pool.end().catch(() => undefined);
     process.exit(1);
   });
@@ -189,7 +199,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`Received ${signal}, shutting down worker...`);
   stopped = true;
   try {
-    await baileysManager.stop();
+    await baileysRegistry.stopAll();
     await pool.end();
   } catch (err) {
     console.error("[worker] Error closing database pool during shutdown:", err);

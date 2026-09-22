@@ -13,6 +13,7 @@ import { pipelineStageIndex } from "../domain/pipeline.js";
 
 export interface MeetingRow {
   id: string;
+  workspace_id: string;
   lead_id: string;
   owner_id: string | null;
   owner_name: string | null;
@@ -89,9 +90,9 @@ async function resolveOwnerName(db: Queryable, ownerId: string, lead: LeadRow, a
   return result.rows[0]?.full_name ?? null;
 }
 
-export async function scheduleMeeting(db: Queryable, actor: Actor, input: ScheduleMeetingInput) {
+export async function scheduleMeeting(db: Queryable, actor: Actor, workspaceId: string, input: ScheduleMeetingInput) {
   if (!input.title.trim()) throw new ValidationError("Meeting title is required.");
-  const lead = await getLeadRowOr404(db, input.leadId);
+  const lead = await getLeadRowOr404(db, workspaceId, input.leadId);
   if (lead.lifecycle_state === "do_not_contact") throw new DoNotContactError();
 
   const ownerId = input.ownerId ?? lead.owner_id ?? actor.id;
@@ -101,9 +102,9 @@ export async function scheduleMeeting(db: Queryable, actor: Actor, input: Schedu
   // 'scheduled' rather than the DB default 'tentative' (which is reserved
   // for a not-yet-implemented "propose a time" flow) — intentional, not a bug.
   const result = await db.query<{ id: string }>(
-    `insert into public.meetings (lead_id, owner_id, owner_name, title, scheduled_at, duration_minutes, meeting_url, status, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6,$7,'scheduled',$8,$9) returning id`,
-    [input.leadId, ownerId, ownerName, input.title.trim(), input.at, input.durationMin ?? 30, input.url ?? null, actor.id, actor.fullName],
+    `insert into public.meetings (workspace_id, lead_id, owner_id, owner_name, title, scheduled_at, duration_minutes, meeting_url, status, created_by, created_by_name)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,'scheduled',$9,$10) returning id`,
+    [workspaceId, input.leadId, ownerId, ownerName, input.title.trim(), input.at, input.durationMin ?? 30, input.url ?? null, actor.id, actor.fullName],
   );
   const id = result.rows[0]!.id;
 
@@ -122,7 +123,7 @@ export async function scheduleMeeting(db: Queryable, actor: Actor, input: Schedu
   // (e.g. proposal_sent) must not be regressed by booking an additional
   // meeting on it.
   if (pipelineStageIndex(lead.pipeline_stage) < pipelineStageIndex("meeting_scheduled")) {
-    await updateLead(db, actor, input.leadId, { pipelineStage: "meeting_scheduled" });
+    await updateLead(db, actor, workspaceId, input.leadId, { pipelineStage: "meeting_scheduled" });
   }
 
   // Edge case ("Meeting Booked During Nurture"): the objective of any
@@ -136,7 +137,7 @@ export async function scheduleMeeting(db: Queryable, actor: Actor, input: Schedu
     "call",
   ]);
 
-  await createTask(db, actor, {
+  await createTask(db, actor, workspaceId, {
     leadId: input.leadId,
     ownerId,
     type: "confirm_meeting",
@@ -145,24 +146,26 @@ export async function scheduleMeeting(db: Queryable, actor: Actor, input: Schedu
     origin: "manual",
   });
 
-  return getMeetingOr404(db, id);
+  return getMeetingOr404(db, workspaceId, id);
 }
 
-export async function getMeetingOr404(db: Queryable, id: string) {
-  const result = await db.query<MeetingRow>(`select * from public.meetings where id = $1`, [id]);
-  const row = result.rows[0];
-  if (!row) throw new NotFoundError("Meeting");
-  return meetingToDto(row);
+export async function getMeetingOr404(db: Queryable, workspaceId: string, id: string) {
+  return meetingToDto(await getMeetingRowOr404(db, workspaceId, id));
 }
 
-export async function getMeetingRowOr404(db: Queryable, id: string): Promise<MeetingRow> {
-  const result = await db.query<MeetingRow>(`select * from public.meetings where id = $1`, [id]);
+export async function getMeetingRowOr404(db: Queryable, workspaceId: string, id: string): Promise<MeetingRow> {
+  const result = await db.query<MeetingRow>(`select * from public.meetings where id = $1 and workspace_id = $2`, [id, workspaceId]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Meeting");
   return row;
 }
 
-/** The meeting a lead's automation should render against — most recently created, excluding ones that never happened or won't. */
+/**
+ * The meeting a lead's automation should render against — most recently
+ * created, excluding ones that never happened or won't. Takes leadId only
+ * (no workspaceId): every caller (automation.service.ts's buildContext)
+ * already has a workspace-validated lead in hand before calling this.
+ */
 export async function getLatestMeetingForLead(db: Queryable, leadId: string): Promise<MeetingRow | null> {
   const result = await db.query<MeetingRow>(
     `select * from public.meetings where lead_id = $1 and status not in ('cancelled', 'failed') order by created_at desc limit 1`,
@@ -186,10 +189,10 @@ export interface ListMeetingsFilters {
   ownerId?: string;
 }
 
-export async function listMeetings(db: Queryable, filters: ListMeetingsFilters) {
-  const clauses: string[] = [];
-  const params: unknown[] = [];
-  let i = 1;
+export async function listMeetings(db: Queryable, workspaceId: string, filters: ListMeetingsFilters) {
+  const clauses: string[] = [`workspace_id = $1`];
+  const params: unknown[] = [workspaceId];
+  let i = 2;
   if (filters.leadId) {
     clauses.push(`lead_id = $${i++}`);
     params.push(filters.leadId);
@@ -202,7 +205,7 @@ export async function listMeetings(db: Queryable, filters: ListMeetingsFilters) 
     clauses.push(`owner_id = $${i++}`);
     params.push(filters.ownerId);
   }
-  const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
+  const where = `where ${clauses.join(" and ")}`;
   const result = await db.query<MeetingRow>(`select * from public.meetings ${where} order by scheduled_at asc`, params);
   return result.rows.map(meetingToDto);
 }
@@ -217,8 +220,8 @@ export interface UpdateMeetingInput {
 }
 
 /** Plain field/status edits with no outcome routing — use recordMeetingOutcome for Completed + outcome. */
-export async function updateMeeting(db: Queryable, actor: Actor, id: string, patch: UpdateMeetingInput) {
-  const current = await getMeetingRowOr404(db, id);
+export async function updateMeeting(db: Queryable, actor: Actor, workspaceId: string, id: string, patch: UpdateMeetingInput) {
+  const current = await getMeetingRowOr404(db, workspaceId, id);
   const sets: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -256,7 +259,7 @@ export async function updateMeeting(db: Queryable, actor: Actor, id: string, pat
     }
   }
 
-  return getMeetingOr404(db, id);
+  return getMeetingOr404(db, workspaceId, id);
 }
 
 /**
@@ -264,8 +267,8 @@ export async function updateMeeting(db: Queryable, actor: Actor, id: string, pat
  * meeting is marked Completed (mirrors the DB CHECK constraint
  * meetings_outcome_requires_completed).
  */
-export async function recordMeetingOutcome(db: Queryable, actor: Actor, id: string, outcome: MeetingOutcome, notes?: string) {
-  const meeting = await getMeetingRowOr404(db, id);
+export async function recordMeetingOutcome(db: Queryable, actor: Actor, workspaceId: string, id: string, outcome: MeetingOutcome, notes?: string) {
+  const meeting = await getMeetingRowOr404(db, workspaceId, id);
 
   // Idempotent on an exact repeat (double-submit / retried request): the
   // routing side effects below (task creation, stage change) are NOT safe to
@@ -292,15 +295,15 @@ export async function recordMeetingOutcome(db: Queryable, actor: Actor, id: stri
   // stage and objectionType must land in one update statement — see the
   // identical constraint note in calls.service.ts::logCall.
   if (routing.stage || routing.objectionType) {
-    await updateLead(db, actor, meeting.lead_id, {
+    await updateLead(db, actor, workspaceId, meeting.lead_id, {
       ...(routing.stage ? { pipelineStage: routing.stage } : {}),
       ...(routing.objectionType ? { objectionType: routing.objectionType } : {}),
     });
   }
-  if (routing.lifecycle === "long_term_nurture") await moveToLongTermNurture(db, actor, meeting.lead_id, `Meeting outcome: ${outcome}`);
-  if (routing.lifecycle === "won") await markWon(db, actor, meeting.lead_id, `Meeting outcome: ${outcome}`);
+  if (routing.lifecycle === "long_term_nurture") await moveToLongTermNurture(db, actor, workspaceId, meeting.lead_id, `Meeting outcome: ${outcome}`);
+  if (routing.lifecycle === "won") await markWon(db, actor, workspaceId, meeting.lead_id, `Meeting outcome: ${outcome}`);
   if (routing.task) {
-    await createTask(db, actor, {
+    await createTask(db, actor, workspaceId, {
       leadId: meeting.lead_id,
       ownerId: meeting.owner_id,
       type: routing.task.type,
@@ -310,8 +313,8 @@ export async function recordMeetingOutcome(db: Queryable, actor: Actor, id: stri
     });
   }
   if (routing.workflowTrigger) {
-    await autoEnroll(db, meeting.lead_id, routing.workflowTrigger, `Meeting outcome: ${outcome}`);
+    await autoEnroll(db, workspaceId, meeting.lead_id, routing.workflowTrigger, `Meeting outcome: ${outcome}`);
   }
 
-  return getMeetingOr404(db, id);
+  return getMeetingOr404(db, workspaceId, id);
 }

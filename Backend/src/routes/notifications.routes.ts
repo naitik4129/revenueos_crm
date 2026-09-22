@@ -10,14 +10,14 @@ notificationsRouter.use(requireAuth);
 notificationsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    res.json({ data: await listNotificationsFor(pool, req.actor!.id) });
+    res.json({ data: await listNotificationsFor(pool, req.actor!.id, req.workspaceId!) });
   }),
 );
 
 notificationsRouter.post(
   "/:id/read",
   asyncHandler(async (req, res) => {
-    const notification = await withTransaction((client) => markNotificationRead(client, req.actor!.id, req.params.id!));
+    const notification = await withTransaction((client) => markNotificationRead(client, req.actor!.id, req.workspaceId!, req.params.id!));
     res.json(notification);
   }),
 );
@@ -25,7 +25,7 @@ notificationsRouter.post(
 notificationsRouter.post(
   "/read-all",
   asyncHandler(async (req, res) => {
-    const data = await withTransaction((client) => markAllNotificationsRead(client, req.actor!.id));
+    const data = await withTransaction((client) => markAllNotificationsRead(client, req.actor!.id, req.workspaceId!));
     res.json({ data });
   }),
 );

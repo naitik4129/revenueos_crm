@@ -9,7 +9,14 @@ function messageTime(message: WAMessage) {
   return new Date((seconds || Math.floor(Date.now() / 1000)) * 1000);
 }
 
-export async function processInboundUpsert(event: { messages: WAMessage[]; type: string; requestId?: string }) {
+/**
+ * `workspaceId` identifies which workspace's Baileys socket received this
+ * message (see baileys.manager.ts — each workspace owns its own socket), so
+ * lead matching is scoped to that workspace's leads only: a phone number
+ * that happens to match a lead in a different workspace must never stop
+ * that other workspace's automation or notify that other workspace's owner.
+ */
+export async function processInboundUpsert(workspaceId: string, event: { messages: WAMessage[]; type: string; requestId?: string }) {
   if (event.type !== "notify" || event.requestId) return;
   for (const message of event.messages) {
     const id = message.key.id;
@@ -25,19 +32,19 @@ export async function processInboundUpsert(event: { messages: WAMessage[]; type:
       await db.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [phone]);
       const inserted = await db.query(
         `insert into public.whatsapp_inbound_events
-          (message_id, sender_jid, sender_phone_e164, message_type, received_at, disposition)
-         values ($1,$2,$3,$4,$5,'unmatched')
+          (workspace_id, message_id, sender_jid, sender_phone_e164, message_type, received_at, disposition)
+         values ($1,$2,$3,$4,$5,$6,'unmatched')
          on conflict (message_id) do nothing
          returning message_id`,
-        [id, directJid, phone, type, messageTime(message).toISOString()],
+        [workspaceId, id, directJid, phone, type, messageTime(message).toISOString()],
       );
       if (inserted.rowCount === 0) return;
 
       const matches = await db.query<{ id: string; owner_id: string | null }>(
         `select id, owner_id from public.leads
-          where phone_e164 = $1 and lifecycle_state = 'active' and merged_into_lead_id is null
+          where phone_e164 = $1 and workspace_id = $2 and lifecycle_state = 'active' and merged_into_lead_id is null
           for update`,
-        [phone],
+        [phone, workspaceId],
       );
       const disposition = matches.rowCount === 0 ? "unmatched" : matches.rowCount === 1 ? "matched" : "ambiguous";
       await db.query(
@@ -81,9 +88,10 @@ export async function processInboundUpsert(event: { messages: WAMessage[]; type:
         });
         if (lead.owner_id) {
           await db.query(
-            `insert into public.notifications (recipient_id, title, detail, kind, lead_id, href)
-             values ($1, $2, $3, $4, $5, $6)`,
+            `insert into public.notifications (workspace_id, recipient_id, title, detail, kind, lead_id, href)
+             values ($1, $2, $3, $4, $5, $6, $7)`,
             [
+              workspaceId,
               lead.owner_id,
               "WhatsApp reply received",
               matches.rowCount! > 1 ? "Automation stopped for multiple leads sharing this number." : "Automation was switched to manual.",

@@ -59,7 +59,7 @@ proposalsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const filters = parseQuery(listQuerySchema, req.query);
-    res.json({ data: await listProposals(pool, filters) });
+    res.json({ data: await listProposals(pool, req.workspaceId!, filters) });
   }),
 );
 
@@ -80,7 +80,7 @@ proposalsRouter.post(
   asyncHandler(async (req, res) => {
     if (!req.file) throw new ValidationError("A proposal document is required.");
     const input = parseBody(createSchema, req.body);
-    const proposal = await createAndSendProposal(req.actor!, input, {
+    const proposal = await createAndSendProposal(req.actor!, req.workspaceId!, input, {
       buffer: req.file.buffer,
       originalName: req.file.originalname,
       mimeType: req.file.mimetype,
@@ -101,7 +101,7 @@ proposalsRouter.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const patch = parseBody(updateSchema, req.body);
-    const proposal = await withTransaction((client) => updateProposal(client, req.params.id!, patch));
+    const proposal = await withTransaction((client) => updateProposal(client, req.workspaceId!, req.params.id!, patch));
     res.json(proposal);
   }),
 );
@@ -120,7 +120,7 @@ proposalsRouter.post(
   asyncHandler(async (req, res) => {
     const { status, lossReason, lossNotes } = parseBody(statusSchema, req.body);
     const proposal = await withTransaction((client) =>
-      updateProposalStatus(client, req.actor!, req.params.id!, status, { lossReason, lossNotes }),
+      updateProposalStatus(client, req.actor!, req.workspaceId!, req.params.id!, status, { lossReason, lossNotes }),
     );
     res.json(proposal);
   }),

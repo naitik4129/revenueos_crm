@@ -5,9 +5,12 @@ import {
   type WorkflowRow,
 } from "../../src/services/workflows.service.js";
 
+const WORKSPACE_ID = "workspace-1";
+
 function createWorkflowDb() {
   const row: WorkflowRow = {
     id: "workflow-1",
+    workspace_id: WORKSPACE_ID,
     name: "Original workflow",
     description: "Original description",
     trigger: "manual_enrollment",
@@ -57,7 +60,7 @@ describe("updateWorkflow", () => {
   it("persists trimmed workflow name and clears description", async () => {
     const { db } = createWorkflowDb();
 
-    const workflow = await updateWorkflow(db, "workflow-1", {
+    const workflow = await updateWorkflow(db, WORKSPACE_ID, "workflow-1", {
       name: "  Updated workflow  ",
       description: "   ",
     });
@@ -70,7 +73,7 @@ describe("updateWorkflow", () => {
     const { db } = createWorkflowDb();
 
     await expect(
-      updateWorkflow(db, "workflow-1", { name: "   " }),
+      updateWorkflow(db, WORKSPACE_ID, "workflow-1", { name: "   " }),
     ).rejects.toMatchObject({
       code: "invalid_input",
       message: "Workflow name is required.",

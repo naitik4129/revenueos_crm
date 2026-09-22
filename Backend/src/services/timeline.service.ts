@@ -96,10 +96,14 @@ export function timelineToDto(row: TimelineRow) {
   };
 }
 
-export async function listTimelineForLead(db: Queryable, leadId: string) {
+export async function listTimelineForLead(db: Queryable, workspaceId: string, leadId: string) {
   const result = await db.query<TimelineRow>(
-    `select * from public.timeline_events where lead_id = $1 order by occurred_at asc`,
-    [leadId],
+    `select t.*
+       from public.timeline_events t
+       join public.leads l on l.id = t.lead_id
+      where t.lead_id = $1 and l.workspace_id = $2
+      order by t.occurred_at asc`,
+    [leadId, workspaceId],
   );
   return result.rows.map(timelineToDto);
 }

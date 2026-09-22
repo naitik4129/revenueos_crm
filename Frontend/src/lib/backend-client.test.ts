@@ -15,7 +15,12 @@ vi.mock("@/lib/supabase-client", () => ({
   },
 }));
 
-import { BackendError, backend } from "./backend-client";
+import {
+  BackendError,
+  backend,
+  getCurrentWorkspaceId,
+  setCurrentWorkspaceId,
+} from "./backend-client";
 
 function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -27,6 +32,7 @@ function response(body: unknown, status = 200) {
 afterEach(() => {
   vi.unstubAllGlobals();
   signOut.mockClear();
+  setCurrentWorkspaceId(null);
 });
 
 describe("backend client", () => {
@@ -79,9 +85,15 @@ describe("backend client", () => {
     ],
     [
       "WhatsApp connect",
-      () => backend.admin.whatsapp.command("connect"),
+      () => backend.connections.whatsapp.command("connect"),
       "POST",
-      "/api/v1/admin/connections/whatsapp/connect",
+      "/api/v1/connections/whatsapp/connect",
+    ],
+    [
+      "workspace create",
+      () => backend.workspaces.create("Second Brand"),
+      "POST",
+      "/api/v1/workspaces",
     ],
   ])("sends an authenticated %s request", async (_name, invoke, method, pathname) => {
     const fetchMock = vi.fn<typeof fetch>(async () => response({ id: "result-1" }));
@@ -125,11 +137,11 @@ describe("backend client", () => {
     expect(body.get("document")).toBe(document);
   });
 
-  it("omits retained email secrets from an admin connection update", async () => {
+  it("omits retained email secrets from a connections update", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => response({ provider: "resend" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await backend.admin.email.update({
+    await backend.connections.email.update({
       provider: "resend",
       enabled: true,
       senderName: "Northbeam",
@@ -139,6 +151,21 @@ describe("backend client", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     expect(body).not.toHaveProperty("resendApiKey");
     expect(body).not.toHaveProperty("smtpPassword");
+  });
+
+  it("attaches X-Workspace-Id once a workspace is selected, and omits it before then", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => response({ data: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await backend.leads.list();
+    expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty(["headers", "X-Workspace-Id"]);
+
+    setCurrentWorkspaceId("workspace-1");
+    expect(getCurrentWorkspaceId()).toBe("workspace-1");
+    await backend.leads.list();
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      headers: { "X-Workspace-Id": "workspace-1" },
+    });
   });
 
   it("normalizes API errors and clears an unauthorized local session", async () => {

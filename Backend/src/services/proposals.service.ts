@@ -11,6 +11,7 @@ import { addDaysIso } from "../dto.js";
 
 export interface ProposalRow {
   id: string;
+  workspace_id: string;
   lead_id: string;
   owner_id: string | null;
   owner_name: string | null;
@@ -93,19 +94,20 @@ export interface CreateProposalInput {
   whatsappSendStatus?: WhatsappSendStatus;
 }
 
-export async function createProposal(db: Queryable, actor: Actor, input: CreateProposalInput) {
+export async function createProposal(db: Queryable, actor: Actor, workspaceId: string, input: CreateProposalInput) {
   if (!input.title.trim()) throw new ValidationError("Proposal title is required.");
-  const lead = await getLeadRowOr404(db, input.leadId);
+  const lead = await getLeadRowOr404(db, workspaceId, input.leadId);
   if (lead.lifecycle_state === "do_not_contact") throw new DoNotContactError();
 
   const result = await db.query<{ id: string }>(
     `insert into public.proposals
-      (lead_id, owner_id, title, document_reference, document_storage_path, document_file_name,
+      (workspace_id, lead_id, owner_id, title, document_reference, document_storage_path, document_file_name,
        document_mime_type, document_size_bytes, amount, status, notes,
        email_template_id, whatsapp_template_id, email_send_status, whatsapp_send_status,
        created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'draft',$10,$11,$12,$13,$14,$15,$16) returning id`,
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'draft',$11,$12,$13,$14,$15,$16,$17) returning id`,
     [
+      workspaceId,
       input.leadId,
       lead.owner_id,
       input.title.trim(),
@@ -127,20 +129,20 @@ export async function createProposal(db: Queryable, actor: Actor, input: CreateP
   const id = result.rows[0]!.id;
 
   await addTimelineEvent(db, { leadId: input.leadId, kind: "proposal", title: "Proposal Created", detail: input.title.trim(), ...actorEvent(actor) });
-  await updateLead(db, actor, input.leadId, { pipelineStage: "proposal_preparation" });
+  await updateLead(db, actor, workspaceId, input.leadId, { pipelineStage: "proposal_preparation" });
 
-  return getProposalOr404(db, id);
+  return getProposalOr404(db, workspaceId, id);
 }
 
-export async function getProposalRowOr404(db: Queryable, id: string): Promise<ProposalRow> {
-  const result = await db.query<ProposalRow>(`select * from public.proposals where id = $1`, [id]);
+export async function getProposalRowOr404(db: Queryable, workspaceId: string, id: string): Promise<ProposalRow> {
+  const result = await db.query<ProposalRow>(`select * from public.proposals where id = $1 and workspace_id = $2`, [id, workspaceId]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Proposal");
   return row;
 }
 
-export async function getProposalOr404(db: Queryable, id: string) {
-  return proposalToDto(await getProposalRowOr404(db, id));
+export async function getProposalOr404(db: Queryable, workspaceId: string, id: string) {
+  return proposalToDto(await getProposalRowOr404(db, workspaceId, id));
 }
 
 export interface ListProposalsFilters {
@@ -149,10 +151,10 @@ export interface ListProposalsFilters {
   ownerId?: string;
 }
 
-export async function listProposals(db: Queryable, filters: ListProposalsFilters) {
-  const clauses: string[] = [];
-  const params: unknown[] = [];
-  let i = 1;
+export async function listProposals(db: Queryable, workspaceId: string, filters: ListProposalsFilters) {
+  const clauses: string[] = [`workspace_id = $1`];
+  const params: unknown[] = [workspaceId];
+  let i = 2;
   if (filters.leadId) {
     clauses.push(`lead_id = $${i++}`);
     params.push(filters.leadId);
@@ -165,7 +167,7 @@ export async function listProposals(db: Queryable, filters: ListProposalsFilters
     clauses.push(`owner_id = $${i++}`);
     params.push(filters.ownerId);
   }
-  const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
+  const where = `where ${clauses.join(" and ")}`;
   const result = await db.query<ProposalRow>(`select * from public.proposals ${where} order by updated_at desc`, params);
   return result.rows.map(proposalToDto);
 }
@@ -178,8 +180,8 @@ export interface UpdateProposalInput {
 }
 
 /** Plain field edits — use updateProposalStatus for status transitions (outcome routing). */
-export async function updateProposal(db: Queryable, id: string, patch: UpdateProposalInput) {
-  await getProposalRowOr404(db, id);
+export async function updateProposal(db: Queryable, workspaceId: string, id: string, patch: UpdateProposalInput) {
+  await getProposalRowOr404(db, workspaceId, id);
   const sets: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -191,10 +193,10 @@ export async function updateProposal(db: Queryable, id: string, patch: UpdatePro
   if (patch.fileName !== undefined) push("document_reference", patch.fileName || null);
   if (patch.amount !== undefined) push("amount", patch.amount);
   if (patch.notes !== undefined) push("notes", patch.notes);
-  if (sets.length === 0) return getProposalOr404(db, id);
+  if (sets.length === 0) return getProposalOr404(db, workspaceId, id);
   params.push(id);
   await db.query(`update public.proposals set ${sets.join(", ")} where id = $${i}`, params);
-  return getProposalOr404(db, id);
+  return getProposalOr404(db, workspaceId, id);
 }
 
 /**
@@ -221,11 +223,12 @@ export interface UpdateProposalStatusOptions {
 export async function updateProposalStatus(
   db: Queryable,
   actor: Actor | null,
+  workspaceId: string,
   id: string,
   status: ProposalStatus,
   options: UpdateProposalStatusOptions = {},
 ) {
-  const proposal = await getProposalRowOr404(db, id);
+  const proposal = await getProposalRowOr404(db, workspaceId, id);
   if (proposal.status === status) return proposalToDto(proposal);
   if (TERMINAL_PROPOSAL_STATUSES.includes(proposal.status)) {
     throw new ConflictError(
@@ -254,13 +257,13 @@ export async function updateProposalStatus(
   const routing = routeProposalStatus(status);
 
   if (routing.lifecycle === "won") {
-    await markWon(db, actor, proposal.lead_id, `Proposal accepted: ${proposal.title}`);
+    await markWon(db, actor, workspaceId, proposal.lead_id, `Proposal accepted: ${proposal.title}`);
   } else if (routing.lifecycle === "long_term_nurture") {
-    await moveToLongTermNurture(db, actor, proposal.lead_id, `Proposal ${status}: ${proposal.title}`);
+    await moveToLongTermNurture(db, actor, workspaceId, proposal.lead_id, `Proposal ${status}: ${proposal.title}`);
   }
 
   if (routing.stage) {
-    await updateLead(db, actor, proposal.lead_id, { pipelineStage: routing.stage });
+    await updateLead(db, actor, workspaceId, proposal.lead_id, { pipelineStage: routing.stage });
   }
 
   if (routing.cancelAllOpenTasks) {
@@ -270,7 +273,7 @@ export async function updateProposalStatus(
   }
 
   if (routing.task) {
-    await createTask(db, actor, {
+    await createTask(db, actor, workspaceId, {
       leadId: proposal.lead_id,
       ownerId: proposal.owner_id,
       type: routing.task.type,
@@ -281,8 +284,8 @@ export async function updateProposalStatus(
   }
 
   if (routing.workflowTrigger) {
-    await autoEnroll(db, proposal.lead_id, routing.workflowTrigger, `Proposal ${status}: ${proposal.title}`);
+    await autoEnroll(db, workspaceId, proposal.lead_id, routing.workflowTrigger, `Proposal ${status}: ${proposal.title}`);
   }
 
-  return getProposalOr404(db, id);
+  return getProposalOr404(db, workspaceId, id);
 }

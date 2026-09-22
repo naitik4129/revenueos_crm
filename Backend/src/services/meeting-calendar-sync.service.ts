@@ -21,6 +21,7 @@ const MEETING_TIME_ZONE = "Asia/Kolkata";
 
 interface MeetingForSync {
   id: string;
+  workspace_id: string;
   lead_id: string;
   title: string;
   scheduled_at: Date;
@@ -30,7 +31,7 @@ interface MeetingForSync {
 
 async function getMeetingForSync(meetingId: string): Promise<MeetingForSync | undefined> {
   const result = await pool.query<MeetingForSync>(
-    `select id, lead_id, title, scheduled_at, duration_minutes, calendar_event_id from public.meetings where id = $1`,
+    `select id, workspace_id, lead_id, title, scheduled_at, duration_minutes, calendar_event_id from public.meetings where id = $1`,
     [meetingId],
   );
   return result.rows[0];
@@ -53,17 +54,20 @@ function eventWindow(meeting: MeetingForSync): { startIso: string; endIso: strin
 
 /** Creates the Calendar event for a newly scheduled meeting, adding the lead and any extra participants as attendees. */
 export async function syncMeetingCreated(meetingId: string): Promise<void> {
-  const { row: connection, refreshToken, oauthConfig } = await loadGoogleCalendarConnection();
+  const meeting = await getMeetingForSync(meetingId);
+  if (!meeting) return;
+
+  const { row: connection, refreshToken, oauthConfig } = await loadGoogleCalendarConnection(meeting.workspace_id);
   if (connection.status !== "connected" || !refreshToken || !oauthConfig) {
     await pool.query(`update public.meetings set calendar_sync_status = 'not_applicable' where id = $1`, [meetingId]);
     return;
   }
 
-  const meeting = await getMeetingForSync(meetingId);
-  if (!meeting) return;
-
   try {
-    const [lead, participants] = await Promise.all([getLeadRowOr404(pool, meeting.lead_id), getMeetingParticipants(meetingId)]);
+    const [lead, participants] = await Promise.all([
+      getLeadRowOr404(pool, meeting.workspace_id, meeting.lead_id),
+      getMeetingParticipants(meetingId),
+    ]);
     const attendees = [
       ...(lead.email ? [{ email: lead.email, displayName: `${lead.first_name} ${lead.last_name ?? ""}`.trim() }] : []),
       ...participants.map((p) => ({ email: p.email, displayName: p.name ?? undefined })),
@@ -95,11 +99,11 @@ export async function syncMeetingCreated(meetingId: string): Promise<void> {
 
 /** Updates the Calendar event's title/time after a reschedule. No-op if the meeting never got an event (Calendar wasn't connected when it was created). */
 export async function syncMeetingRescheduled(meetingId: string): Promise<void> {
-  const { row: connection, refreshToken, oauthConfig } = await loadGoogleCalendarConnection();
-  if (connection.status !== "connected" || !refreshToken || !oauthConfig) return;
-
   const meeting = await getMeetingForSync(meetingId);
   if (!meeting || !meeting.calendar_event_id) return;
+
+  const { row: connection, refreshToken, oauthConfig } = await loadGoogleCalendarConnection(meeting.workspace_id);
+  if (connection.status !== "connected" || !refreshToken || !oauthConfig) return;
 
   try {
     const { startIso, endIso } = eventWindow(meeting);
@@ -122,11 +126,11 @@ export async function syncMeetingRescheduled(meetingId: string): Promise<void> {
 
 /** Deletes the Calendar event when a meeting is cancelled. The meeting itself stays cancelled in our system even if Google's copy can't be removed. */
 export async function syncMeetingCancelled(meetingId: string): Promise<void> {
-  const { row: connection, refreshToken, oauthConfig } = await loadGoogleCalendarConnection();
-  if (connection.status !== "connected" || !refreshToken || !oauthConfig) return;
-
   const meeting = await getMeetingForSync(meetingId);
   if (!meeting || !meeting.calendar_event_id) return;
+
+  const { row: connection, refreshToken, oauthConfig } = await loadGoogleCalendarConnection(meeting.workspace_id);
+  if (connection.status !== "connected" || !refreshToken || !oauthConfig) return;
 
   try {
     await deleteCalendarEvent({ oauth: oauthConfig, calendarId: connection.connected_calendar_id, refreshToken, eventId: meeting.calendar_event_id });

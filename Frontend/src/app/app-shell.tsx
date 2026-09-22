@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
   Bot,
   CalendarDays,
+  Check,
   ChevronsUpDown,
   FileText,
   Gauge,
@@ -11,12 +13,22 @@ import {
   LogOut,
   Plus,
   Search,
+  Settings as SettingsIcon,
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BrandLogo } from "@/components/common/brand-logo";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   CommandDialog,
@@ -30,6 +42,9 @@ import { toast } from "sonner";
 import { AddLeadContext } from "@/app/add-lead-context";
 import { AddLeadDialog } from "@/features/leads/add-lead-dialog";
 import { messageFromError, useLeads, useNotifications, useSession } from "@/store";
+import { backend } from "@/lib/backend-client";
+import { keys } from "@/store/query";
+import { useWorkspace } from "@/store/workspace-context";
 import { cn } from "@/lib/utils";
 import { relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
@@ -42,6 +57,7 @@ const NAV = [
   { to: "/meetings", label: "Meetings", icon: CalendarDays },
   { to: "/proposals", label: "Proposals", icon: FileText },
   { to: "/automations", label: "Automations", icon: Bot },
+  { to: "/settings", label: "Settings", icon: SettingsIcon },
 ] as const;
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -50,12 +66,35 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const client = useQueryClient();
   const { leads } = useLeads();
   const { notifications, markNotificationsRead } = useNotifications();
   const { currentUser } = useSession();
+  const {
+    workspaces,
+    currentWorkspaceId,
+    currentWorkspace,
+    setCurrentWorkspaceId,
+    isLoading: workspacesLoading,
+  } = useWorkspace();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+
+  const createWorkspace = useMutation({
+    mutationFn: (name: string) => backend.workspaces.create(name),
+    onSuccess: (workspace) => {
+      void client.invalidateQueries({ queryKey: keys.workspaces });
+      setCurrentWorkspaceId(workspace.id);
+      setNewWorkspaceName("");
+      setCreateWorkspaceOpen(false);
+      toast.success(`Workspace "${workspace.name}" created.`);
+    },
+    onError: (error: unknown) => toast.error(messageFromError(error)),
+  });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -151,14 +190,64 @@ export function AppShell({ children }: { children: ReactNode }) {
           </ScrollArea>
 
           <div className="border-t border-sidebar-border p-3">
-            <div className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-sidebar-accent">
-              <BrandLogo variant="mark" className="size-6" />
-              <div className="min-w-0 flex-1 text-xs">
-                <div className="truncate font-medium">MOTM Technologies</div>
-                <div className="text-muted-foreground">Workspace · IST</div>
-              </div>
-              <ChevronsUpDown className="size-3.5 text-muted-foreground" />
-            </div>
+            <Popover open={switcherOpen} onOpenChange={setSwitcherOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-sidebar-accent"
+                  aria-label="Switch workspace"
+                >
+                  <BrandLogo variant="mark" className="size-6" />
+                  <div className="min-w-0 flex-1 text-xs">
+                    <div className="truncate font-medium">
+                      {currentWorkspace?.name ?? (workspacesLoading ? "Loading…" : "No workspace")}
+                    </div>
+                    <div className="text-muted-foreground">Workspace · IST</div>
+                  </div>
+                  <ChevronsUpDown className="size-3.5 text-muted-foreground" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-64 p-1">
+                <div className="max-h-64 overflow-y-auto">
+                  {workspaces.length === 0 && (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                      {workspacesLoading ? "Loading workspaces…" : "No workspaces yet."}
+                    </div>
+                  )}
+                  {workspaces.map((workspace) => (
+                    <button
+                      key={workspace.id}
+                      type="button"
+                      className={cn(
+                        "flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent",
+                        workspace.id === currentWorkspaceId && "bg-accent",
+                      )}
+                      onClick={() => {
+                        setCurrentWorkspaceId(workspace.id);
+                        setSwitcherOpen(false);
+                      }}
+                    >
+                      <span className="truncate">{workspace.name}</span>
+                      {workspace.id === currentWorkspaceId && (
+                        <Check className="size-3.5 shrink-0" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-1 border-t pt-1">
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-primary hover:bg-accent"
+                    onClick={() => {
+                      setSwitcherOpen(false);
+                      setCreateWorkspaceOpen(true);
+                    }}
+                  >
+                    <Plus className="size-3.5" /> Create workspace
+                  </button>
+                </div>
+              </PopoverContent>
+            </Popover>
             <div className="mt-1 flex items-center gap-2 rounded-md px-2 py-2">
               <div className="grid size-7 place-items-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
                 {currentUser?.initials ?? "-"}
@@ -350,6 +439,38 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       <AddLeadDialog open={addOpen} onOpenChange={setAddOpen} />
+
+      <Dialog open={createWorkspaceOpen} onOpenChange={setCreateWorkspaceOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Create workspace</DialogTitle>
+            <DialogDescription>
+              Gives this brand or entity its own leads, workflows, templates, and Email/WhatsApp/
+              Calendar connections.
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <Label className="mb-1.5 block text-xs">Name</Label>
+            <Input
+              autoFocus
+              value={newWorkspaceName}
+              onChange={(e) => setNewWorkspaceName(e.target.value)}
+              placeholder="e.g. Northbeam Labs"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setCreateWorkspaceOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!newWorkspaceName.trim() || createWorkspace.isPending}
+              onClick={() => createWorkspace.mutate(newWorkspaceName.trim())}
+            >
+              {createWorkspace.isPending ? "Creating…" : "Create workspace"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <CommandDialog open={paletteOpen} onOpenChange={setPaletteOpen}>
         <CommandInput placeholder="Type a command or search…" />

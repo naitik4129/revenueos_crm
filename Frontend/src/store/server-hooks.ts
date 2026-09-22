@@ -27,6 +27,7 @@ import type {
   WorkflowStep,
 } from "@/types";
 import { keys, refreshLead } from "./query";
+import { useWorkspace } from "./workspace-context";
 
 export function useSession() {
   const me = useQuery({
@@ -65,11 +66,13 @@ export type SessionSlice = ReturnType<typeof useSession>;
 
 export function useLeads() {
   const client = useQueryClient();
+  const { currentWorkspaceId } = useWorkspace();
   const query = useQuery({
-    queryKey: keys.leads,
+    queryKey: keys.leads(currentWorkspaceId),
     queryFn: ({ signal }) => backend.leads.list({ limit: 500 }, signal),
+    enabled: Boolean(currentWorkspaceId),
   });
-  const refresh = (leadId: string) => refreshLead(client, leadId);
+  const refresh = (leadId: string) => refreshLead(client, currentWorkspaceId, leadId);
   const create = useMutation({
     mutationFn: (input: CreateLeadInput) => backend.leads.create(input),
     onSuccess: (lead) => refresh(lead.id),
@@ -78,9 +81,9 @@ export function useLeads() {
     mutationFn: (rows: ImportLeadRow[]) => backend.leads.importCsv(rows),
     onSuccess: () =>
       Promise.all([
-        client.invalidateQueries({ queryKey: keys.leads }),
-        client.invalidateQueries({ queryKey: keys.dashboard }),
-        client.invalidateQueries({ queryKey: keys.notifications }),
+        client.invalidateQueries({ queryKey: keys.leads(currentWorkspaceId) }),
+        client.invalidateQueries({ queryKey: keys.dashboard(currentWorkspaceId) }),
+        client.invalidateQueries({ queryKey: keys.notifications(currentWorkspaceId) }),
       ]),
   });
   const update = useMutation({
@@ -202,20 +205,22 @@ export function useLeads() {
 export type LeadsSlice = ReturnType<typeof useLeads>;
 
 export function useLead(leadId: string) {
+  const { currentWorkspaceId } = useWorkspace();
+  const enabled = Boolean(leadId) && Boolean(currentWorkspaceId);
   const lead = useQuery({
-    queryKey: keys.lead(leadId),
+    queryKey: keys.lead(currentWorkspaceId, leadId),
     queryFn: ({ signal }) => backend.leads.get(leadId, signal),
-    enabled: Boolean(leadId),
+    enabled,
   });
   const notes = useQuery({
-    queryKey: keys.notes(leadId),
+    queryKey: keys.notes(currentWorkspaceId, leadId),
     queryFn: ({ signal }) => backend.leads.notes(leadId, signal),
-    enabled: Boolean(leadId),
+    enabled,
   });
   const contactability = useQuery({
-    queryKey: keys.contactability(leadId),
+    queryKey: keys.contactability(currentWorkspaceId, leadId),
     queryFn: ({ signal }) => backend.leads.contactability(leadId, signal),
-    enabled: Boolean(leadId),
+    enabled,
   });
   return {
     lead: lead.data,
@@ -228,11 +233,13 @@ export function useLead(leadId: string) {
 
 export function useTasks() {
   const client = useQueryClient();
+  const { currentWorkspaceId } = useWorkspace();
   const query = useQuery({
-    queryKey: keys.tasks,
+    queryKey: keys.tasks(currentWorkspaceId),
     queryFn: ({ signal }) => backend.tasks.list(undefined, signal),
+    enabled: Boolean(currentWorkspaceId),
   });
-  const refresh = (leadId: string) => refreshLead(client, leadId);
+  const refresh = (leadId: string) => refreshLead(client, currentWorkspaceId, leadId);
   const create = useMutation({
     mutationFn: (input: CreateTaskInput) => backend.tasks.create(input),
     onSuccess: (task) => refresh(task.leadId),
@@ -266,11 +273,13 @@ export type TasksSlice = ReturnType<typeof useTasks>;
 
 export function useMeetings() {
   const client = useQueryClient();
+  const { currentWorkspaceId } = useWorkspace();
   const query = useQuery({
-    queryKey: keys.meetings,
+    queryKey: keys.meetings(currentWorkspaceId),
     queryFn: ({ signal }) => backend.meetings.list(undefined, signal),
+    enabled: Boolean(currentWorkspaceId),
   });
-  const refresh = (leadId: string) => refreshLead(client, leadId);
+  const refresh = (leadId: string) => refreshLead(client, currentWorkspaceId, leadId);
   const create = useMutation({
     mutationFn: (input: CreateMeetingInput) => backend.meetings.create(input),
     onSuccess: (meeting) => refresh(meeting.leadId),
@@ -307,9 +316,11 @@ export type MeetingsSlice = ReturnType<typeof useMeetings>;
 
 export function useProposals() {
   const client = useQueryClient();
+  const { currentWorkspaceId } = useWorkspace();
   const query = useQuery({
-    queryKey: keys.proposals,
+    queryKey: keys.proposals(currentWorkspaceId),
     queryFn: ({ signal }) => backend.proposals.list(undefined, signal),
+    enabled: Boolean(currentWorkspaceId),
     // Keeps polling while any proposal's WhatsApp send is still in flight on
     // the worker (email resolves synchronously, but WhatsApp can only be
     // sent from the automation worker process — see Backend/src/worker.ts —
@@ -319,7 +330,7 @@ export function useProposals() {
         ? 8000
         : false,
   });
-  const refresh = (leadId: string) => refreshLead(client, leadId);
+  const refresh = (leadId: string) => refreshLead(client, currentWorkspaceId, leadId);
   const create = useMutation({
     mutationFn: (input: CreateProposalInput) => backend.proposals.create(input),
     onSuccess: (proposal) => refresh(proposal.leadId),
@@ -364,10 +375,11 @@ export function useProposals() {
 export type ProposalsSlice = ReturnType<typeof useProposals>;
 
 export function useTimeline(leadId: string) {
+  const { currentWorkspaceId } = useWorkspace();
   const query = useQuery({
-    queryKey: keys.timeline(leadId),
+    queryKey: keys.timeline(currentWorkspaceId, leadId),
     queryFn: ({ signal }) => backend.leads.timeline(leadId, signal),
-    enabled: Boolean(leadId),
+    enabled: Boolean(leadId) && Boolean(currentWorkspaceId),
   });
   return { timeline: query.data?.data ?? [], isLoading: query.isLoading, error: query.error };
 }
@@ -375,27 +387,37 @@ export type TimelineSlice = ReturnType<typeof useTimeline>;
 
 export function useAutomations() {
   const client = useQueryClient();
+  const { currentWorkspaceId } = useWorkspace();
+  const enabled = Boolean(currentWorkspaceId);
   const workflows = useQuery({
-    queryKey: keys.workflows,
+    queryKey: keys.workflows(currentWorkspaceId),
     queryFn: ({ signal }) => backend.workflows.list(signal),
+    enabled,
   });
   const templates = useQuery({
-    queryKey: keys.templates,
+    queryKey: keys.templates(currentWorkspaceId),
     queryFn: ({ signal }) => backend.templates.list(signal),
+    enabled,
   });
   const runs = useQuery({
-    queryKey: keys.runs,
+    queryKey: keys.runs(currentWorkspaceId),
     queryFn: ({ signal }) => backend.runs.list(undefined, signal),
+    enabled,
   });
   const scheduled = useQuery({
-    queryKey: keys.scheduledActions,
+    queryKey: keys.scheduledActions(currentWorkspaceId),
     queryFn: ({ signal }) => backend.scheduledActions.list(undefined, signal),
+    enabled,
   });
   const invalidate = () =>
     Promise.all(
-      [keys.workflows, keys.templates, keys.runs, keys.scheduledActions, keys.dashboard].map(
-        (queryKey) => client.invalidateQueries({ queryKey }),
-      ),
+      [
+        keys.workflows(currentWorkspaceId),
+        keys.templates(currentWorkspaceId),
+        keys.runs(currentWorkspaceId),
+        keys.scheduledActions(currentWorkspaceId),
+        keys.dashboard(currentWorkspaceId),
+      ].map((queryKey) => client.invalidateQueries({ queryKey })),
     );
   const workflowCreate = useMutation({
     mutationFn: (input: CreateWorkflowInput) => backend.workflows.create(input),
@@ -550,13 +572,15 @@ export type AutomationsSlice = ReturnType<typeof useAutomations>;
 
 export function useNotifications() {
   const client = useQueryClient();
+  const { currentWorkspaceId } = useWorkspace();
   const query = useQuery({
-    queryKey: keys.notifications,
+    queryKey: keys.notifications(currentWorkspaceId),
     queryFn: ({ signal }) => backend.notifications.list(signal),
+    enabled: Boolean(currentWorkspaceId),
   });
   const readAll = useMutation({
     mutationFn: () => backend.notifications.markAllRead(),
-    onSuccess: () => client.invalidateQueries({ queryKey: keys.notifications }),
+    onSuccess: () => client.invalidateQueries({ queryKey: keys.notifications(currentWorkspaceId) }),
   });
   return {
     notifications: query.data?.data ?? [],
@@ -568,9 +592,11 @@ export function useNotifications() {
 export type NotificationsSlice = ReturnType<typeof useNotifications>;
 
 export function useDashboard() {
+  const { currentWorkspaceId } = useWorkspace();
   const query = useQuery({
-    queryKey: keys.dashboard,
+    queryKey: keys.dashboard(currentWorkspaceId),
     queryFn: ({ signal }) => backend.dashboard.summary(signal),
+    enabled: Boolean(currentWorkspaceId),
   });
   return { summary: query.data, isLoading: query.isLoading, error: query.error };
 }

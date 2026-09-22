@@ -13,6 +13,12 @@
  * Auth is bypassed here (these exercise the service layer directly, not
  * HTTP) — authMiddleware itself is exercised by the manual smoke test in
  * the implementation report, since it requires a real Supabase Auth user.
+ *
+ * Every service call is scoped to the seeded MOTM workspace (fixed UUID,
+ * see Supabase/migrations/015_workspaces.sql) — these tests predate the
+ * multi-workspace migration and exercise the single-tenant flows against
+ * that one workspace, mirroring how every existing pre-migration row was
+ * backfilled to it.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool, type PoolClient } from "pg";
@@ -20,6 +26,8 @@ import type { Actor } from "../../src/authMiddleware.js";
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
+
+const WORKSPACE_ID = "00000000-0000-0000-0000-000000000001";
 
 describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
   let pool: Pool;
@@ -69,7 +77,7 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const { listTasks } = await import("../../src/services/tasks.service.js");
 
     const lead = await withTestTransaction((client) =>
-      createLead(client, actor, { firstName: "Ada", company: "Analytics Co", source: "website", email: "ada@example.com" }),
+      createLead(client, actor, WORKSPACE_ID, { firstName: "Ada", company: "Analytics Co", source: "website", email: "ada@example.com" }),
     );
 
     expect(lead.pipeline_stage).toBe("new");
@@ -77,12 +85,12 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     expect(lead.automation_mode).toBe("manual");
     expect(lead.owner_id).toBe(actor.id);
 
-    const timeline = await listTimelineForLead(pool, lead.id);
+    const timeline = await listTimelineForLead(pool, WORKSPACE_ID, lead.id);
     expect(timeline.some((e) => e.title === "Lead Created")).toBe(true);
     expect(timeline.some((e) => e.title === "Lead Assigned")).toBe(true);
 
     // A brand-new lead must never sit with no next action assigned.
-    const tasks = await listTasks(pool, { leadId: lead.id, status: "open" });
+    const tasks = await listTasks(pool, WORKSPACE_ID, { leadId: lead.id, status: "open" });
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ type: "call", title: "First call", ownerId: actor.id, origin: "manual" });
   });
@@ -93,15 +101,17 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const { listTasks } = await import("../../src/services/tasks.service.js");
 
     const lead = await withTestTransaction((client) =>
-      createLead(client, actor, { firstName: "Ben", company: "Beta Ltd", source: "referral", phone: "+15550000000" }),
+      createLead(client, actor, WORKSPACE_ID, { firstName: "Ben", company: "Beta Ltd", source: "referral", phone: "+15550000000" }),
     );
 
-    const result = await withTestTransaction((client) => logCall(client, actor, lead.id, { connected: false, notConnectedReason: "no_answer" }));
+    const result = await withTestTransaction((client) =>
+      logCall(client, actor, WORKSPACE_ID, lead.id, { connected: false, notConnectedReason: "no_answer" }),
+    );
 
     expect(result.lead.pipeline_stage).toBe("not_connected_nurture");
     expect(result.lead.automation_mode).toBe("active");
 
-    const tasks = await listTasks(pool, { leadId: lead.id });
+    const tasks = await listTasks(pool, WORKSPACE_ID, { leadId: lead.id });
     expect(tasks.some((t) => t.type === "call" && t.status === "open")).toBe(true);
   });
 
@@ -111,15 +121,15 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const { listTasks } = await import("../../src/services/tasks.service.js");
 
     const lead = await withTestTransaction((client) =>
-      createLead(client, actor, { firstName: "Cara", company: "Gamma Inc", source: "cold_call", email: "cara@example.com" }),
+      createLead(client, actor, WORKSPACE_ID, { firstName: "Cara", company: "Gamma Inc", source: "cold_call", email: "cara@example.com" }),
     );
-    await withTestTransaction((client) => logCall(client, actor, lead.id, { connected: false, notConnectedReason: "busy" }));
+    await withTestTransaction((client) => logCall(client, actor, WORKSPACE_ID, lead.id, { connected: false, notConnectedReason: "busy" }));
 
-    const dncLead = await withTestTransaction((client) => markDnc(client, actor, lead.id, { reason: "Requested no contact" }));
+    const dncLead = await withTestTransaction((client) => markDnc(client, actor, WORKSPACE_ID, lead.id, { reason: "Requested no contact" }));
     expect(dncLead.lifecycle_state).toBe("do_not_contact");
     expect(dncLead.automation_mode).toBe("stopped");
 
-    const tasks = await listTasks(pool, { leadId: lead.id, status: "open" });
+    const tasks = await listTasks(pool, WORKSPACE_ID, { leadId: lead.id, status: "open" });
     expect(tasks.length).toBe(0);
   });
 
@@ -128,23 +138,25 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const { createTask, updateTask, cancelTask } = await import("../../src/services/tasks.service.js");
     const { listTimelineForLead } = await import("../../src/services/timeline.service.js");
     const lead = await withTestTransaction((client) =>
-      createLead(client, actor, { firstName: "Dev", company: "Delta Co", source: "email", email: "dev@example.com" }),
+      createLead(client, actor, WORKSPACE_ID, { firstName: "Dev", company: "Delta Co", source: "email", email: "dev@example.com" }),
     );
     const task = await withTestTransaction((client) =>
-      createTask(client, actor, { leadId: lead.id, ownerId: actor.id, type: "call", title: "Initial call", dueAt: "2030-01-01T04:30:00.000Z" }),
+      createTask(client, actor, WORKSPACE_ID, { leadId: lead.id, ownerId: actor.id, type: "call", title: "Initial call", dueAt: "2030-01-01T04:30:00.000Z" }),
     );
 
     const updated = await withTestTransaction((client) =>
-      updateTask(client, actor, task.id, { title: "Rescheduled call", dueAt: "2030-01-02T04:30:00.000Z" }),
+      updateTask(client, actor, WORKSPACE_ID, task.id, { title: "Rescheduled call", dueAt: "2030-01-02T04:30:00.000Z" }),
     );
     expect(updated.title).toBe("Rescheduled call");
     expect(updated.dueAt).toBe("2030-01-02T04:30:00.000Z");
 
-    await withTestTransaction((client) => logManualCommunication(client, actor, lead.id, { channel: "email", detail: "Shared the requested overview" }));
-    const cancelled = await withTestTransaction((client) => cancelTask(client, actor, task.id, "Replaced by meeting"));
+    await withTestTransaction((client) =>
+      logManualCommunication(client, actor, WORKSPACE_ID, lead.id, { channel: "email", detail: "Shared the requested overview" }),
+    );
+    const cancelled = await withTestTransaction((client) => cancelTask(client, actor, WORKSPACE_ID, task.id, "Replaced by meeting"));
     expect(cancelled.status).toBe("cancelled");
 
-    const timeline = await listTimelineForLead(pool, lead.id);
+    const timeline = await listTimelineForLead(pool, WORKSPACE_ID, lead.id);
     expect(timeline.some((event) => event.title === "Task Updated")).toBe(true);
     expect(timeline.some((event) => event.title === "Email Sent")).toBe(true);
   });
@@ -155,20 +167,20 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const { createProposal, updateProposalStatus } = await import("../../src/services/proposals.service.js");
     const { getDashboardSummary } = await import("../../src/services/dashboard.service.js");
     const lead = await withTestTransaction((client) =>
-      createLead(client, actor, { firstName: "Esha", company: "Epsilon Co", source: "event", email: "esha@example.com" }),
+      createLead(client, actor, WORKSPACE_ID, { firstName: "Esha", company: "Epsilon Co", source: "event", email: "esha@example.com" }),
     );
     const meeting = await withTestTransaction((client) =>
-      scheduleMeeting(client, actor, { leadId: lead.id, title: "Discovery", at: "2030-01-03T04:30:00.000Z", durationMin: 30 }),
+      scheduleMeeting(client, actor, WORKSPACE_ID, { leadId: lead.id, title: "Discovery", at: "2030-01-03T04:30:00.000Z", durationMin: 30 }),
     );
-    await withTestTransaction((client) => recordMeetingOutcome(client, actor, meeting.id, "proposal_required", "Prepare pricing"));
+    await withTestTransaction((client) => recordMeetingOutcome(client, actor, WORKSPACE_ID, meeting.id, "proposal_required", "Prepare pricing"));
     const proposal = await withTestTransaction((client) =>
-      createProposal(client, actor, { leadId: lead.id, title: "Epsilon proposal", amount: 125000 }),
+      createProposal(client, actor, WORKSPACE_ID, { leadId: lead.id, title: "Epsilon proposal", amount: 125000 }),
     );
-    await withTestTransaction((client) => updateProposalStatus(client, actor, proposal.id, "sent"));
+    await withTestTransaction((client) => updateProposalStatus(client, actor, WORKSPACE_ID, proposal.id, "sent"));
 
-    const routedLead = await getLeadRowOr404(pool, lead.id);
+    const routedLead = await getLeadRowOr404(pool, WORKSPACE_ID, lead.id);
     expect(routedLead.pipeline_stage).toBe("proposal_sent");
-    const summary = await getDashboardSummary(pool);
+    const summary = await getDashboardSummary(pool, WORKSPACE_ID);
     expect(summary.activeLeads).toBeGreaterThan(0);
     expect(summary.proposalFollowUps).toBeGreaterThan(0);
   });
@@ -179,21 +191,21 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const { listTasks } = await import("../../src/services/tasks.service.js");
     const { listTimelineForLead } = await import("../../src/services/timeline.service.js");
     const lead = await withTestTransaction((client) =>
-      createLead(client, actor, { firstName: "Gita", company: "Gamma Corp", source: "event", email: "gita@example.com" }),
+      createLead(client, actor, WORKSPACE_ID, { firstName: "Gita", company: "Gamma Corp", source: "event", email: "gita@example.com" }),
     );
     const meeting = await withTestTransaction((client) =>
-      scheduleMeeting(client, actor, { leadId: lead.id, title: "Closing call", at: "2030-01-05T04:30:00.000Z", durationMin: 30 }),
+      scheduleMeeting(client, actor, WORKSPACE_ID, { leadId: lead.id, title: "Closing call", at: "2030-01-05T04:30:00.000Z", durationMin: 30 }),
     );
-    await withTestTransaction((client) => recordMeetingOutcome(client, actor, meeting.id, "won", "Signed the deal"));
+    await withTestTransaction((client) => recordMeetingOutcome(client, actor, WORKSPACE_ID, meeting.id, "won", "Signed the deal"));
 
-    const routedLead = await getLeadRowOr404(pool, lead.id);
+    const routedLead = await getLeadRowOr404(pool, WORKSPACE_ID, lead.id);
     expect(routedLead.lifecycle_state).toBe("won");
     expect(routedLead.automation_mode).toBe("stopped");
 
-    const tasks = await listTasks(pool, { leadId: lead.id });
+    const tasks = await listTasks(pool, WORKSPACE_ID, { leadId: lead.id });
     expect(tasks.every((task) => task.status !== "open")).toBe(true);
 
-    const timeline = await listTimelineForLead(pool, lead.id);
+    const timeline = await listTimelineForLead(pool, WORKSPACE_ID, lead.id);
     expect(timeline.some((event) => event.title === "Won")).toBe(true);
   });
 
@@ -201,16 +213,16 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const { createLead, getLeadRowOr404, updateLead } = await import("../../src/services/leads.service.js");
     const { scheduleMeeting } = await import("../../src/services/meetings.service.js");
     const lead = await withTestTransaction((client) =>
-      createLead(client, actor, { firstName: "Farid", company: "Foxtrot Inc", source: "event", email: "farid@example.com" }),
+      createLead(client, actor, WORKSPACE_ID, { firstName: "Farid", company: "Foxtrot Inc", source: "event", email: "farid@example.com" }),
     );
-    await withTestTransaction((client) => updateLead(client, actor, lead.id, { pipelineStage: "proposal_sent" }));
+    await withTestTransaction((client) => updateLead(client, actor, WORKSPACE_ID, lead.id, { pipelineStage: "proposal_sent" }));
 
     const meeting = await withTestTransaction((client) =>
-      scheduleMeeting(client, actor, { leadId: lead.id, title: "Follow-up call", at: "2030-01-04T04:30:00.000Z", durationMin: 30 }),
+      scheduleMeeting(client, actor, WORKSPACE_ID, { leadId: lead.id, title: "Follow-up call", at: "2030-01-04T04:30:00.000Z", durationMin: 30 }),
     );
     expect(meeting.ownerName).toBe(actor.fullName);
 
-    const routedLead = await getLeadRowOr404(pool, lead.id);
+    const routedLead = await getLeadRowOr404(pool, WORKSPACE_ID, lead.id);
     expect(routedLead.pipeline_stage).toBe("proposal_sent");
   });
 
@@ -219,37 +231,37 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const { scheduleMeeting, updateMeeting } = await import("../../src/services/meetings.service.js");
     const { listTasks } = await import("../../src/services/tasks.service.js");
     const lead = await withTestTransaction((client) =>
-      createLead(client, actor, { firstName: "Gita", company: "Golf Co", source: "event", email: "gita@example.com" }),
+      createLead(client, actor, WORKSPACE_ID, { firstName: "Gita", company: "Golf Co", source: "event", email: "gita@example.com" }),
     );
     const meeting = await withTestTransaction((client) =>
-      scheduleMeeting(client, actor, { leadId: lead.id, title: "Discovery", at: "2030-01-05T04:30:00.000Z", durationMin: 30 }),
+      scheduleMeeting(client, actor, WORKSPACE_ID, { leadId: lead.id, title: "Discovery", at: "2030-01-05T04:30:00.000Z", durationMin: 30 }),
     );
-    const openBefore = await listTasks(pool, { leadId: lead.id, status: "open" });
+    const openBefore = await listTasks(pool, WORKSPACE_ID, { leadId: lead.id, status: "open" });
     expect(openBefore.some((t) => t.type === "confirm_meeting")).toBe(true);
 
-    await withTestTransaction((client) => updateMeeting(client, actor, meeting.id, { status: "cancelled" }));
+    await withTestTransaction((client) => updateMeeting(client, actor, WORKSPACE_ID, meeting.id, { status: "cancelled" }));
 
-    const openAfter = await listTasks(pool, { leadId: lead.id, status: "open" });
+    const openAfter = await listTasks(pool, WORKSPACE_ID, { leadId: lead.id, status: "open" });
     expect(openAfter.some((t) => t.type === "confirm_meeting")).toBe(false);
   });
 
   it("keeps published workflow versions immutable while drafts remain editable", async () => {
     const { createWorkflow, updateDraftSteps, publishVersion, createDraft } = await import("../../src/services/workflows.service.js");
     const workflow = await withTestTransaction((client) =>
-      createWorkflow(client, actor, { name: "Integration workflow", trigger: "manual_enrollment" }),
+      createWorkflow(client, actor, WORKSPACE_ID, { name: "Integration workflow", trigger: "manual_enrollment" }),
     );
     await withTestTransaction((client) =>
-      updateDraftSteps(client, workflow.id, 1, [{ order: 0, delayDays: 0, action: "create_call_task", config: "Call lead", enabled: true }]),
+      updateDraftSteps(client, WORKSPACE_ID, workflow.id, 1, [{ order: 0, delayDays: 0, action: "create_call_task", config: "Call lead", enabled: true }]),
     );
-    await withTestTransaction((client) => publishVersion(client, actor, workflow.id, 1, "keep_existing"));
+    await withTestTransaction((client) => publishVersion(client, actor, WORKSPACE_ID, workflow.id, 1, "keep_existing"));
 
     await expect(
       withTestTransaction((client) =>
-        updateDraftSteps(client, workflow.id, 1, [{ order: 0, delayDays: 1, action: "create_call_task", config: "Changed", enabled: true }]),
+        updateDraftSteps(client, WORKSPACE_ID, workflow.id, 1, [{ order: 0, delayDays: 1, action: "create_call_task", config: "Changed", enabled: true }]),
       ),
     ).rejects.toMatchObject({ code: "invalid_transition" });
 
-    const withDraft = await withTestTransaction((client) => createDraft(client, actor, workflow.id));
+    const withDraft = await withTestTransaction((client) => createDraft(client, actor, WORKSPACE_ID, workflow.id));
     expect(withDraft.versions.some((version) => version.status === "draft" && version.version === 2)).toBe(true);
     expect(withDraft.versions.some((version) => version.status === "published" && version.version === 1)).toBe(true);
   });
@@ -257,7 +269,7 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
   it("updateDraftSteps never raises workflow_steps_unique_order under concurrent overlapping saves", async () => {
     const { createWorkflow, updateDraftSteps, getWorkflow } = await import("../../src/services/workflows.service.js");
     const workflow = await withTestTransaction((client) =>
-      createWorkflow(client, actor, { name: "Concurrency workflow", trigger: "manual_enrollment" }),
+      createWorkflow(client, actor, WORKSPACE_ID, { name: "Concurrency workflow", trigger: "manual_enrollment" }),
     );
 
     const payloadA = [
@@ -276,12 +288,12 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     // end up as the final state.
     await expect(
       Promise.all([
-        withTestTransaction((client) => updateDraftSteps(client, workflow.id, 1, payloadA)),
-        withTestTransaction((client) => updateDraftSteps(client, workflow.id, 1, payloadB)),
+        withTestTransaction((client) => updateDraftSteps(client, WORKSPACE_ID, workflow.id, 1, payloadA)),
+        withTestTransaction((client) => updateDraftSteps(client, WORKSPACE_ID, workflow.id, 1, payloadB)),
       ]),
     ).resolves.toBeDefined();
 
-    const final = await getWorkflow(pool, workflow.id);
+    const final = await getWorkflow(pool, WORKSPACE_ID, workflow.id);
     const finalSteps = final.versions.find((version) => version.version === 1)!.steps;
     const matchesA =
       finalSteps.length === payloadA.length &&
@@ -299,28 +311,28 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
       "../../src/services/workflows.service.js"
     );
     const workflow = await withTestTransaction((client) =>
-      createWorkflow(client, actor, { name: "Discard-reject workflow", trigger: "manual_enrollment" }),
+      createWorkflow(client, actor, WORKSPACE_ID, { name: "Discard-reject workflow", trigger: "manual_enrollment" }),
     );
     await withTestTransaction((client) =>
-      updateDraftSteps(client, workflow.id, 1, [
+      updateDraftSteps(client, WORKSPACE_ID, workflow.id, 1, [
         { order: 0, delayDays: 0, action: "create_call_task", config: "Call", enabled: true },
       ]),
     );
-    await withTestTransaction((client) => publishVersion(client, actor, workflow.id, 1, "keep_existing"));
+    await withTestTransaction((client) => publishVersion(client, actor, WORKSPACE_ID, workflow.id, 1, "keep_existing"));
 
     await expect(
-      withTestTransaction((client) => deleteWorkflowVersion(client, workflow.id, 1)),
+      withTestTransaction((client) => deleteWorkflowVersion(client, WORKSPACE_ID, workflow.id, 1)),
     ).rejects.toMatchObject({ code: "invalid_transition" });
   });
 
   it("deleteWorkflowVersion rejects the workflow's only version", async () => {
     const { createWorkflow, deleteWorkflowVersion } = await import("../../src/services/workflows.service.js");
     const workflow = await withTestTransaction((client) =>
-      createWorkflow(client, actor, { name: "Only-version workflow", trigger: "manual_enrollment" }),
+      createWorkflow(client, actor, WORKSPACE_ID, { name: "Only-version workflow", trigger: "manual_enrollment" }),
     );
 
     await expect(
-      withTestTransaction((client) => deleteWorkflowVersion(client, workflow.id, 1)),
+      withTestTransaction((client) => deleteWorkflowVersion(client, WORKSPACE_ID, workflow.id, 1)),
     ).rejects.toMatchObject({ code: "conflict", details: { reason: "only_version" } });
   });
 
@@ -329,17 +341,17 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
       "../../src/services/workflows.service.js"
     );
     const workflow = await withTestTransaction((client) =>
-      createWorkflow(client, actor, { name: "Discard workflow", trigger: "manual_enrollment" }),
+      createWorkflow(client, actor, WORKSPACE_ID, { name: "Discard workflow", trigger: "manual_enrollment" }),
     );
     await withTestTransaction((client) =>
-      updateDraftSteps(client, workflow.id, 1, [
+      updateDraftSteps(client, WORKSPACE_ID, workflow.id, 1, [
         { order: 0, delayDays: 0, action: "create_call_task", config: "Original", enabled: true },
       ]),
     );
-    await withTestTransaction((client) => publishVersion(client, actor, workflow.id, 1, "keep_existing"));
-    await withTestTransaction((client) => createDraft(client, actor, workflow.id));
+    await withTestTransaction((client) => publishVersion(client, actor, WORKSPACE_ID, workflow.id, 1, "keep_existing"));
+    await withTestTransaction((client) => createDraft(client, actor, WORKSPACE_ID, workflow.id));
 
-    const updated = await withTestTransaction((client) => deleteWorkflowVersion(client, workflow.id, 2));
+    const updated = await withTestTransaction((client) => deleteWorkflowVersion(client, WORKSPACE_ID, workflow.id, 2));
     expect(updated.versions.some((version) => version.version === 2)).toBe(false);
     const published = updated.versions.find((version) => version.version === 1)!;
     expect(published.status).toBe("published");
@@ -353,25 +365,25 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const { enrollLeadInWorkflow } = await import("../../src/services/runs.service.js");
 
     const lead = await withTestTransaction((client) =>
-      createLead(client, actor, { firstName: "Farah", company: "Foxtrot Co", source: "website", email: "farah@example.com" }),
+      createLead(client, actor, WORKSPACE_ID, { firstName: "Farah", company: "Foxtrot Co", source: "website", email: "farah@example.com" }),
     );
     // Trigger is call_not_connected, NOT manual_enrollment — autoEnroll(..., "manual_enrollment", ...)
     // would never find this workflow; enrollLeadInWorkflow must still enroll into it by id.
     const workflow = await withTestTransaction((client) =>
-      createWorkflow(client, actor, { name: "Not Connected Nurture (integration)", trigger: "call_not_connected" }),
+      createWorkflow(client, actor, WORKSPACE_ID, { name: "Not Connected Nurture (integration)", trigger: "call_not_connected" }),
     );
     await withTestTransaction((client) =>
-      updateDraftSteps(client, workflow.id, 1, [{ order: 0, delayDays: 0, action: "create_call_task", config: "Follow up", enabled: true }]),
+      updateDraftSteps(client, WORKSPACE_ID, workflow.id, 1, [{ order: 0, delayDays: 0, action: "create_call_task", config: "Follow up", enabled: true }]),
     );
-    await withTestTransaction((client) => publishVersion(client, actor, workflow.id, 1, "keep_existing"));
+    await withTestTransaction((client) => publishVersion(client, actor, WORKSPACE_ID, workflow.id, 1, "keep_existing"));
 
-    const run = await withTestTransaction((client) => enrollLeadInWorkflow(client, lead.id, workflow.id, "Manually enrolled (test)"));
+    const run = await withTestTransaction((client) => enrollLeadInWorkflow(client, WORKSPACE_ID, lead.id, workflow.id, "Manually enrolled (test)"));
     expect(run).not.toBeNull();
     expect(run?.workflowId).toBe(workflow.id);
     expect(run?.status).toBe("running");
 
     // Re-enrolling while the run is still active is a no-op (no duplicate enrollment), not an error.
-    const duplicate = await withTestTransaction((client) => enrollLeadInWorkflow(client, lead.id, workflow.id, "Second attempt"));
+    const duplicate = await withTestTransaction((client) => enrollLeadInWorkflow(client, WORKSPACE_ID, lead.id, workflow.id, "Second attempt"));
     expect(duplicate).toBeNull();
   });
 
@@ -381,11 +393,11 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     const { listTasks } = await import("../../src/services/tasks.service.js");
 
     const existing = await withTestTransaction((client) =>
-      createLead(client, actor, { firstName: "Dup", company: "Existing Co", source: "website", email: "dup-import@example.com" }),
+      createLead(client, actor, WORKSPACE_ID, { firstName: "Dup", company: "Existing Co", source: "website", email: "dup-import@example.com" }),
     );
 
     const result = await withTestTransaction((client) =>
-      importLeads(client, actor, [
+      importLeads(client, actor, WORKSPACE_ID, [
         { rowNumber: 2, firstName: "Grace", company: "Compiler Co", source: "cold_call", email: "grace-import@example.com" },
         { rowNumber: 3, firstName: "Dup2", company: "Whoever", source: "website", email: existing.email! },
         { rowNumber: 4, firstName: "", company: "No First Name Ltd", source: "website", email: "noone@example.com" },
@@ -404,11 +416,11 @@ describeIfDb("business flows (requires TEST_DATABASE_URL)", () => {
     expect(result.failed.find((f) => f.rowNumber === 4)?.reason).toBe("First name is required.");
     expect(result.failed.find((f) => f.rowNumber === 5)?.reason).toContain('Unknown source "made_up_source"');
 
-    const timeline = await listTimelineForLead(pool, result.created[0]!.id);
+    const timeline = await listTimelineForLead(pool, WORKSPACE_ID, result.created[0]!.id);
     expect(timeline.some((e) => e.title === "Lead Created" && e.detail?.includes("CSV import"))).toBe(true);
 
     // Imported leads need a next action too, same as a manually created lead.
-    const tasks = await listTasks(pool, { leadId: result.created[0]!.id, status: "open" });
+    const tasks = await listTasks(pool, WORKSPACE_ID, { leadId: result.created[0]!.id, status: "open" });
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ type: "call", title: "First call", ownerId: actor.id });
   });

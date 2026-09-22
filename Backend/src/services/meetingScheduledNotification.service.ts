@@ -1,7 +1,8 @@
 import type { Queryable } from "../dto.js";
 import { pool } from "../db.js";
+import { NotFoundError } from "../errors.js";
 import { getLeadRowOr404, type LeadRow } from "./leads.service.js";
-import { getMeetingRowOr404, toRenderMeeting, type MeetingRow } from "./meetings.service.js";
+import { toRenderMeeting, type MeetingRow } from "./meetings.service.js";
 import { renderTemplate, type TemplateRenderLead } from "../domain/templateRenderer.js";
 import { htmlToWhatsAppText } from "../domain/htmlToWhatsAppText.js";
 import { sendEmail } from "../providers/email.provider.js";
@@ -29,6 +30,20 @@ interface NotificationTemplateRow {
   subject: string | null;
   body: string;
   is_active: boolean;
+}
+
+/**
+ * Reads the meeting row directly (rather than meetings.service's
+ * getMeetingRowOr404, which now requires a workspaceId) since this module's
+ * entry points only ever receive a meetingId that a caller already resolved
+ * within the correct workspace — the meeting's own workspace_id column is
+ * then the source of truth for every downstream call in this file.
+ */
+async function getMeetingRowById(meetingId: string): Promise<MeetingRow> {
+  const result = await pool.query<MeetingRow>(`select * from public.meetings where id = $1`, [meetingId]);
+  const row = result.rows[0];
+  if (!row) throw new NotFoundError("Meeting");
+  return row;
 }
 
 async function getDefaultTemplate(channel: "email" | "whatsapp"): Promise<NotificationTemplateRow | null> {
@@ -63,7 +78,7 @@ async function sendMeetingEmailNow(meeting: MeetingRow, lead: LeadRow): Promise<
     }
     const rendered = renderTemplate(template, toRenderLead(lead), toRenderMeeting(meeting));
     const subject = rendered.subject?.trim() || template.name;
-    await sendEmail({ to: lead.email, subject, html: rendered.body });
+    await sendEmail(meeting.workspace_id, { to: lead.email, subject, html: rendered.body });
     await pool.query(
       `update public.meetings set notify_email_status = 'sent', notify_email_sent_at = now(), notify_email_error = null where id = $1`,
       [meeting.id],
@@ -76,8 +91,8 @@ async function sendMeetingEmailNow(meeting: MeetingRow, lead: LeadRow): Promise<
 
 /** Best-effort — never throws, so a failure here can't undo the meeting/Calendar sync that already succeeded. */
 export async function notifyMeetingScheduled(meetingId: string): Promise<void> {
-  const meeting = await getMeetingRowOr404(pool, meetingId);
-  const lead = await getLeadRowOr404(pool, meeting.lead_id);
+  const meeting = await getMeetingRowById(meetingId);
+  const lead = await getLeadRowOr404(pool, meeting.workspace_id, meeting.lead_id);
 
   if (lead.email) {
     await sendMeetingEmailNow(meeting, lead);
@@ -112,7 +127,7 @@ export async function claimQueuedMeetingWhatsappSends(db: Queryable, limit: numb
 
 export async function processQueuedMeetingWhatsappSend(row: MeetingRow): Promise<void> {
   try {
-    const lead = await getLeadRowOr404(pool, row.lead_id);
+    const lead = await getLeadRowOr404(pool, row.workspace_id, row.lead_id);
     if (lead.lifecycle_state === "do_not_contact" || !lead.phone_e164) {
       await pool.query(`update public.meetings set notify_whatsapp_status = 'failed', notify_whatsapp_error = $2 where id = $1`, [
         row.id,
@@ -131,7 +146,7 @@ export async function processQueuedMeetingWhatsappSend(row: MeetingRow): Promise
     const rendered = renderTemplate(template, toRenderLead(lead), toRenderMeeting(row));
     const whatsappText = htmlToWhatsAppText(rendered.body);
 
-    await sendWhatsApp({ source: { type: "meeting", id: row.id }, to: lead.phone_e164, body: whatsappText });
+    await sendWhatsApp(row.workspace_id, { source: { type: "meeting", id: row.id }, to: lead.phone_e164, body: whatsappText });
 
     await pool.query(
       `update public.meetings set notify_whatsapp_status = 'sent', notify_whatsapp_sent_at = now(), notify_whatsapp_error = null where id = $1`,

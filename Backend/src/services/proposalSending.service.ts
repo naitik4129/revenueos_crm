@@ -38,8 +38,8 @@ interface TemplateRow {
   is_active: boolean;
 }
 
-async function getActiveTemplateOrThrow(db: Queryable, id: string, channel: "email" | "whatsapp"): Promise<TemplateRow> {
-  const result = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [id]);
+async function getActiveTemplateOrThrow(db: Queryable, workspaceId: string, id: string, channel: "email" | "whatsapp"): Promise<TemplateRow> {
+  const result = await db.query<TemplateRow>(`select * from public.message_templates where id = $1 and workspace_id = $2`, [id, workspaceId]);
   const template = result.rows[0];
   if (!template) throw new NotFoundError("Template");
   if (template.channel !== channel) throw new ValidationError(`Template "${template.name}" is not a ${channel} template.`);
@@ -66,9 +66,9 @@ function toRenderLead(lead: LeadRow & { owner_name?: string | null }): TemplateR
  * that race is logged and swallowed rather than turned into a false
  * "this channel failed to send" — the send already happened.
  */
-async function tryAdvanceToSent(proposalId: string): Promise<void> {
+async function tryAdvanceToSent(workspaceId: string, proposalId: string): Promise<void> {
   try {
-    await withTransaction((client) => updateProposalStatus(client, null, proposalId, "sent"));
+    await withTransaction((client) => updateProposalStatus(client, null, workspaceId, proposalId, "sent"));
   } catch (err) {
     console.warn(`[proposalSending] Could not advance proposal ${proposalId} to "sent" after a successful channel send:`, err);
   }
@@ -87,7 +87,7 @@ async function sendProposalEmailNow(
     if (error || !data) throw new Error(`Failed to download proposal document: ${error?.message ?? "no data"}`);
     const buffer = Buffer.from(await data.arrayBuffer());
     const subject = rendered.subject?.trim() || template.name;
-    await sendEmail({
+    await sendEmail(proposal.workspace_id, {
       to: lead.email,
       subject,
       html: rendered.body,
@@ -97,7 +97,7 @@ async function sendProposalEmailNow(
       `update public.proposals set email_send_status = 'sent', email_sent_at = now(), email_send_error = null where id = $1`,
       [proposal.id],
     );
-    await tryAdvanceToSent(proposal.id);
+    await tryAdvanceToSent(proposal.workspace_id, proposal.id);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await pool.query(`update public.proposals set email_send_status = 'failed', email_send_error = $2 where id = $1`, [proposal.id, message]);
@@ -120,20 +120,20 @@ export interface ProposalDocumentFile {
   size: number;
 }
 
-export async function createAndSendProposal(actor: Actor, input: CreateAndSendProposalInput, file: ProposalDocumentFile) {
+export async function createAndSendProposal(actor: Actor, workspaceId: string, input: CreateAndSendProposalInput, file: ProposalDocumentFile) {
   if (!input.title.trim()) throw new ValidationError("Proposal title is required.");
   if (!input.emailTemplateId || !input.whatsappTemplateId) {
     throw new ValidationError("An email template and a WhatsApp template are both required.");
   }
 
-  const lead = await getLeadRowOr404(pool, input.leadId);
+  const lead = await getLeadRowOr404(pool, workspaceId, input.leadId);
   if (lead.lifecycle_state === "do_not_contact") throw new DoNotContactError();
 
   // Both validated up front so a bad selection fails fast; the WhatsApp
   // template is re-read fresh in processQueuedProposalWhatsappSend.
   const [emailTemplate] = await Promise.all([
-    getActiveTemplateOrThrow(pool, input.emailTemplateId, "email"),
-    getActiveTemplateOrThrow(pool, input.whatsappTemplateId, "whatsapp"),
+    getActiveTemplateOrThrow(pool, workspaceId, input.emailTemplateId, "email"),
+    getActiveTemplateOrThrow(pool, workspaceId, input.whatsappTemplateId, "whatsapp"),
   ]);
 
   const emailEligible = Boolean(lead.email);
@@ -149,7 +149,7 @@ export async function createAndSendProposal(actor: Actor, input: CreateAndSendPr
   if (uploadError) throw new Error(`Failed to upload proposal document: ${uploadError.message}`);
 
   const created = await withTransaction((client) =>
-    createProposal(client, actor, {
+    createProposal(client, actor, workspaceId, {
       leadId: input.leadId,
       title: input.title,
       amount: input.amount,
@@ -166,12 +166,12 @@ export async function createAndSendProposal(actor: Actor, input: CreateAndSendPr
   );
 
   if (emailEligible) {
-    const proposalRow = await getProposalRowOr404(pool, created.id);
+    const proposalRow = await getProposalRowOr404(pool, workspaceId, created.id);
     await sendProposalEmailNow(proposalRow, lead, emailTemplate);
   }
   // WhatsApp (if eligible) is left "queued" — the worker's poll loop drains it.
 
-  return getProposalOr404(pool, created.id);
+  return getProposalOr404(pool, workspaceId, created.id);
 }
 
 /**
@@ -199,7 +199,7 @@ export async function claimQueuedProposalWhatsappSends(db: Queryable, limit: num
 
 export async function processQueuedProposalWhatsappSend(row: ProposalRow): Promise<void> {
   try {
-    const lead = (await getLeadRowOr404(pool, row.lead_id)) as LeadRow & { owner_name: string | null };
+    const lead = (await getLeadRowOr404(pool, row.workspace_id, row.lead_id)) as LeadRow & { owner_name: string | null };
     if (lead.lifecycle_state === "do_not_contact" || !lead.phone_e164) {
       await pool.query(`update public.proposals set whatsapp_send_status = 'failed', whatsapp_send_error = $2 where id = $1`, [
         row.id,
@@ -210,11 +210,11 @@ export async function processQueuedProposalWhatsappSend(row: ProposalRow): Promi
     if (!row.whatsapp_template_id || !row.document_storage_path) {
       throw new Error("Queued WhatsApp proposal send is missing its template or document (invariant violation).");
     }
-    const template = await getActiveTemplateOrThrow(pool, row.whatsapp_template_id, "whatsapp");
+    const template = await getActiveTemplateOrThrow(pool, row.workspace_id, row.whatsapp_template_id, "whatsapp");
     const rendered = renderTemplate(template, toRenderLead(lead));
     const whatsappText = htmlToWhatsAppText(rendered.body);
 
-    await sendWhatsApp({
+    await sendWhatsApp(row.workspace_id, {
       source: { type: "proposal", id: row.id },
       to: lead.phone_e164,
       body: whatsappText,
@@ -230,7 +230,7 @@ export async function processQueuedProposalWhatsappSend(row: ProposalRow): Promi
       `update public.proposals set whatsapp_send_status = 'sent', whatsapp_sent_at = now(), whatsapp_send_error = null where id = $1`,
       [row.id],
     );
-    await tryAdvanceToSent(row.id);
+    await tryAdvanceToSent(row.workspace_id, row.id);
   } catch (err) {
     if (err instanceof ProviderDeferredError) {
       const attempts = row.whatsapp_attempt_count + 1;

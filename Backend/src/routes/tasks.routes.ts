@@ -23,7 +23,7 @@ tasksRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const filters = parseQuery(listQuerySchema, req.query);
-    res.json({ data: await listTasks(pool, filters) });
+    res.json({ data: await listTasks(pool, req.workspaceId!, filters) });
   }),
 );
 
@@ -39,7 +39,7 @@ tasksRouter.post(
   "/",
   asyncHandler(async (req, res) => {
     const input = parseBody(createSchema, req.body);
-    const task = await withTransaction((client) => createTask(client, req.actor!, { ...input, origin: "manual" }));
+    const task = await withTransaction((client) => createTask(client, req.actor!, req.workspaceId!, { ...input, origin: "manual" }));
     res.status(201).json(taskToDto(task));
   }),
 );
@@ -55,14 +55,14 @@ tasksRouter.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const patch = parseBody(updateSchema, req.body);
-    res.json(await withTransaction((client) => updateTask(client, req.actor!, req.params.id!, patch)));
+    res.json(await withTransaction((client) => updateTask(client, req.actor!, req.workspaceId!, req.params.id!, patch)));
   }),
 );
 
 tasksRouter.post(
   "/:id/complete",
   asyncHandler(async (req, res) => {
-    const task = await withTransaction((client) => completeTask(client, req.actor!, req.params.id!));
+    const task = await withTransaction((client) => completeTask(client, req.actor!, req.workspaceId!, req.params.id!));
     res.json(taskToDto(task));
   }),
 );
@@ -73,7 +73,7 @@ tasksRouter.post(
   "/:id/cancel",
   asyncHandler(async (req, res) => {
     const { reason } = parseBody(cancelSchema, req.body ?? {});
-    const task = await withTransaction((client) => cancelTask(client, req.actor!, req.params.id!, reason));
+    const task = await withTransaction((client) => cancelTask(client, req.actor!, req.workspaceId!, req.params.id!, reason));
     res.json(taskToDto(task));
   }),
 );

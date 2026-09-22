@@ -9,8 +9,11 @@ dashboardRouter.use(requireAuth);
 
 dashboardRouter.get(
   "/summary",
-  asyncHandler(async (_req, res) => {
-    const [summary, queue] = await Promise.all([getDashboardSummary(pool), listTodaysQueue(pool)]);
+  asyncHandler(async (req, res) => {
+    const [summary, queue] = await Promise.all([
+      getDashboardSummary(pool, req.workspaceId!),
+      listTodaysQueue(pool, req.workspaceId!),
+    ]);
     res.json({ ...summary, todaysQueue: queue });
   }),
 );

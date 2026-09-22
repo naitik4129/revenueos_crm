@@ -22,6 +22,7 @@ import { normalizeEmail } from "../domain/email.js";
 
 export interface LeadRow {
   id: string;
+  workspace_id: string;
   first_name: string;
   last_name: string;
   company: string;
@@ -182,17 +183,18 @@ export function validateLeadFields(input: LeadFieldsInput): ValidatedLeadFields 
   };
 }
 
-export async function createLead(db: Queryable, actor: Actor, input: CreateLeadInput): Promise<LeadRow> {
+export async function createLead(db: Queryable, actor: Actor, workspaceId: string, input: CreateLeadInput): Promise<LeadRow> {
   const fields = validateLeadFields(input);
 
   const ownerId = input.ownerId ?? actor.id;
   const result = await db.query<{ id: string }>(
     `insert into public.leads
-      (first_name, last_name, company, job_title, industry, email, phone, phone_e164, source,
+      (workspace_id, first_name, last_name, company, job_title, industry, email, phone, phone_e164, source,
        service_interest, owner_id, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      returning id`,
     [
+      workspaceId,
       fields.firstName,
       fields.lastName,
       fields.company,
@@ -232,7 +234,7 @@ export async function createLead(db: Queryable, actor: Actor, input: CreateLeadI
   // active lead should never sit with nothing assigned — see the leads list
   // page's "no next action" warning) rather than waiting for a rep to
   // remember to add one manually.
-  await createTask(db, actor, {
+  await createTask(db, actor, workspaceId, {
     leadId: id,
     ownerId,
     type: "call",
@@ -245,13 +247,13 @@ export async function createLead(db: Queryable, actor: Actor, input: CreateLeadI
   // starts immediately in parallel with the human BD call task above, not
   // after it. Enrollment is a quiet no-op if no active published workflow
   // is configured for this trigger yet (see autoEnroll).
-  await autoEnroll(db, id, "lead_created", "New lead entered CRM - Stage 1 welcome sequence");
+  await autoEnroll(db, workspaceId, id, "lead_created", "New lead entered CRM - Stage 1 welcome sequence");
 
-  return getLeadRowOr404(db, id);
+  return getLeadRowOr404(db, workspaceId, id);
 }
 
-export async function getLeadRowOr404(db: Queryable, id: string): Promise<LeadRow> {
-  const result = await db.query<LeadRow>(`${LEAD_SELECT} where l.id = $1`, [id]);
+export async function getLeadRowOr404(db: Queryable, workspaceId: string, id: string): Promise<LeadRow> {
+  const result = await db.query<LeadRow>(`${LEAD_SELECT} where l.id = $1 and l.workspace_id = $2`, [id, workspaceId]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Lead");
   return row;
@@ -278,15 +280,18 @@ export interface ImportLeadsResult {
  * rules as createLead (validateLeadFields) rather than trusting the client's
  * own parse-time checks. Invalid rows are skipped and reported (partial
  * import, not all-or-nothing -- product decision). A row whose email or
- * phone matches an EXISTING lead, or another row earlier in the same file,
- * is skipped and reported as a duplicate rather than overwriting anything.
- * Every created lead gets the same "Lead Created"/"Lead Assigned" timeline
- * events and the same automatic "First call" task createLead writes, so
- * it's traceable from the lead's own history and immediately actionable --
- * no separate audit table, since importing (unlike hard-delete) isn't
- * irreversible and a bad import can just be deleted normally.
+ * phone matches an EXISTING lead IN THIS WORKSPACE, or another row earlier
+ * in the same file, is skipped and reported as a duplicate rather than
+ * overwriting anything -- duplicate detection is workspace-scoped, since the
+ * same person/company may legitimately be a separate lead in a different
+ * workspace. Every created lead gets the same "Lead Created"/"Lead
+ * Assigned" timeline events and the same automatic "First call" task
+ * createLead writes, so it's traceable from the lead's own history and
+ * immediately actionable -- no separate audit table, since importing
+ * (unlike hard-delete) isn't irreversible and a bad import can just be
+ * deleted normally.
  */
-export async function importLeads(db: Queryable, actor: Actor, rows: ImportLeadRowInput[]): Promise<ImportLeadsResult> {
+export async function importLeads(db: Queryable, actor: Actor, workspaceId: string, rows: ImportLeadRowInput[]): Promise<ImportLeadsResult> {
   const created: LeadRow[] = [];
   const duplicates: ImportRowOutcome[] = [];
   const failed: ImportRowOutcome[] = [];
@@ -305,9 +310,10 @@ export async function importLeads(db: Queryable, actor: Actor, rows: ImportLeadR
   const existing = await db.query<{ email: string | null; phone_e164: string | null }>(
     `select lower(email) as email, phone_e164
        from public.leads
-      where (email is not null and lower(email) = any($1::text[]))
-         or (phone_e164 is not null and phone_e164 = any($2::text[]))`,
-    [emailKeys, phoneKeys],
+      where workspace_id = $3
+        and ((email is not null and lower(email) = any($1::text[]))
+         or (phone_e164 is not null and phone_e164 = any($2::text[])))`,
+    [emailKeys, phoneKeys, workspaceId],
   );
   const existingEmails = new Set(existing.rows.flatMap((r) => (r.email ? [r.email] : [])));
   const existingPhones = new Set(existing.rows.flatMap((r) => (r.phone_e164 ? [r.phone_e164] : [])));
@@ -336,11 +342,12 @@ export async function importLeads(db: Queryable, actor: Actor, rows: ImportLeadR
 
     const result = await db.query<{ id: string }>(
       `insert into public.leads
-        (first_name, last_name, company, job_title, industry, email, phone, phone_e164, source,
+        (workspace_id, first_name, last_name, company, job_title, industry, email, phone, phone_e164, source,
          service_interest, owner_id, created_by, created_by_name)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        returning id`,
       [
+        workspaceId,
         fields.firstName,
         fields.lastName,
         fields.company,
@@ -372,7 +379,7 @@ export async function importLeads(db: Queryable, actor: Actor, rows: ImportLeadR
       detail: `Owner: ${ownerName}`,
       ...actorEvent(actor),
     });
-    await createTask(db, actor, {
+    await createTask(db, actor, workspaceId, {
       leadId: id,
       ownerId: actor.id,
       type: "call",
@@ -383,9 +390,9 @@ export async function importLeads(db: Queryable, actor: Actor, rows: ImportLeadR
 
     // Same Stage 1 welcome sequence as a single lead create — every
     // imported row gets it, not just leads added one at a time.
-    await autoEnroll(db, id, "lead_created", "New lead entered CRM - Stage 1 welcome sequence (CSV import)");
+    await autoEnroll(db, workspaceId, id, "lead_created", "New lead entered CRM - Stage 1 welcome sequence (CSV import)");
 
-    created.push(await getLeadRowOr404(db, id));
+    created.push(await getLeadRowOr404(db, workspaceId, id));
   }
 
   return { created, duplicates, failed, totalRows: rows.length };
@@ -402,10 +409,10 @@ export interface ListLeadsFilters {
   offset?: number;
 }
 
-export async function listLeads(db: Queryable, filters: ListLeadsFilters) {
-  const clauses: string[] = [];
-  const params: unknown[] = [];
-  let i = 1;
+export async function listLeads(db: Queryable, workspaceId: string, filters: ListLeadsFilters) {
+  const clauses: string[] = [`l.workspace_id = $1`];
+  const params: unknown[] = [workspaceId];
+  let i = 2;
 
   if (filters.stage) {
     clauses.push(`l.pipeline_stage = $${i++}`);
@@ -435,7 +442,7 @@ export async function listLeads(db: Queryable, filters: ListLeadsFilters) {
     i++;
   }
 
-  const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
+  const where = `where ${clauses.join(" and ")}`;
   const limit = Math.min(filters.limit ?? 200, 500);
   const offset = filters.offset ?? 0;
   params.push(limit, offset);
@@ -503,14 +510,22 @@ export interface UpdateLeadInput {
  * endpoints (setAutomationMode, markDnc, reactivateLead, mergeLead, ...)
  * because they carry side effects (workflow cancellation, task cleanup,
  * audit trail entries) that a bare field patch must not silently skip.
+ *
+ * Every mutating function below re-fetches the lead through
+ * getLeadRowOr404(db, workspaceId, id) before writing anything — that single
+ * check is what enforces workspace isolation (a foreign-workspace id 404s
+ * immediately); the update/insert statements that follow key off `id`
+ * alone, which is safe once that check has passed since ids are never
+ * reused across workspaces.
  */
 export async function updateLead(
   db: Queryable,
   actor: Actor | null,
+  workspaceId: string,
   id: string,
   patch: UpdateLeadInput,
 ): Promise<LeadRow> {
-  const current = await getLeadRowOr404(db, id);
+  const current = await getLeadRowOr404(db, workspaceId, id);
 
   if (patch.pipelineStage) {
     assertValidPipelineStage(patch.pipelineStage);
@@ -596,7 +611,7 @@ export async function updateLead(
     });
   }
 
-  return getLeadRowOr404(db, id);
+  return getLeadRowOr404(db, workspaceId, id);
 }
 
 /**
@@ -608,21 +623,21 @@ export async function updateLead(
  * table has no FK to leads, so it survives the cascade and gives an
  * investigation trail (not an undo mechanism) for who deleted what.
  */
-export async function deleteLead(db: Queryable, actor: Actor, id: string): Promise<void> {
-  const lead = await getLeadRowOr404(db, id);
+export async function deleteLead(db: Queryable, actor: Actor, workspaceId: string, id: string): Promise<void> {
+  const lead = await getLeadRowOr404(db, workspaceId, id);
 
   await db.query(
-    `insert into public.deleted_leads_audit (lead_id, snapshot, deleted_by, deleted_by_name)
-     values ($1,$2,$3,$4)`,
-    [id, JSON.stringify(leadToDto(lead)), actor.id, actor.fullName],
+    `insert into public.deleted_leads_audit (workspace_id, lead_id, snapshot, deleted_by, deleted_by_name)
+     values ($1,$2,$3,$4,$5)`,
+    [workspaceId, id, JSON.stringify(leadToDto(lead)), actor.id, actor.fullName],
   );
 
   await db.query(`delete from public.leads where id = $1`, [id]);
 }
 
-export async function addNote(db: Queryable, actor: Actor, leadId: string, body: string) {
+export async function addNote(db: Queryable, actor: Actor, workspaceId: string, leadId: string, body: string) {
   if (!body.trim()) throw new ValidationError("Note body is required.");
-  await getLeadRowOr404(db, leadId);
+  await getLeadRowOr404(db, workspaceId, leadId);
 
   const result = await db.query<{ id: string; created_at: Date }>(
     `insert into public.lead_notes (lead_id, author_id, author_name, body)
@@ -640,10 +655,14 @@ export async function addNote(db: Queryable, actor: Actor, leadId: string, body:
   return { id: result.rows[0]!.id, author: actor.fullName, at: result.rows[0]!.created_at.toISOString(), body: body.trim() };
 }
 
-export async function listNotes(db: Queryable, leadId: string) {
+export async function listNotes(db: Queryable, workspaceId: string, leadId: string) {
   const result = await db.query<{ id: string; author_name: string; body: string; created_at: Date }>(
-    `select id, author_name, body, created_at from public.lead_notes where lead_id = $1 order by created_at desc`,
-    [leadId],
+    `select n.id, n.author_name, n.body, n.created_at
+       from public.lead_notes n
+       join public.leads l on l.id = n.lead_id
+      where n.lead_id = $1 and l.workspace_id = $2
+      order by n.created_at desc`,
+    [leadId, workspaceId],
   );
   return result.rows.map((r) => ({ id: r.id, author: r.author_name, body: r.body, at: r.created_at.toISOString() }));
 }
@@ -657,11 +676,12 @@ export async function listNotes(db: Queryable, leadId: string) {
 export async function setAutomationMode(
   db: Queryable,
   actor: Actor,
+  workspaceId: string,
   leadId: string,
   mode: AutomationMode,
   reason?: string,
 ) {
-  const current = await getLeadRowOr404(db, leadId);
+  const current = await getLeadRowOr404(db, workspaceId, leadId);
   if (isTerminalLifecycle(current.lifecycle_state)) {
     throw new ConflictError(
       `Cannot change automation mode: lead lifecycle is "${current.lifecycle_state}" (automation stays stopped).`,
@@ -676,7 +696,7 @@ export async function setAutomationMode(
 
   await applyAutomationModeToRuns(db, leadId, mode, reason ?? `Lead automation set to ${mode}`);
 
-  return getLeadRowOr404(db, leadId);
+  return getLeadRowOr404(db, workspaceId, leadId);
 }
 
 export interface MarkDncInput {
@@ -690,9 +710,9 @@ export interface MarkDncInput {
  * additionally clear open tasks here (the DB cascade only touches
  * automation, not manual tasks) so no inappropriate next action survives.
  */
-export async function markDnc(db: Queryable, actor: Actor, leadId: string, input: MarkDncInput) {
+export async function markDnc(db: Queryable, actor: Actor, workspaceId: string, leadId: string, input: MarkDncInput) {
   if (!input.reason.trim()) throw new ValidationError("A reason is required to mark Do Not Contact.");
-  const current = await getLeadRowOr404(db, leadId);
+  const current = await getLeadRowOr404(db, workspaceId, leadId);
   if (current.lifecycle_state === "do_not_contact") return current;
 
   await db.query(
@@ -713,7 +733,7 @@ export async function markDnc(db: Queryable, actor: Actor, leadId: string, input
     ...actorEvent(actor),
   });
 
-  return getLeadRowOr404(db, leadId);
+  return getLeadRowOr404(db, workspaceId, leadId);
 }
 
 /**
@@ -723,9 +743,9 @@ export async function markDnc(db: Queryable, actor: Actor, leadId: string, input
  * the write or it raises, so a caller cannot accidentally clear DNC via a
  * generic patch.
  */
-export async function reactivateFromDnc(db: Queryable, actor: Actor, leadId: string, reason: string) {
+export async function reactivateFromDnc(db: Queryable, actor: Actor, workspaceId: string, leadId: string, reason: string) {
   if (!reason.trim()) throw new ValidationError("A reason is required to reactivate a Do Not Contact lead.");
-  const current = await getLeadRowOr404(db, leadId);
+  const current = await getLeadRowOr404(db, workspaceId, leadId);
   if (current.lifecycle_state !== "do_not_contact") {
     throw new ConflictError("Lead is not currently Do Not Contact.");
   }
@@ -740,12 +760,13 @@ export async function reactivateFromDnc(db: Queryable, actor: Actor, leadId: str
   );
 
   await addTimelineEvent(db, { leadId, kind: "system", title: "Reactivated", detail: reason.trim(), ...actorEvent(actor) });
-  return getLeadRowOr404(db, leadId);
+  return getLeadRowOr404(db, workspaceId, leadId);
 }
 
 async function setTerminalLifecycle(
   db: Queryable,
   actor: Actor | null,
+  workspaceId: string,
   leadId: string,
   lifecycle: Exclude<LifecycleState, "active" | "do_not_contact" | "merged">,
   timelineTitle: string,
@@ -753,7 +774,7 @@ async function setTerminalLifecycle(
   extraColumns?: Record<string, unknown>,
 ) {
   assertValidLifecycleState(lifecycle);
-  const current = await getLeadRowOr404(db, leadId);
+  const current = await getLeadRowOr404(db, workspaceId, leadId);
   if (current.lifecycle_state === lifecycle) return current;
 
   const extraEntries = Object.entries(extraColumns ?? {});
@@ -765,11 +786,11 @@ async function setTerminalLifecycle(
   );
   await cancelOpenTasksForLead(db, actor, leadId, `Lead ${timelineTitle}`);
   await addTimelineEvent(db, { leadId, kind: "system", title: timelineTitle, detail: reason, ...(actor ? actorEvent(actor) : AUTOMATION_ACTOR) });
-  return getLeadRowOr404(db, leadId);
+  return getLeadRowOr404(db, workspaceId, leadId);
 }
 
-export const markWon = (db: Queryable, actor: Actor | null, leadId: string, reason?: string) =>
-  setTerminalLifecycle(db, actor, leadId, "won", "Won", reason);
+export const markWon = (db: Queryable, actor: Actor | null, workspaceId: string, leadId: string, reason?: string) =>
+  setTerminalLifecycle(db, actor, workspaceId, leadId, "won", "Won", reason);
 
 /**
  * A loss reason is required on every Lost lead (drives the reactivation
@@ -777,26 +798,26 @@ export const markWon = (db: Queryable, actor: Actor | null, leadId: string, reas
  * (leads_lost_has_reason), so lossReason must land in the SAME update
  * statement as lifecycle_state = 'lost', not a follow-up call.
  */
-export const markLost = (db: Queryable, actor: Actor, leadId: string, lossReason: LeadLossReason, notes?: string) =>
-  setTerminalLifecycle(db, actor, leadId, "lost", "Lost", notes ?? lossReason, { loss_reason: lossReason, loss_notes: notes?.trim() || null });
+export const markLost = (db: Queryable, actor: Actor, workspaceId: string, leadId: string, lossReason: LeadLossReason, notes?: string) =>
+  setTerminalLifecycle(db, actor, workspaceId, leadId, "lost", "Lost", notes ?? lossReason, { loss_reason: lossReason, loss_notes: notes?.trim() || null });
 
-export const markDiscarded = (db: Queryable, actor: Actor, leadId: string, reason?: string) =>
-  setTerminalLifecycle(db, actor, leadId, "discarded", "Discarded", reason);
+export const markDiscarded = (db: Queryable, actor: Actor, workspaceId: string, leadId: string, reason?: string) =>
+  setTerminalLifecycle(db, actor, workspaceId, leadId, "discarded", "Discarded", reason);
 
-export async function moveToLongTermNurture(db: Queryable, actor: Actor | null, leadId: string, reason?: string) {
-  const current = await getLeadRowOr404(db, leadId);
+export async function moveToLongTermNurture(db: Queryable, actor: Actor | null, workspaceId: string, leadId: string, reason?: string) {
+  const current = await getLeadRowOr404(db, workspaceId, leadId);
   if (current.lifecycle_state === "long_term_nurture") return current;
   await db.query(`update public.leads set lifecycle_state = 'long_term_nurture', last_activity_at = now() where id = $1`, [leadId]);
   await addTimelineEvent(db, { leadId, kind: "system", title: "Moved to Long-Term Nurture", detail: reason, ...(actor ? actorEvent(actor) : AUTOMATION_ACTOR) });
-  return getLeadRowOr404(db, leadId);
+  return getLeadRowOr404(db, workspaceId, leadId);
 }
 
 /**
  * Reactivating a Lost/Discarded/Long-Term-Nurture lead back to active,
  * retaining all prior history (edge case: "Reactivation").
  */
-export async function reactivateLead(db: Queryable, actor: Actor, leadId: string, reason?: string) {
-  const current = await getLeadRowOr404(db, leadId);
+export async function reactivateLead(db: Queryable, actor: Actor, workspaceId: string, leadId: string, reason?: string) {
+  const current = await getLeadRowOr404(db, workspaceId, leadId);
   if (current.lifecycle_state === "do_not_contact") {
     throw new ConflictError("This lead is Do Not Contact - use the DNC reactivation endpoint instead.");
   }
@@ -810,7 +831,7 @@ export async function reactivateLead(db: Queryable, actor: Actor, leadId: string
     [leadId],
   );
   await addTimelineEvent(db, { leadId, kind: "system", title: "Reactivated", detail: reason, ...actorEvent(actor) });
-  return getLeadRowOr404(db, leadId);
+  return getLeadRowOr404(db, workspaceId, leadId);
 }
 
 /**
@@ -818,11 +839,13 @@ export async function reactivateLead(db: Queryable, actor: Actor, leadId: string
  * merged and points at the target; its full history (notes/calls/tasks/
  * meetings/proposals/timeline) stays queryable under its own id rather than
  * being reparented, which is the safer choice for not losing anything.
+ * Both leads are loaded via getLeadRowOr404 under the caller's workspace, so
+ * a merge can never reach across workspaces.
  */
-export async function mergeLead(db: Queryable, actor: Actor, sourceLeadId: string, targetLeadId: string, reason?: string) {
+export async function mergeLead(db: Queryable, actor: Actor, workspaceId: string, sourceLeadId: string, targetLeadId: string, reason?: string) {
   if (sourceLeadId === targetLeadId) throw new ValidationError("A lead cannot be merged into itself.");
-  const source = await getLeadRowOr404(db, sourceLeadId);
-  const target = await getLeadRowOr404(db, targetLeadId);
+  const source = await getLeadRowOr404(db, workspaceId, sourceLeadId);
+  const target = await getLeadRowOr404(db, workspaceId, targetLeadId);
   if (source.lifecycle_state === "merged") throw new ConflictError("Source lead is already merged.");
   if (target.lifecycle_state === "merged") throw new ConflictError("Target lead is itself a merged (absorbed) lead.");
 
@@ -846,7 +869,7 @@ export async function mergeLead(db: Queryable, actor: Actor, sourceLeadId: strin
     ...actorEvent(actor),
   });
 
-  return getLeadRowOr404(db, sourceLeadId);
+  return getLeadRowOr404(db, workspaceId, sourceLeadId);
 }
 
 export interface SetContactabilityInput {
@@ -859,12 +882,12 @@ export interface SetContactabilityInput {
  * Per-channel contactability (product brief: "a bad phone number must not
  * invalidate the whole lead"). Independent of lifecycle/stage entirely.
  */
-export async function setContactability(db: Queryable, actor: Actor, leadId: string, input: SetContactabilityInput) {
+export async function setContactability(db: Queryable, actor: Actor, workspaceId: string, leadId: string, input: SetContactabilityInput) {
   const allowed = CONTACT_CHANNEL_STATUS[input.channel];
   if (!allowed.includes(input.status)) {
     throw new ValidationError(`"${input.status}" is not a valid status for channel "${input.channel}".`, { allowed });
   }
-  await getLeadRowOr404(db, leadId);
+  await getLeadRowOr404(db, workspaceId, leadId);
 
   await db.query(
     `insert into public.lead_contact_channels (lead_id, channel, status, reason, updated_by, updated_by_name)
@@ -883,13 +906,16 @@ export async function setContactability(db: Queryable, actor: Actor, leadId: str
     ...actorEvent(actor),
   });
 
-  return listContactability(db, leadId);
+  return listContactability(db, workspaceId, leadId);
 }
 
-export async function listContactability(db: Queryable, leadId: string) {
+export async function listContactability(db: Queryable, workspaceId: string, leadId: string) {
   const result = await db.query<{ channel: ContactChannel; status: string; reason: string | null; updated_at: Date }>(
-    `select channel, status, reason, updated_at from public.lead_contact_channels where lead_id = $1`,
-    [leadId],
+    `select c.channel, c.status, c.reason, c.updated_at
+       from public.lead_contact_channels c
+       join public.leads l on l.id = c.lead_id
+      where c.lead_id = $1 and l.workspace_id = $2`,
+    [leadId, workspaceId],
   );
   return result.rows.map((r) => ({ channel: r.channel, status: r.status, reason: r.reason ?? undefined, updatedAt: r.updated_at.toISOString() }));
 }
@@ -897,10 +923,11 @@ export async function listContactability(db: Queryable, leadId: string) {
 export async function logManualCommunication(
   db: Queryable,
   actor: Actor,
+  workspaceId: string,
   leadId: string,
   input: { channel: "email" | "whatsapp"; detail?: string },
 ) {
-  const lead = await getLeadRowOr404(db, leadId);
+  const lead = await getLeadRowOr404(db, workspaceId, leadId);
   if (lead.lifecycle_state === "do_not_contact") {
     throw new DoNotContactError();
   }
