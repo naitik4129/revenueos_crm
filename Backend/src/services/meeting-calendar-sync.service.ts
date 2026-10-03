@@ -1,7 +1,19 @@
 import { pool } from "../db.js";
 import { getLeadRowOr404 } from "./leads.service.js";
-import { loadGoogleCalendarConnection } from "./connections.service.js";
-import { createCalendarEvent, deleteCalendarEvent, updateCalendarEvent } from "../providers/google-calendar.provider.js";
+import { loadGoogleCalendarConnection, markGoogleCalendarReauthRequired } from "./connections.service.js";
+import {
+  CalendarSyncError,
+  createCalendarEvent,
+  deleteCalendarEvent,
+  updateCalendarEvent,
+} from "../providers/google-calendar.provider.js";
+
+/** If Google rejected the stored token, flip the connection to "error" so the user sees a Reconnect prompt. */
+async function flagReauthIfRevoked(workspaceId: string, error: unknown): Promise<void> {
+  if (error instanceof CalendarSyncError && error.reauthRequired) {
+    await markGoogleCalendarReauthRequired(workspaceId, error.message);
+  }
+}
 
 /**
  * Syncs a meeting to the shared Google Calendar connection, best-effort:
@@ -94,6 +106,7 @@ export async function syncMeetingCreated(meetingId: string): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to sync meeting to Google Calendar.";
     await pool.query(`update public.meetings set calendar_sync_status = 'failed', calendar_sync_error = $2 where id = $1`, [meetingId, message]);
+    await flagReauthIfRevoked(meeting.workspace_id, error);
   }
 }
 
@@ -121,6 +134,7 @@ export async function syncMeetingRescheduled(meetingId: string): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to update the Google Calendar event.";
     await pool.query(`update public.meetings set calendar_sync_status = 'failed', calendar_sync_error = $2 where id = $1`, [meetingId, message]);
+    await flagReauthIfRevoked(meeting.workspace_id, error);
   }
 }
 
@@ -137,5 +151,6 @@ export async function syncMeetingCancelled(meetingId: string): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to delete the Google Calendar event.";
     await pool.query(`update public.meetings set calendar_sync_error = $2 where id = $1`, [meetingId, message]);
+    await flagReauthIfRevoked(meeting.workspace_id, error);
   }
 }

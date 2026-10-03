@@ -382,6 +382,10 @@ export interface WhatsAppConnection {
 
 export interface GoogleCalendarConnection {
   configured: boolean;
+  /** The server has a shared Google app, so users can connect with one click. */
+  platformConfigured: boolean;
+  /** This workspace saved its own OAuth client (the "advanced" override). */
+  usesOwnCredentials: boolean;
   enabled: boolean;
   status: "disconnected" | "connected" | "error";
   clientId: string | null;

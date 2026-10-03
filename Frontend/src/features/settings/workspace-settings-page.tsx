@@ -101,7 +101,9 @@ function EmailPanel({ workspaceId }: { workspaceId: string }) {
         <CardContent className="p-6 text-sm text-muted-foreground">
           {query.isError ? (
             <div className="space-y-2">
-              <p className="text-destructive">Couldn't load the email connection: {message(query.error)}</p>
+              <p className="text-destructive">
+                Couldn't load the email connection: {message(query.error)}
+              </p>
               <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
                 <RefreshCw className="size-3.5" /> Retry
               </Button>
@@ -287,7 +289,9 @@ function WhatsAppPanel({ workspaceId }: { workspaceId: string }) {
         {!data ? (
           query.isError ? (
             <div className="space-y-2">
-              <p className="text-sm text-destructive">Couldn't load WhatsApp status: {message(query.error)}</p>
+              <p className="text-sm text-destructive">
+                Couldn't load WhatsApp status: {message(query.error)}
+              </p>
               <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
                 <RefreshCw className="size-3.5" /> Retry
               </Button>
@@ -481,6 +485,51 @@ function GoogleCalendarPanel({ workspaceId }: { workspaceId: string }) {
   });
   const data = query.data;
 
+  const credentialsForm = data && (
+    <>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Field label="Client ID">
+          <Input
+            value={clientId}
+            onChange={(e) => {
+              setDirty(true);
+              setClientId(e.target.value);
+            }}
+          />
+        </Field>
+        <Field label={`Client secret${data.clientSecretConfigured ? " (configured)" : ""}`}>
+          <Input
+            type="password"
+            value={clientSecret}
+            placeholder={data.clientSecretConfigured ? "•••••••• - retain current" : "GOCSPX-…"}
+            onChange={(e) => {
+              setDirty(true);
+              setClientSecret(e.target.value);
+            }}
+          />
+        </Field>
+      </div>
+      <Field label="Redirect URI">
+        <Input
+          value={redirectUri}
+          onChange={(e) => {
+            setDirty(true);
+            setRedirectUri(e.target.value);
+          }}
+        />
+      </Field>
+      <p className="-mt-3 text-xs text-muted-foreground">
+        Add this exact URL as an authorized redirect URI on the OAuth client in Google Cloud
+        Console.
+      </p>
+      <div className="flex justify-end border-b pb-4">
+        <Button onClick={() => saveCredentials.mutate()} disabled={saveCredentials.isPending}>
+          Save credentials
+        </Button>
+      </div>
+    </>
+  );
+
   return (
     <Card>
       <CardHeader>
@@ -496,7 +545,9 @@ function GoogleCalendarPanel({ workspaceId }: { workspaceId: string }) {
         {!data ? (
           query.isError ? (
             <div className="space-y-2">
-              <p className="text-sm text-destructive">Couldn't load Google Calendar status: {message(query.error)}</p>
+              <p className="text-sm text-destructive">
+                Couldn't load Google Calendar status: {message(query.error)}
+              </p>
               <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
                 <RefreshCw className="size-3.5" /> Retry
               </Button>
@@ -506,54 +557,32 @@ function GoogleCalendarPanel({ workspaceId }: { workspaceId: string }) {
           )
         ) : (
           <>
-            <Notice>
-              Register an OAuth 2.0 client (Web application) in Google Cloud Console with the
-              Calendar API enabled, then paste its credentials below. Nothing here is ever stored in
-              an env file - the client secret is encrypted in the database, same as the Resend API
-              key.
-            </Notice>
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Client ID">
-                <Input
-                  value={clientId}
-                  onChange={(e) => {
-                    setDirty(true);
-                    setClientId(e.target.value);
-                  }}
-                />
-              </Field>
-              <Field label={`Client secret${data.clientSecretConfigured ? " (configured)" : ""}`}>
-                <Input
-                  type="password"
-                  value={clientSecret}
-                  placeholder={
-                    data.clientSecretConfigured ? "•••••••• - retain current" : "GOCSPX-…"
-                  }
-                  onChange={(e) => {
-                    setDirty(true);
-                    setClientSecret(e.target.value);
-                  }}
-                />
-              </Field>
-            </div>
-            <Field label="Redirect URI">
-              <Input
-                value={redirectUri}
-                onChange={(e) => {
-                  setDirty(true);
-                  setRedirectUri(e.target.value);
-                }}
-              />
-            </Field>
-            <p className="-mt-3 text-xs text-muted-foreground">
-              Add this exact URL as an authorized redirect URI on the OAuth client in Google Cloud
-              Console.
-            </p>
-            <div className="flex justify-end border-b pb-4">
-              <Button onClick={() => saveCredentials.mutate()} disabled={saveCredentials.isPending}>
-                Save credentials
-              </Button>
-            </div>
+            {data.platformConfigured ? (
+              <details
+                className="rounded-md border px-3 py-2 text-sm"
+                open={data.usesOwnCredentials}
+              >
+                <summary className="cursor-pointer text-muted-foreground">
+                  Advanced: use your own Google app
+                </summary>
+                <div className="mt-3 space-y-4">
+                  <Notice>
+                    Most workspaces don't need this — just click Connect below. If you save your own
+                    OAuth client here it replaces the shared one, and you'll need to reconnect.
+                  </Notice>
+                  {credentialsForm}
+                </div>
+              </details>
+            ) : (
+              <>
+                <Notice>
+                  Register an OAuth 2.0 client (Web application) in Google Cloud Console with the
+                  Calendar API enabled, then paste its credentials below. The client secret is
+                  encrypted in the database, same as the Resend API key.
+                </Notice>
+                {credentialsForm}
+              </>
+            )}
 
             <div className="grid gap-3 sm:grid-cols-2">
               <Metric label="Status" value={data.status.replaceAll("_", " ")} />
@@ -562,7 +591,11 @@ function GoogleCalendarPanel({ workspaceId }: { workspaceId: string }) {
             {data.lastError && <Notice danger>{data.lastError}</Notice>}
             <div className="flex flex-wrap gap-2 border-t pt-4">
               <Button onClick={() => start.mutate()} disabled={!data.configured || start.isPending}>
-                {data.status === "connected" ? "Reconnect" : "Connect Google Calendar"}
+                {data.status === "connected"
+                  ? "Reconnect"
+                  : data.status === "error"
+                    ? "Reconnect Google Calendar"
+                    : "Connect Google Calendar"}
               </Button>
               {data.status === "connected" && (
                 <Button

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Actor } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
 import type { Queryable } from "../dto.js";
+import { env } from "../env.js";
 import { ValidationError } from "../errors.js";
 import { decryptJson, decryptText, encryptJson, encryptText, type EncryptedValue } from "../security/encryption.js";
 import { recordAdminAudit } from "./admin-audit.service.js";
@@ -299,13 +300,25 @@ function decryptClientSecret(row: GoogleCalendarRow): string | null {
   );
 }
 
+/** The platform-wide Google OAuth app from the GOOGLE_OAUTH_* env vars (validated all-or-none in env.ts), or null when not configured. */
+function platformGoogleOAuthConfig(): GoogleOAuthClientConfig | null {
+  if (!env.GOOGLE_OAUTH_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET || !env.GOOGLE_OAUTH_REDIRECT_URI) return null;
+  return {
+    clientId: env.GOOGLE_OAUTH_CLIENT_ID,
+    clientSecret: env.GOOGLE_OAUTH_CLIENT_SECRET,
+    redirectUri: env.GOOGLE_OAUTH_REDIRECT_URI,
+  };
+}
+
 /**
  * Used by meeting-calendar sync (Backend/src/services/meeting-calendar-sync.service.ts)
  * to get both the connected account (refreshToken) and the OAuth app to
- * authenticate as (oauthConfig) — both entered per-workspace and DB-stored,
- * never from environment variables. `oauthConfig` is null whenever this
- * workspace hasn't (yet, or no longer) fully entered
- * client_id/client_secret/redirect_uri.
+ * authenticate as (oauthConfig). The OAuth app is the workspace's own
+ * DB-stored client when it has fully entered one (an "advanced" override),
+ * otherwise the platform-wide app from the environment — which is what makes
+ * the one-click Connect flow work. `oauthConfig` is null only when neither
+ * exists. Note a refresh token is bound to the client that issued it, so
+ * switching between the two sources requires reconnecting.
  */
 export async function loadGoogleCalendarConnection(workspaceId: string, db: Queryable = pool) {
   const row = await loadGoogleCalendarRow(workspaceId, db);
@@ -317,18 +330,23 @@ export async function loadGoogleCalendarConnection(workspaceId: string, db: Quer
         )
       : null;
   const clientSecret = decryptClientSecret(row);
-  const oauthConfig: GoogleOAuthClientConfig | null =
+  const ownConfig: GoogleOAuthClientConfig | null =
     row.client_id && clientSecret && row.redirect_uri
       ? { clientId: row.client_id, clientSecret, redirectUri: row.redirect_uri }
       : null;
-  return { row, refreshToken, oauthConfig };
+  const oauthConfig = ownConfig ?? platformGoogleOAuthConfig();
+  return { row, refreshToken, oauthConfig, usesOwnCredentials: ownConfig !== null };
 }
 
 export async function getGoogleCalendarConnection(workspaceId: string) {
   const row = await loadGoogleCalendarRow(workspaceId);
   const clientSecretConfigured = Boolean(row.client_secret_ciphertext);
+  const ownCredentialsConfigured = Boolean(row.client_id && clientSecretConfigured && row.redirect_uri);
+  const platformConfigured = platformGoogleOAuthConfig() !== null;
   return {
-    configured: Boolean(row.client_id && clientSecretConfigured && row.redirect_uri),
+    configured: ownCredentialsConfigured || platformConfigured,
+    platformConfigured,
+    usesOwnCredentials: ownCredentialsConfigured,
     enabled: row.enabled,
     status: row.status,
     clientId: row.client_id,
@@ -388,7 +406,7 @@ const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 export async function startGoogleCalendarOAuth(actor: Actor, workspaceId: string) {
   const { oauthConfig } = await loadGoogleCalendarConnection(workspaceId);
   if (!oauthConfig) {
-    throw new ValidationError("Enter and save the Google OAuth client ID, secret, and redirect URI first.");
+    throw new ValidationError("Google Calendar isn't set up on this server yet. Ask your administrator to configure it.");
   }
   const state = randomBytes(24).toString("hex");
   const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL_MS);
@@ -425,7 +443,7 @@ export async function completeGoogleCalendarOAuth(code: string, state: string): 
     return { ok: false, error: "This connection request expired. Please try connecting again." };
   }
   if (!oauthConfig) {
-    return { ok: false, error: "Google OAuth client credentials are no longer configured." };
+    return { ok: false, error: "Google Calendar isn't set up on this server anymore. Ask your administrator to configure it." };
   }
 
   try {
@@ -457,6 +475,22 @@ export async function completeGoogleCalendarOAuth(code: string, state: string): 
     });
     return { ok: false, error: message };
   }
+}
+
+/**
+ * Called when Google rejects the stored refresh token (user revoked access, or
+ * it expired). Flags the connection as errored so the settings page shows a
+ * Reconnect prompt, and clears the dead token so later meetings skip sync
+ * cleanly instead of failing against Google every time.
+ */
+export async function markGoogleCalendarReauthRequired(workspaceId: string, message: string) {
+  await pool.query(
+    `update public.google_calendar_connection
+        set status = 'error', enabled = false, last_error = $1,
+            refresh_token_ciphertext = null, refresh_token_iv = null, refresh_token_tag = null
+      where workspace_id = $2 and status = 'connected'`,
+    [message, workspaceId],
+  );
 }
 
 /** Revokes the connected account only — the OAuth app's own client_id/client_secret/redirect_uri stay saved so reconnecting doesn't require re-entering them. */

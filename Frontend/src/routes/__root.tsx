@@ -124,6 +124,9 @@ function RootComponent() {
   );
 }
 
+/** Routes served without authentication — must also render without a session or backend. */
+const PUBLIC_PATHS = ["/privacy"];
+
 /** Gates the application behind required Supabase authentication. */
 function AuthGate({ children, queryClient }: { children: ReactNode; queryClient: QueryClient }) {
   const { loading, session } = useSupabaseSession();
@@ -139,6 +142,10 @@ function AuthGate({ children, queryClient }: { children: ReactNode; queryClient:
   useEffect(() => {
     if (!loading && !session) queryClient.clear();
   }, [loading, session, queryClient]);
+
+  // Public pages that must load for signed-out visitors (and Google's OAuth
+  // reviewers): skip the login gate and the app shell entirely.
+  if (PUBLIC_PATHS.includes(pathname.replace(/\/+$/, ""))) return <>{children}</>;
 
   if (configurationError) {
     return (

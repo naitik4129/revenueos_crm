@@ -3,10 +3,26 @@ import { google } from "googleapis";
 
 /** The OAuth client is configured but a Calendar API call itself failed. */
 export class CalendarSyncError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** Google rejected the stored refresh token (revoked/expired) — the user must reconnect. */
+    readonly reauthRequired = false,
+  ) {
     super(message);
     this.name = "CalendarSyncError";
   }
+}
+
+const REAUTH_MESSAGE = "Google Calendar access was revoked or expired. Please reconnect Google Calendar.";
+
+function isInvalidGrantError(error: unknown): boolean {
+  const data = (error as { response?: { data?: { error?: string } } })?.response?.data;
+  return data?.error === "invalid_grant" || (error instanceof Error && error.message.includes("invalid_grant"));
+}
+
+/** Wraps a Calendar API failure, flagging revoked/expired tokens so callers can prompt a reconnect. */
+function toSyncError(error: unknown): CalendarSyncError {
+  return isInvalidGrantError(error) ? new CalendarSyncError(REAUTH_MESSAGE, true) : new CalendarSyncError(messageFrom(error));
 }
 
 // calendar.events is the actual permission we need; userinfo.email is only
@@ -14,7 +30,8 @@ export class CalendarSyncError extends Error {
 // connected — without it, Google rejects the userinfo lookup below with an
 // insufficient-scope error and connected_email silently stays null even
 // though the connection itself succeeded.
-const SCOPES = ["https://www.googleapis.com/auth/calendar.events", "https://www.googleapis.com/auth/userinfo.email"];
+const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+const SCOPES = [CALENDAR_SCOPE, "https://www.googleapis.com/auth/userinfo.email"];
 
 /**
  * The app's own OAuth client registration (client_id/client_secret/redirect_uri).
@@ -58,6 +75,14 @@ export async function exchangeCodeForTokens(
   if (!tokens.refresh_token) {
     throw new CalendarSyncError(
       "Google did not return a refresh token. In your Google Account's Security settings, remove this app's prior access, then connect again.",
+    );
+  }
+  // Google's consent screen lets the user untick individual permissions. A
+  // token without the Calendar scope would "connect" fine and then fail every
+  // sync, so reject it here with an actionable message.
+  if (!tokens.scope?.split(" ").includes(CALENDAR_SCOPE)) {
+    throw new CalendarSyncError(
+      "Calendar permission was not granted. Connect again and make sure the checkbox to view and edit calendar events is ticked.",
     );
   }
   client.setCredentials(tokens);
@@ -134,7 +159,7 @@ export async function createCalendarEvent(input: CreateCalendarEventInput): Prom
     return { eventId: event.id, meetLink: event.hangoutLink ?? null };
   } catch (error) {
     if (error instanceof CalendarSyncError) throw error;
-    throw new CalendarSyncError(messageFrom(error));
+    throw toSyncError(error);
   }
 }
 
@@ -164,7 +189,7 @@ export async function updateCalendarEvent(input: UpdateCalendarEventInput): Prom
     });
   } catch (error) {
     if (isGoneError(error)) return;
-    throw new CalendarSyncError(messageFrom(error));
+    throw toSyncError(error);
   }
 }
 
@@ -180,6 +205,6 @@ export async function deleteCalendarEvent(input: {
   } catch (error) {
     // Already gone is fine — nothing left to clean up.
     if (isGoneError(error)) return;
-    throw new CalendarSyncError(messageFrom(error));
+    throw toSyncError(error);
   }
 }
