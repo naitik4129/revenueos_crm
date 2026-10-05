@@ -30,6 +30,13 @@ const EnvSchema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: blankToUndefined(z.string().optional()),
   GOOGLE_OAUTH_CLIENT_SECRET: blankToUndefined(z.string().optional()),
   GOOGLE_OAUTH_REDIRECT_URI: blankToUndefined(z.string().url().optional()),
+
+  // Public website-form lead intake (POST /api/v1/public/leads). Both must be
+  // set together or the endpoint stays disabled (checked in loadEnv). The key
+  // is a shared secret held only by the website's server; it is bound to the
+  // one workspace named here.
+  INGEST_API_KEY: blankToUndefined(z.string().min(32, "INGEST_API_KEY must be at least 32 characters").optional()),
+  INGEST_WORKSPACE_ID: blankToUndefined(z.string().uuid().optional()),
 });
 
 // WORKER_* tuning is validated separately in workerEnv.ts. Provider secrets
@@ -55,6 +62,9 @@ function loadEnv() {
     throw new Error(
       "GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET and GOOGLE_OAUTH_REDIRECT_URI must all be set together. See .env.example.",
     );
+  }
+  if (Boolean(parsed.data.INGEST_API_KEY) !== Boolean(parsed.data.INGEST_WORKSPACE_ID)) {
+    throw new Error("INGEST_API_KEY and INGEST_WORKSPACE_ID must both be set, or both left blank. See .env.example.");
   }
   return parsed.data;
 }

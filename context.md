@@ -150,6 +150,10 @@ Leads and lead sub-resources:
 - `GET /leads/:id/proposals`
 - `GET /leads/:id/runs`
 
+Public website lead intake (no Supabase login; disabled unless `INGEST_API_KEY` + `INGEST_WORKSPACE_ID` are set):
+
+- `POST /public/leads` — see "Website Lead Intake" below.
+
 Tasks, meetings, proposals, workflows, runs, dashboard, notifications:
 
 - `GET /tasks`, `POST /tasks`, `PATCH /tasks/:id`, `POST /tasks/:id/complete`, `POST /tasks/:id/cancel`
@@ -229,6 +233,25 @@ Lead lifecycle and safety:
 - Lead merge preserves relationships by moving source lifecycle to `merged` and pointing at a target.
 - Permanent delete removes the lead and related CRM records, and writes `deleted_leads_audit`.
 - Manual email/WhatsApp communication buttons persist audit/timeline activity only; they do not send provider messages.
+
+## Website Lead Intake
+
+`POST /api/v1/public/leads` turns a submission of the marketing site's contact form (`motsb2b.com/api/contact`) into a CRM lead. The website's server calls it (never the browser) with `X-Ingest-Key: <INGEST_API_KEY>`; the key is bound to the single workspace in `INGEST_WORKSPACE_ID`. With either variable unset the route is not mounted. Setting only one of the two stops the API from starting.
+
+Code: `routes/publicLeads.routes.ts` (auth, 60 req/min in-memory limit, 32 KB guard, lenient body coercion), `services/leadIngest.service.ts` (all writes, one transaction), `domain/websiteForm.ts` (pure normalization/parsing), `security/ingestGuard.ts` (constant-time key check, limiter). No migration and no change to `createLead`/`importLeads`.
+
+Payload: `{ name, email, phone, company, message }` (all optional strings). `message` carries the challenge text plus optional `Industry:`, `Revenue range:`, `Diagnosis issue:` lines.
+
+Behavior:
+
+- Normalization: name split on first space (title-cased only if entirely lower/upper case; blank → first name "Unknown"); company blank → "Not provided"; email trimmed/lowercased/validated; phone cleaned (`0091…`/`91…` accepted) and converted to E.164 (India default); `Industry:` → `leads.industry`; revenue range, diagnosis issue and the raw message are kept in the timeline.
+- Needs a valid email or valid phone, else `422 unusable_submission` and nothing is written. A junk phone with a good email still creates the lead (phone left empty, text kept in the timeline).
+- New lead: `source = website`, no owner, `created_by_name = "Website form"`, system timeline events ("Lead Created", "Website form submission"), an unassigned "First call" task due today, and a notification to every active salesperson. **No workflow is enrolled** — no automatic email/WhatsApp goes to website visitors.
+- Existing lead (same workspace, same lowercased email or `phone_e164`, not merged): no second lead. Adds a "Website form submitted again" timeline event, bumps `last_activity_at`, notifies. Never changes stage, lifecycle, automation or DNC state. An identical message within 10 minutes is absorbed silently (double click / retry).
+- Concurrent submissions from the same person are serialized with `pg_advisory_xact_lock` (there is no unique index on email/phone).
+- Responses: `201 {data:{status:"created",leadId}}`, `200 {…"duplicate"…}`, `401` bad key, `413`, `422`, `429`, `503` workspace unavailable.
+- Rollback: unset `INGEST_API_KEY`/`INGEST_WORKSPACE_ID` and restart the API.
+- The website keeps sending its Resend email as the backup record, because rejected (`422`) submissions are not stored in the CRM.
 
 ## Automation Worker
 
@@ -340,6 +363,11 @@ Backend required values:
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `INTEGRATION_ENCRYPTION_KEY` as a base64-encoded 32-byte AES key
 - `NODE_ENV`
+
+Optional website-form lead intake (set both or neither; generate the key with `openssl rand -hex 32`, minimum 32 chars):
+
+- `INGEST_API_KEY`
+- `INGEST_WORKSPACE_ID` (MOTM is `00000000-0000-0000-0000-000000000001`)
 
 Worker/provider values:
 

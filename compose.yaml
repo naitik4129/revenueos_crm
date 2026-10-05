@@ -20,6 +20,10 @@ services:
       GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
       GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
+      # Optional public website-form lead intake. Set both together or leave
+      # both blank (endpoint stays disabled). Only the API uses them.
+      INGEST_API_KEY: ${INGEST_API_KEY:-}
+      INGEST_WORKSPACE_ID: ${INGEST_WORKSPACE_ID:-}
     restart: unless-stopped
 
   worker:
