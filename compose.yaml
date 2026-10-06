@@ -23,8 +23,7 @@ services:
       # Optional public website-form lead intake. Set both together or leave
       # both blank (endpoint stays disabled). Only the API uses them.
       INGEST_API_KEY: ${INGEST_API_KEY:-}
-      INGEST_WORKSPACE_ID: ${INGEST_WORKSPACE_ID:-}
-    restart: unless-stopped
+      INGEST_WORKSPACE_ID: ${INGEST_WORKSPACE_ID:-}    restart: unless-stopped
 
   worker:
     build:

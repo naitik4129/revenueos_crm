@@ -65,6 +65,7 @@ The migration files are the schema source of truth. The current migration stack 
 - `014_meeting_agreed_call_outcome.sql`: adds `meeting_agreed` to `public.call_connected_outcome` and `public.workflow_trigger`.
 - `015_workspaces.sql`: introduces `public.workspaces` and `workspace_id` scoping across the CRM.
 - `016_meeting_outcome_triggers.sql`: adds `meeting_highly_interested`, `meeting_proposal_requested`, `meeting_not_a_fit` to `public.workflow_trigger` — dedicated triggers for those three meeting outcomes, which previously had none.
+- `018_workspace_default_lead_owner.sql`: adds nullable `workspaces.default_lead_owner_id` (owner of leads created from the public website form; NULL = unassigned). Additive; apply before deploying the code that reads it.
 
 Private Supabase Storage buckets currently used by the backend:
 
@@ -246,8 +247,8 @@ Behavior:
 
 - Normalization: name split on first space (title-cased only if entirely lower/upper case; blank → first name "Unknown"); company blank → "Not provided"; email trimmed/lowercased/validated; phone cleaned (`0091…`/`91…` accepted) and converted to E.164 (India default); `Industry:` → `leads.industry`; revenue range, diagnosis issue and the raw message are kept in the timeline.
 - Needs a valid email or valid phone, else `422 unusable_submission` and nothing is written. A junk phone with a good email still creates the lead (phone left empty, text kept in the timeline).
-- New lead: `source = website`, no owner, `created_by_name = "Website form"`, system timeline events ("Lead Created", "Website form submission"), an unassigned "First call" task due today, and a notification to every active salesperson. **No workflow is enrolled** — no automatic email/WhatsApp goes to website visitors.
-- Existing lead (same workspace, same lowercased email or `phone_e164`, not merged): no second lead. Adds a "Website form submitted again" timeline event, bumps `last_activity_at`, notifies. Never changes stage, lifecycle, automation or DNC state. An identical message within 10 minutes is absorbed silently (double click / retry).
+- New lead: `source = website`, `created_by_name = "Website form"`, system timeline events ("Lead Created", "Lead Assigned", "Website form submission") and a "First call" task due today. The owner is the workspace's default owner (`workspaces.default_lead_owner_id`, chosen in Settings → Website leads via `GET/PUT /connections/website-leads`); the owner gets the task and the notification. If none is set, or that person is no longer an active salesperson, the lead and task are unassigned and every active salesperson is notified instead. **No workflow is enrolled** — no automatic email/WhatsApp goes to website visitors.
+- Existing lead (same workspace, same lowercased email or `phone_e164`, not merged): no second lead. Adds a "Website form submitted again" timeline event, bumps `last_activity_at`, notifies the lead's owner (everyone if it has none). Never changes stage, lifecycle, automation or DNC state. An identical message within 10 minutes is absorbed silently (double click / retry).
 - Concurrent submissions from the same person are serialized with `pg_advisory_xact_lock` (there is no unique index on email/phone).
 - Responses: `201 {data:{status:"created",leadId}}`, `200 {…"duplicate"…}`, `401` bad key, `413`, `422`, `429`, `503` workspace unavailable.
 - Rollback: unset `INGEST_API_KEY`/`INGEST_WORKSPACE_ID` and restart the API.
@@ -368,7 +369,6 @@ Optional website-form lead intake (set both or neither; generate the key with `o
 
 - `INGEST_API_KEY`
 - `INGEST_WORKSPACE_ID` (MOTM is `00000000-0000-0000-0000-000000000001`)
-
 Worker/provider values:
 
 - `RESEND_API_KEY` optional fallback

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
-import { Bot, CalendarDays, Mail, RefreshCw } from "lucide-react";
+import { Bot, CalendarDays, Globe, Mail, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/app/app-shell";
 import { backend, type EmailConnection } from "@/lib/backend-client";
@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import { useSession } from "@/store";
 import { useWorkspace } from "@/store/workspace-context";
 
 const message = (error: unknown) =>
@@ -26,7 +27,7 @@ export function WorkspaceSettingsPage() {
         title="Settings"
         description={
           currentWorkspace
-            ? `Email, WhatsApp, and Google Calendar connections for ${currentWorkspace.name}.`
+            ? `Website lead routing and Email, WhatsApp, and Google Calendar connections for ${currentWorkspace.name}.`
             : isLoading
               ? "Loading workspace…"
               : "Select a workspace to configure its connections."
@@ -35,6 +36,7 @@ export function WorkspaceSettingsPage() {
       <div className="p-6">
         {currentWorkspace ? (
           <div className="space-y-6">
+            <WebsiteLeadsPanel workspaceId={currentWorkspace.id} />
             <EmailPanel workspaceId={currentWorkspace.id} />
             <WhatsAppPanel workspaceId={currentWorkspace.id} />
             <GoogleCalendarPanel workspaceId={currentWorkspace.id} />
@@ -48,6 +50,98 @@ export function WorkspaceSettingsPage() {
         )}
       </div>
     </div>
+  );
+}
+
+const UNASSIGNED = "";
+
+function WebsiteLeadsPanel({ workspaceId }: { workspaceId: string }) {
+  const client = useQueryClient();
+  const { users } = useSession();
+  const query = useQuery({
+    queryKey: ["connections", "website-leads", workspaceId],
+    queryFn: ({ signal }) => backend.connections.websiteLeads.get(signal),
+  });
+  const [ownerId, setOwnerId] = useState<string>(UNASSIGNED);
+  useEffect(() => {
+    if (query.data) setOwnerId(query.data.defaultOwnerId ?? UNASSIGNED);
+  }, [query.data]);
+  const save = useMutation({
+    mutationFn: () => backend.connections.websiteLeads.update({ defaultOwnerId: ownerId || null }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["connections", "website-leads", workspaceId] });
+      toast.success("Website lead owner saved.");
+    },
+    onError: (error) => toast.error(message(error)),
+  });
+
+  const saved = query.data;
+  const salespeople = users.filter((user) => user.active);
+  const dirty = saved ? (saved.defaultOwnerId ?? UNASSIGNED) !== ownerId : false;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Globe /> Website leads
+        </CardTitle>
+        <CardDescription>
+          Leads created automatically from the website contact form are assigned to this person, who
+          also gets their first-call task and notification.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {query.isError ? (
+          <div className="space-y-2 text-sm">
+            <p className="text-destructive">
+              Couldn't load the website lead settings: {message(query.error)}
+            </p>
+            <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
+              <RefreshCw className="size-3.5" /> Retry
+            </Button>
+          </div>
+        ) : !saved ? (
+          <p className="text-sm text-muted-foreground">Loading website lead settings…</p>
+        ) : (
+          <>
+            {!saved.ownerAvailable && (
+              <Notice danger>
+                {saved.defaultOwnerName ?? "The saved owner"} is no longer an active salesperson, so
+                new website leads are currently unassigned. Choose someone else below.
+              </Notice>
+            )}
+            <div className="max-w-sm">
+              <Field label="Default owner">
+                <select
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  value={ownerId}
+                  onChange={(e) => setOwnerId(e.target.value)}
+                >
+                  <option value={UNASSIGNED}>Unassigned (notify every salesperson)</option>
+                  {salespeople.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <div className="flex items-center gap-3 border-t pt-4">
+              <p className="text-xs text-muted-foreground">
+                Applies to new leads only. Existing leads keep their current owner.
+              </p>
+              <Button
+                className="ml-auto"
+                onClick={() => save.mutate()}
+                disabled={!dirty || save.isPending}
+              >
+                Save owner
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
