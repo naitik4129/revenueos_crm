@@ -36,7 +36,8 @@ const EnvSchema = z.object({
   // is a shared secret held only by the website's server; it is bound to the
   // one workspace named here.
   INGEST_API_KEY: blankToUndefined(z.string().min(32, "INGEST_API_KEY must be at least 32 characters").optional()),
-  INGEST_WORKSPACE_ID: blankToUndefined(z.string().uuid().optional()),});
+  INGEST_WORKSPACE_ID: blankToUndefined(z.string().uuid().optional()),
+});
 
 // WORKER_* tuning is validated separately in workerEnv.ts. Provider secrets
 // (Resend, etc.) are loaded from encrypted database configuration, entered
