@@ -439,7 +439,7 @@ Integration tests skip when `TEST_DATABASE_URL` is absent. A full login-to-persi
 update public.profiles set role = 'admin' where email = 'admin@example.com';
 ```
 
-4. Deploy with outbound email and WhatsApp disabled.
+4. Deploy with outbound email and WhatsApp disabled
 5. Configure and test Email in Admin -> Connections.
 6. Configure Google Calendar OAuth and verify a test meeting creates/updates/cancels an event with participants and a Meet link.
 7. Pair a dedicated, opted-in WhatsApp account and verify worker restart reconnects without a second QR.
