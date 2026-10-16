@@ -143,6 +143,7 @@ Enums live in `crm` too.
 9. `009_crm_triggers.sql` — updated_at, DNC history, consent/automation stop, deal outcome cascade.
 10. `010_crm_rls.sql` — enable RLS on all crm tables, no policies.
 11. `011_crm_brain_intake.sql` — lifecycle stage, external refs, AI calls, email activities, brain API keys, default owner.
+12. `012_crm_deal_closed_at.sql` — `deals.closed_at`, set by trigger when the outcome leaves `open`, cleared on reopen.
 
 Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the human runs it first).
 

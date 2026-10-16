@@ -92,17 +92,19 @@ describe("dashboard and notifications (PGlite)", () => {
       await api("post", `/deals/${d3.dealId}/lost`, { lossReason: "price_budget" });
       const old = await newDeal();
       await api("post", `/deals/${old.dealId}/won`, {});
-      await seed.query(`update crm.timeline_events set occurred_at = now() - interval '40 days' where deal_id = $1 and title = 'Won'`, [old.dealId]);
+      await seed.query(`update crm.deals set closed_at = now() - interval '40 days' where id = $1`, [old.dealId]);
       await newDeal(); // open, its task is cancelled below -> missing next action
 
       // Replace the auto-created tasks with known ones on d1.
       await seed.query(`update crm.tasks set status = 'cancelled', cancelled_at = now() where workspace_id = $1 and status = 'open'`, [w1]);
       await seed.query(
-        `insert into crm.tasks (workspace_id, deal_id, task_type, title, due_at) values
-           ($1, $2, 'call', 'earlier today', ${TODAY} + interval '1 second'),
-           ($1, $2, 'call', 'two days ago', now() - interval '2 days'),
-           ($1, $2, 'call', 'tomorrow', ${TODAY} + interval '25 hours')`,
-        [w1, d1.dealId],
+        `insert into crm.tasks (workspace_id, deal_id, owner_id, task_type, title, due_at) values
+           ($1, $2, $3, 'follow_up', 'later today', ${TODAY} + interval '2 seconds'),
+           ($1, $2, $3, 'call', 'earlier today', ${TODAY} + interval '1 second'),
+           ($1, $2, $4, 'call', 'admin today', ${TODAY} + interval '3 seconds'),
+           ($1, $2, $3, 'call', 'two days ago', now() - interval '2 days'),
+           ($1, $2, $3, 'call', 'tomorrow', ${TODAY} + interval '25 hours')`,
+        [w1, d1.dealId, sam, admin],
       );
       await seed.query(
         `insert into crm.meetings (workspace_id, deal_id, title, scheduled_at, status) values
@@ -123,18 +125,22 @@ describe("dashboard and notifications (PGlite)", () => {
       expect(s).toMatchObject({
         dealsThisMonth: { won: 1, lost: 1 },
         activityThisWeek: { aiCalls: 1, humanCalls: 1, emailsSent: 1, emailsReplied: 1 },
-        tasks: { dueToday: 1, overdue: 2 },
+        tasks: { dueToday: 3, overdue: 1 },
         openDealsMissingNextAction: 1,
         meetingsToday: 1,
         proposalsAwaitingDecision: 1,
       });
+      // Only my tasks due today, earliest first (not overdue, tomorrow or someone else's).
+      expect(s.todaysQueue.map((t: { title: string }) => t.title)).toEqual(["earlier today", "later today"]);
+      expect(s.todaysQueue[0]).toMatchObject({ type: "call", dealId: d1.dealId, contactId: d1.contactId, contactName: "C" });
     });
 
     it("does not count another workspace's data", async () => {
       const before = await summary();
       const other = await newDeal(w2);
       await api("post", `/deals/${other.dealId}/won`, {}, w2);
-      await newDeal(w2);
+      const w2Open = await newDeal(w2);
+      await seed.query(`insert into crm.tasks (workspace_id, deal_id, owner_id, task_type, title, due_at) values ($1, $2, $3, 'call', 'w2 today', ${TODAY} + interval '1 second')`, [w2, w2Open.dealId, sam]);
       await seed.query(`insert into crm.calls (workspace_id, contact_id, connected, source) values ($1, $2, true, 'ai')`, [w2, other.contactId]);
       await seed.query(`insert into crm.email_activities (workspace_id, contact_id, sent_at, replied_at, status) values ($1, $2, now(), now(), 'replied')`, [w2, other.contactId]);
 
@@ -143,6 +149,20 @@ describe("dashboard and notifications (PGlite)", () => {
       expect(s2).toMatchObject({ dealsThisMonth: { won: 1, lost: 0 }, activityThisWeek: { aiCalls: 1, humanCalls: 0, emailsSent: 1, emailsReplied: 1 } });
       expect(nonZero(s2.lifecycleFunnel)).toEqual({ qualified: 1, customer: 1 });
     });
+  });
+
+  it("deals.closed_at is set when a deal leaves 'open', moves on re-close, and clears on reopen", async () => {
+    const { dealId } = await newDeal();
+    const closedAt = async () => (await api("get", `/deals/${dealId}`)).body.closedAt as string | null;
+    expect(await closedAt()).toBeNull();
+    await api("post", `/deals/${dealId}/nurture`, {});
+    const parked = await closedAt();
+    expect(parked).not.toBeNull();
+    await seed.query(`update crm.deals set closed_at = closed_at - interval '1 day' where id = $1`, [dealId]);
+    await api("post", `/deals/${dealId}/won`, {});
+    expect(new Date((await closedAt())!).getTime()).toBeGreaterThanOrEqual(new Date(parked!).getTime());
+    await api("post", `/deals/${dealId}/reopen`, {});
+    expect(await closedAt()).toBeNull();
   });
 
   describe("notifications", () => {

@@ -215,7 +215,8 @@ export async function listTasks(db: Queryable, workspaceId: string, f: ListTasks
   if (f.contactId) where.push(`t.contact_id = $${params.push(f.contactId)}`);
   if (f.status) where.push(`t.status = $${params.push(f.status)}`);
   if (f.type) where.push(`t.task_type = $${params.push(f.type)}`);
-  if (f.overdueOnly) where.push(`t.status = 'open' and t.due_at < now()`);
+  // Overdue = due before today (Asia/Kolkata), same as the dashboard; never overlaps dueTodayOnly.
+  if (f.overdueOnly) where.push(`t.status = 'open' and t.due_at < date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'`);
   if (f.dueTodayOnly) {
     where.push(`t.status = 'open'
       and t.due_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'

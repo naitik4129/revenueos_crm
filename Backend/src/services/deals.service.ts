@@ -43,6 +43,7 @@ export interface DealRow {
   loss_reason: LeadLossReason | null;
   loss_notes: string | null;
   last_activity_at: Date;
+  closed_at: Date | null;
   created_at: Date;
   updated_at: Date;
   // contact
@@ -122,6 +123,7 @@ export function dealToDto(row: DealRow) {
         }
       : null,
     lastActivityAt: row.last_activity_at.toISOString(),
+    closedAt: row.closed_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
