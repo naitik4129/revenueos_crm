@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { Proposal } from "@/types";
 import {
   backend,
   type CompanyFilters,
   type ContactFilters,
   type DealFilters,
 } from "@/lib/backend-client";
-import { keys } from "./query";
+import { keys, refreshCrm } from "./query";
 import { useWorkspace } from "./workspace-context";
 
 export function useContacts(filters: ContactFilters) {
@@ -96,6 +97,53 @@ export function useDeals(filters: DealFilters) {
   });
 }
 
+/** One deal and everything shown on its page (notes are the contact's, filtered to the deal). */
+export function useDealDetail(id: string, contactId: string | undefined) {
+  const { currentWorkspaceId: ws } = useWorkspace();
+  const opts = <T>(part: string, fn: (signal: AbortSignal) => Promise<T>, enabled = true) => ({
+    queryKey: keys.deal(ws, id, part),
+    queryFn: ({ signal }: { signal: AbortSignal }) => fn(signal),
+    enabled: Boolean(ws) && enabled,
+  });
+  return {
+    tasks: useQuery(opts("tasks", (s) => backend.deals.tasks(id, s))),
+    meetings: useQuery(opts("meetings", (s) => backend.deals.meetings(id, s))),
+    proposals: useQuery({
+      ...opts("proposals", (s) => backend.deals.proposals(id, s)),
+      // WhatsApp sends finish on the worker a few seconds later.
+      refetchInterval: (q: { state: { data?: { data: Proposal[] } | undefined } }) =>
+        q.state.data?.data.some((p) => ["queued", "sending"].includes(p.whatsappSendStatus))
+          ? 8000
+          : false,
+    }),
+    runs: useQuery(opts("runs", (s) => backend.deals.runs(id, s))),
+    timeline: useQuery(opts("timeline", (s) => backend.deals.timeline(id, { limit: 100 }, s))),
+    contact: useQuery(
+      opts("contact", (s) => backend.contacts.get(contactId!, s), Boolean(contactId)),
+    ),
+    notes: useQuery(
+      opts("notes", (s) => backend.contacts.notes(contactId!, s), Boolean(contactId)),
+    ),
+  };
+}
+
+/**
+ * id -> deal, for lists that only carry a dealId (tasks, meetings, proposals, runs). One cached
+ * request shared by every row.
+ * shortcut: the 500 most recently active deals; older ones show as "Deal", add names to those
+ * list endpoints if that becomes common.
+ */
+export function useDealIndex() {
+  const { currentWorkspaceId } = useWorkspace();
+  const query = useQuery({
+    queryKey: keys.deals(currentWorkspaceId, { index: true }),
+    queryFn: ({ signal }) => backend.deals.list({ limit: 500 }, signal),
+    enabled: Boolean(currentWorkspaceId),
+    staleTime: 60_000,
+  });
+  return new Map((query.data?.data ?? []).map((deal) => [deal.id, deal]));
+}
+
 export function useDeal(id: string) {
   const { currentWorkspaceId } = useWorkspace();
   return useQuery({
@@ -105,28 +153,9 @@ export function useDeal(id: string) {
   });
 }
 
-/**
- * Wraps a contact, company or deal write: afterwards refreshes contact, company and deal lists
- * and detail pages, the dashboard and tasks (a call or DNC can change lifecycle, deals and tasks; a
- * contact edit changes its company's contact list).
- */
+/** Wraps any CRM write; afterwards refreshes everything it can touch (see refreshCrm). */
 export function useCrmMutation<I, O>(fn: (input: I) => Promise<O>) {
   const client = useQueryClient();
-  const { currentWorkspaceId: ws } = useWorkspace();
-  return useMutation({
-    mutationFn: fn,
-    onSuccess: () =>
-      Promise.all(
-        [
-          ["contact", ws],
-          keys.contacts(ws),
-          ["company", ws],
-          keys.companies(ws),
-          ["deal", ws],
-          keys.deals(ws),
-          keys.dashboard(ws),
-          keys.tasks(ws),
-        ].map((queryKey) => client.invalidateQueries({ queryKey })),
-      ),
-  });
+  const { currentWorkspaceId } = useWorkspace();
+  return useMutation({ mutationFn: fn, onSuccess: () => refreshCrm(client, currentWorkspaceId) });
 }

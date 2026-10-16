@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,12 +41,21 @@ export function LogCallDialog({
   dealIds,
   open,
   onOpenChange,
+  taskId,
+  fromDealId,
+  onDone,
 }: {
   contact: Contact;
   /** The contact's deals before the call, to tell a new deal from a reopened one. */
   dealIds: string[];
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** The open call task this call completes. */
+  taskId?: string | undefined;
+  /** Set when logged from that deal's page: no "Open the deal" link to the same page. */
+  fromDealId?: string | undefined;
+  /** Called with the result when the rep closes the result panel (e.g. to enroll a workflow). */
+  onDone?: ((result: LogCallResult) => void) | undefined;
 }) {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [reason, setReason] = useState<CallNotConnectedReason>("no_answer");
@@ -86,6 +96,7 @@ export function LogCallDialog({
     if (connected === null) return;
     try {
       const saved = await logCall.mutateAsync({
+        taskId,
         connected,
         ...(connected
           ? { connectedOutcome: outcome ?? undefined }
@@ -147,6 +158,16 @@ export function LogCallDialog({
                   <StatusBadge value={result.deal.automationMode} dot />
                   {result.deal.nextAction && <span>· Next: {result.deal.nextAction.title}</span>}
                 </div>
+                {result.deal.id !== fromDealId && (
+                  <Link
+                    to="/deals/$dealId"
+                    params={{ dealId: result.deal.id }}
+                    onClick={() => close(false)}
+                    className="mt-1 inline-block text-xs font-medium text-primary hover:underline"
+                  >
+                    Open the deal
+                  </Link>
+                )}
               </div>
             ) : (
               <p className="text-muted-foreground">No deal was changed (contact-level outcome).</p>
@@ -263,7 +284,14 @@ export function LogCallDialog({
 
         <DialogFooter>
           {result ? (
-            <Button onClick={() => close(false)}>Done</Button>
+            <Button
+              onClick={() => {
+                close(false);
+                onDone?.(result);
+              }}
+            >
+              Done
+            </Button>
           ) : (
             <>
               <Button variant="ghost" onClick={() => close(false)}>

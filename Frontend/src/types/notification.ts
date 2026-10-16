@@ -4,7 +4,8 @@ export interface AppNotification {
   detail?: string;
   at: string;
   kind: "info" | "warning" | "success" | "danger";
-  leadId?: string | undefined;
+  contactId?: string | undefined;
+  dealId?: string | undefined;
   href?: string | undefined;
   read: boolean;
 }

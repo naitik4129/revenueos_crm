@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Send } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
@@ -16,19 +15,31 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { money, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
-import { messageFromError, useLeads, useProposals, useSession } from "@/store";
-import { PROPOSAL_STATUSES, type ProposalStatus } from "@/types";
-import { SendProposalDialog } from "@/features/proposals/components/send-proposal-dialog";
+import { messageFromError, useProposals, useSession } from "@/store";
+import { PROPOSAL_STATUSES, type Proposal, type ProposalStatus } from "@/types";
+import { DealLink } from "@/features/deals/deal-link";
+import {
+  LossReasonDialog,
+  NewProposalDialog,
+  SendProposalDialog,
+} from "./components/proposal-dialogs";
 
 export function ProposalsPage() {
   const store = useProposals();
-  const { leads } = useLeads();
   const { userName } = useSession();
-  const [uploadOpen, setUploadOpen] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
+  const [sending, setSending] = useState<Proposal | null>(null);
+  // Rejected / expired need a loss reason first.
+  const [losing, setLosing] = useState<{ proposal: Proposal; status: ProposalStatus } | null>(null);
   const pipelineValue = store.proposals
     .filter((proposal) => ["sent", "revision_requested", "revised"].includes(proposal.status))
     .reduce((sum, proposal) => sum + (proposal.amount ?? 0), 0);
   const setStatus = async (id: string, status: ProposalStatus) => {
+    if (status === "rejected" || status === "expired") {
+      const proposal = store.proposals.find((p) => p.id === id);
+      if (proposal) setLosing({ proposal, status });
+      return;
+    }
     try {
       await store.setProposalStatus(id, status);
       toast.success(`Proposal marked ${label(status)}`);
@@ -40,10 +51,10 @@ export function ProposalsPage() {
     <div className="pb-10">
       <PageHeader
         title="Proposals"
-        description="Attach a document, pick an email and WhatsApp template, and send both in one click."
+        description="Every proposal in this workspace. Create one, upload its document, then send it by email and/or WhatsApp."
         actions={
-          <Button size="sm" onClick={() => setUploadOpen(true)}>
-            <Send className="mr-1 size-4" /> Send proposal
+          <Button size="sm" onClick={() => setNewOpen(true)}>
+            <Send className="mr-1 size-4" /> New proposal
           </Button>
         }
       />
@@ -76,7 +87,7 @@ export function ProposalsPage() {
                   <tr>
                     {[
                       "Proposal",
-                      "Lead",
+                      "Deal",
                       "Owner",
                       "Amount",
                       "Status",
@@ -93,7 +104,6 @@ export function ProposalsPage() {
                 </thead>
                 <tbody>
                   {store.proposals.map((proposal) => {
-                    const lead = leads.find((item) => item.id === proposal.leadId);
                     return (
                       <tr key={proposal.id} className="border-t hover:bg-accent/40">
                         <td className="px-3 py-2">
@@ -101,17 +111,18 @@ export function ProposalsPage() {
                           <div className="text-xs text-muted-foreground">
                             {proposal.fileName || "No document"}
                           </div>
+                          {proposal.fileName && (
+                            <button
+                              type="button"
+                              className="text-xs text-primary hover:underline"
+                              onClick={() => setSending(proposal)}
+                            >
+                              Send
+                            </button>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-xs">
-                          {lead && (
-                            <Link
-                              to="/leads/$leadId"
-                              params={{ leadId: lead.id }}
-                              className="hover:underline"
-                            >
-                              {lead.firstName} {lead.lastName} · {lead.company}
-                            </Link>
-                          )}
+                          <DealLink dealId={proposal.dealId} />
                         </td>
                         <td className="px-3 py-2 text-xs">
                           {proposal.ownerName ?? userName(proposal.ownerId)}
@@ -189,21 +200,18 @@ export function ProposalsPage() {
           </Card>
         )}
       </div>
-      <SendProposalDialog
-        open={uploadOpen}
-        onOpenChange={setUploadOpen}
-        onSend={(value) =>
-          store.addProposal({
-            leadId: value.leadId,
-            title: value.title,
-            amount: value.amount ? Number(value.amount) : undefined,
-            notes: value.notes || undefined,
-            emailTemplateId: value.emailTemplateId,
-            whatsappTemplateId: value.whatsappTemplateId,
-            document: value.document,
-          })
-        }
-      />
+      {newOpen && <NewProposalDialog onOpenChange={setNewOpen} />}
+      {sending && <SendProposalDialog proposal={sending} onOpenChange={() => setSending(null)} />}
+      {losing && (
+        <LossReasonDialog
+          title={`Mark proposal ${label(losing.status)}`}
+          confirm={`Mark ${label(losing.status)}`}
+          onConfirm={(reason, notes) =>
+            store.setProposalStatus(losing.proposal.id, losing.status, reason, notes || undefined)
+          }
+          onOpenChange={() => setLosing(null)}
+        />
+      )}
     </div>
   );
 }

@@ -4,11 +4,9 @@
 // Supabase schema lands, generated row types should be mapped onto these
 // rather than replacing them, so the UI stays independent of the transport.
 export * from "./crm";
-export * from "./lead";
 export * from "./meeting";
 export * from "./notification";
 export * from "./proposal";
 export * from "./task";
-export * from "./timeline";
 export * from "./user";
 export * from "./workflow";

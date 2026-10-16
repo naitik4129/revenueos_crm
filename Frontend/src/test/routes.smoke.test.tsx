@@ -22,22 +22,7 @@ vi.mock("@/store", () => {
       isLoading: false,
       error: null,
     }),
-    useLeads: () => ({
-      leads: [],
-      getLead: () => undefined,
-      isLoading: false,
-      error: null,
-      isPending: false,
-      addLead: noop,
-      updateLead: noop,
-      addNote: noop,
-      setAutomation: noop,
-      markDnc: noop,
-      reactivateFromDnc: noop,
-      logCall: noop,
-      logCommunication: noop,
-      setLifecycle: noop,
-    }),
+    useDealIndex: () => new Map(),
     useContacts: () => ({
       data: { data: [], total: 0, limit: 50, offset: 0 },
       isLoading: false,
@@ -130,7 +115,6 @@ import { DashboardPage } from "@/features/dashboard/dashboard-page";
 import { CompaniesPage } from "@/features/companies/companies-page";
 import { ContactsPage } from "@/features/contacts/contacts-page";
 import { DealsPage } from "@/features/deals/deals-page";
-import { LeadsPage } from "@/features/leads/leads-page";
 import { TasksPage } from "@/features/tasks/tasks-page";
 import { MeetingsPage } from "@/features/meetings/meetings-page";
 import { ProposalsPage } from "@/features/proposals/proposals-page";
@@ -158,7 +142,6 @@ describe("zero-record route states", () => {
     [ContactsPage, "No contacts match these filters."],
     [CompaniesPage, "No companies match these filters."],
     [DealsPage, "New"],
-    [LeadsPage, "No leads match these filters."],
     [TasksPage, "Nothing here."],
     [MeetingsPage, "No meetings."],
     [ProposalsPage, "No proposals."],

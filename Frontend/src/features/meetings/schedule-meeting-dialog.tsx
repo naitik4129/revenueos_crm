@@ -10,43 +10,31 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import type { PickerOption } from "@/components/common/search-picker";
 import { dateInputValue, toIsoFromIst } from "@/lib/dates";
-import { useLeads } from "@/store";
 import type { Meeting } from "@/types";
+import { DealPicker } from "@/features/contacts/pickers";
 
 /**
- * Schedule/reschedule-meeting dialog — shared between the Meetings page (its
- * own "Schedule meeting" button, full lead picker) and the lead detail page
- * (opened with a fixed `leadId`, e.g. automatically after a Positive call
- * outcome — see LogCallDialog's `onScheduleMeetingPrompt`). When `leadId` is
- * given, the Lead field is skipped entirely since it's already implied by
- * context, same as EnrollWorkflowDialog never shows one either. No owner
- * picker here by design: the backend already defaults a new meeting's owner
- * to the lead's current owner when none is supplied
- * (Backend/src/services/meetings.service.ts).
+ * Schedule/reschedule-meeting dialog, shared by the Meetings page (with a deal picker) and the
+ * deal page (fixed `dealId`, no picker). No owner picker by design: the backend defaults a new
+ * meeting's owner to the deal's owner (Backend/src/services/meetings.service.ts).
  */
 export function ScheduleMeetingDialog({
-  leadId,
+  dealId,
   open,
   meeting,
   isSaving,
   onOpenChange,
   onSave,
 }: {
-  leadId?: string;
+  dealId?: string;
   open: boolean;
   meeting: Meeting | null;
   isSaving?: boolean;
   onOpenChange: (value: boolean) => void;
   onSave: (value: {
-    leadId: string;
+    dealId: string;
     ownerId?: string | undefined;
     title: string;
     at: string;
@@ -55,9 +43,8 @@ export function ScheduleMeetingDialog({
     participants?: { name?: string | undefined; email: string }[] | undefined;
   }) => void;
 }) {
-  const { leads } = useLeads();
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
-  const [pickedLeadId, setPickedLeadId] = useState("");
+  const [pickedDeal, setPickedDeal] = useState<PickerOption | null>(null);
   const [title, setTitle] = useState("Discovery call");
   const [date, setDate] = useState(dateInputValue(1));
   const [time, setTime] = useState("11:00");
@@ -67,7 +54,7 @@ export function ScheduleMeetingDialog({
   const key = meeting?.id ?? "new";
   if (open && loadedFor !== key) {
     setLoadedFor(key);
-    setPickedLeadId(meeting?.leadId ?? leadId ?? leads[0]?.id ?? "");
+    setPickedDeal(null);
     setTitle(meeting?.title ?? "Discovery call");
     const at = meeting ? new Date(meeting.at) : null;
     setDate(
@@ -91,7 +78,7 @@ export function ScheduleMeetingDialog({
   }
   if (!open && loadedFor !== null) setLoadedFor(null);
 
-  const effectiveLeadId = leadId ?? pickedLeadId;
+  const effectiveDealId = meeting?.dealId ?? dealId ?? pickedDeal?.id ?? "";
   const addParticipant = () => setParticipants((prev) => [...prev, { name: "", email: "" }]);
   const updateParticipant = (index: number, patch: Partial<{ name: string; email: string }>) =>
     setParticipants((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
@@ -105,25 +92,10 @@ export function ScheduleMeetingDialog({
           <DialogTitle>{meeting ? "Reschedule meeting" : "Schedule meeting"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          {!leadId && (
+          {!dealId && !meeting && (
             <div>
-              <Label className="mb-1.5 block text-xs">Lead</Label>
-              <Select
-                value={pickedLeadId}
-                disabled={Boolean(meeting)}
-                onValueChange={setPickedLeadId}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {leads.map((lead) => (
-                    <SelectItem key={lead.id} value={lead.id}>
-                      {lead.firstName} {lead.lastName} · {lead.company}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label className="mb-1.5 block text-xs">Deal</Label>
+              <DealPicker value={pickedDeal} onChange={setPickedDeal} />
             </div>
           )}
           <div>
@@ -192,10 +164,10 @@ export function ScheduleMeetingDialog({
             Cancel
           </Button>
           <Button
-            disabled={!effectiveLeadId || !title.trim() || isSaving}
+            disabled={!effectiveDealId || !title.trim() || isSaving}
             onClick={() => {
               onSave({
-                leadId: effectiveLeadId,
+                dealId: effectiveDealId,
                 title: title.trim(),
                 at: toIsoFromIst(date, `${time}:00`),
                 durationMin: Number(duration),

@@ -1,10 +1,10 @@
 /**
- * `call_outcome_maybe`/`call_outcome_negative` intentionally omitted — see types/lead.ts comment.
+ * `call_outcome_maybe`/`call_outcome_negative` intentionally omitted (retired).
  * `meeting_highly_interested`/`meeting_proposal_requested`/`meeting_not_a_fit` are the dedicated
  * triggers for those meeting outcomes; `needs_internal_discussion` reuses `objection_internal_approval`.
  */
 export const WORKFLOW_TRIGGERS = [
-  "lead_created",
+  "deal_created",
   "meeting_scheduled",
   "meeting_agreed",
   "call_not_connected",
@@ -78,7 +78,8 @@ export interface Run {
   id: string;
   workflowId: string;
   version: number;
-  leadId: string;
+  dealId: string;
+  contactId: string;
   currentStep?: string;
   status: RunStatus;
   startedAt: string;
@@ -119,7 +120,7 @@ export const SCHEDULED_ACTION_STATUSES = [
 export type ScheduledActionStatus = (typeof SCHEDULED_ACTION_STATUSES)[number];
 export interface ScheduledAction {
   id: string;
-  leadId: string;
+  dealId: string;
   workflowRunId: string;
   workflowStepId: string;
   actionType: StepAction;

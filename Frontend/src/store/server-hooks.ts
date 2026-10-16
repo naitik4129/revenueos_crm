@@ -1,15 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   backend,
-  type CreateLeadInput,
   type CreateMeetingInput,
   type CreateProposalInput,
   type CreateTaskInput,
   type CreateTemplateInput,
   type CreateWorkflowInput,
-  type ImportLeadRow,
-  type LogCallInput,
-  type UpdateLeadInput,
   type UpdateMeetingInput,
   type UpdateProposalInput,
   type UpdateTaskInput,
@@ -18,7 +14,6 @@ import {
 } from "@/lib/backend-client";
 import { initials } from "@/lib/format";
 import type {
-  AutomationMode,
   LeadLossReason,
   MeetingOutcome,
   ProposalStatus,
@@ -26,7 +21,7 @@ import type {
   User,
   WorkflowStep,
 } from "@/types";
-import { keys, refreshLead } from "./query";
+import { keys, refreshCrm } from "./query";
 import { useWorkspace } from "./workspace-context";
 
 export function useSession() {
@@ -64,173 +59,6 @@ export function useSession() {
 }
 export type SessionSlice = ReturnType<typeof useSession>;
 
-export function useLeads() {
-  const client = useQueryClient();
-  const { currentWorkspaceId } = useWorkspace();
-  const query = useQuery({
-    queryKey: keys.leads(currentWorkspaceId),
-    queryFn: ({ signal }) => backend.leads.list({ limit: 500 }, signal),
-    enabled: Boolean(currentWorkspaceId),
-  });
-  const refresh = (leadId: string) => refreshLead(client, currentWorkspaceId, leadId);
-  const create = useMutation({
-    mutationFn: (input: CreateLeadInput) => backend.leads.create(input),
-    onSuccess: (lead) => refresh(lead.id),
-  });
-  const importCsv = useMutation({
-    mutationFn: (rows: ImportLeadRow[]) => backend.leads.importCsv(rows),
-    onSuccess: () =>
-      Promise.all([
-        client.invalidateQueries({ queryKey: keys.leads(currentWorkspaceId) }),
-        client.invalidateQueries({ queryKey: keys.dashboard(currentWorkspaceId) }),
-        client.invalidateQueries({ queryKey: keys.notifications(currentWorkspaceId) }),
-      ]),
-  });
-  const update = useMutation({
-    mutationFn: ({ id, input }: { id: string; input: UpdateLeadInput }) =>
-      backend.leads.update(id, input),
-    onSuccess: (lead) => refresh(lead.id),
-  });
-  const note = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: string }) => backend.leads.addNote(id, body),
-    onSuccess: (_, vars) => refresh(vars.id),
-  });
-  const remove = useMutation({
-    mutationFn: (id: string) => backend.leads.delete(id),
-    onSuccess: (_, id) => refresh(id),
-  });
-  const automation = useMutation({
-    mutationFn: ({
-      id,
-      mode,
-      reason,
-    }: {
-      id: string;
-      mode: AutomationMode;
-      reason?: string | undefined;
-    }) => backend.leads.setAutomation(id, mode, reason),
-    onSuccess: (lead) => refresh(lead.id),
-  });
-  const dnc = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
-      backend.leads.markDnc(id, reason),
-    onSuccess: (lead) => refresh(lead.id),
-  });
-  const dncReactivate = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
-      backend.leads.reactivateFromDnc(id, reason),
-    onSuccess: (lead) => refresh(lead.id),
-  });
-  const call = useMutation({
-    mutationFn: ({ id, input }: { id: string; input: LogCallInput }) =>
-      backend.leads.logCall(id, input),
-    onSuccess: (result) => refresh(result.lead.id),
-  });
-  const communication = useMutation({
-    mutationFn: ({
-      id,
-      channel,
-      detail,
-    }: {
-      id: string;
-      channel: "email" | "whatsapp";
-      detail?: string | undefined;
-    }) => backend.leads.logCommunication(id, channel, detail),
-    onSuccess: (_, vars) => refresh(vars.id),
-  });
-  const lifecycle = useMutation({
-    mutationFn: ({
-      id,
-      action,
-      reason,
-      lossReason,
-    }: {
-      id: string;
-      action: "won" | "lost" | "discard" | "reactivate" | "long_term_nurture";
-      reason?: string | undefined;
-      /** Required by the backend when action === 'lost'. */
-      lossReason?: LeadLossReason | undefined;
-    }) =>
-      action === "won"
-        ? backend.leads.markWon(id, reason)
-        : action === "lost"
-          ? backend.leads.markLost(id, lossReason!, reason)
-          : action === "discard"
-            ? backend.leads.discard(id, reason)
-            : action === "long_term_nurture"
-              ? backend.leads.longTermNurture(id, reason)
-              : backend.leads.reactivate(id, reason),
-    onSuccess: (lead) => refresh(lead.id),
-  });
-  const leads = query.data?.data ?? [];
-  const isPending = [
-    create,
-    importCsv,
-    update,
-    remove,
-    note,
-    automation,
-    dnc,
-    dncReactivate,
-    call,
-    communication,
-    lifecycle,
-  ].some((mutation) => mutation.isPending);
-  return {
-    leads,
-    getLead: (id: string) => leads.find((lead) => lead.id === id),
-    isLoading: query.isLoading,
-    error: query.error,
-    isPending,
-    addLead: (input: CreateLeadInput) => create.mutateAsync(input),
-    importLeadsCsv: (rows: ImportLeadRow[]) => importCsv.mutateAsync(rows),
-    updateLead: (id: string, input: UpdateLeadInput) => update.mutateAsync({ id, input }),
-    deleteLead: (id: string) => remove.mutateAsync(id),
-    addNote: (id: string, body: string) => note.mutateAsync({ id, body }),
-    setAutomation: (id: string, mode: AutomationMode, reason?: string) =>
-      automation.mutateAsync({ id, mode, reason }),
-    markDnc: (id: string, reason: string) => dnc.mutateAsync({ id, reason }),
-    reactivateFromDnc: (id: string, reason: string) => dncReactivate.mutateAsync({ id, reason }),
-    logCall: (id: string, input: LogCallInput) => call.mutateAsync({ id, input }),
-    logCommunication: (id: string, channel: "email" | "whatsapp", detail?: string) =>
-      communication.mutateAsync({ id, channel, detail }),
-    setLifecycle: (
-      id: string,
-      action: "won" | "lost" | "discard" | "reactivate" | "long_term_nurture",
-      reason?: string,
-      lossReason?: LeadLossReason,
-    ) => lifecycle.mutateAsync({ id, action, reason, lossReason }),
-  };
-}
-export type LeadsSlice = ReturnType<typeof useLeads>;
-
-export function useLead(leadId: string) {
-  const { currentWorkspaceId } = useWorkspace();
-  const enabled = Boolean(leadId) && Boolean(currentWorkspaceId);
-  const lead = useQuery({
-    queryKey: keys.lead(currentWorkspaceId, leadId),
-    queryFn: ({ signal }) => backend.leads.get(leadId, signal),
-    enabled,
-  });
-  const notes = useQuery({
-    queryKey: keys.notes(currentWorkspaceId, leadId),
-    queryFn: ({ signal }) => backend.leads.notes(leadId, signal),
-    enabled,
-  });
-  const contactability = useQuery({
-    queryKey: keys.contactability(currentWorkspaceId, leadId),
-    queryFn: ({ signal }) => backend.leads.contactability(leadId, signal),
-    enabled,
-  });
-  return {
-    lead: lead.data,
-    notes: notes.data?.data ?? [],
-    contactability: contactability.data?.data ?? [],
-    isLoading: lead.isLoading || notes.isLoading || contactability.isLoading,
-    error: lead.error ?? notes.error ?? contactability.error,
-  };
-}
-
 export function useTasks() {
   const client = useQueryClient();
   const { currentWorkspaceId } = useWorkspace();
@@ -239,24 +67,24 @@ export function useTasks() {
     queryFn: ({ signal }) => backend.tasks.list(undefined, signal),
     enabled: Boolean(currentWorkspaceId),
   });
-  const refresh = (leadId: string) => refreshLead(client, currentWorkspaceId, leadId);
+  const refresh = () => refreshCrm(client, currentWorkspaceId);
   const create = useMutation({
     mutationFn: (input: CreateTaskInput) => backend.tasks.create(input),
-    onSuccess: (task) => refresh(task.leadId),
+    onSuccess: refresh,
   });
   const update = useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateTaskInput }) =>
       backend.tasks.update(id, input),
-    onSuccess: (task) => refresh(task.leadId),
+    onSuccess: refresh,
   });
   const complete = useMutation({
     mutationFn: (id: string) => backend.tasks.complete(id),
-    onSuccess: (task) => refresh(task.leadId),
+    onSuccess: refresh,
   });
   const cancel = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason?: string | undefined }) =>
       backend.tasks.cancel(id, reason),
-    onSuccess: (task) => refresh(task.leadId),
+    onSuccess: refresh,
   });
   return {
     tasks: query.data?.data ?? [],
@@ -279,15 +107,15 @@ export function useMeetings() {
     queryFn: ({ signal }) => backend.meetings.list(undefined, signal),
     enabled: Boolean(currentWorkspaceId),
   });
-  const refresh = (leadId: string) => refreshLead(client, currentWorkspaceId, leadId);
+  const refresh = () => refreshCrm(client, currentWorkspaceId);
   const create = useMutation({
     mutationFn: (input: CreateMeetingInput) => backend.meetings.create(input),
-    onSuccess: (meeting) => refresh(meeting.leadId),
+    onSuccess: refresh,
   });
   const update = useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateMeetingInput }) =>
       backend.meetings.update(id, input),
-    onSuccess: (meeting) => refresh(meeting.leadId),
+    onSuccess: refresh,
   });
   const outcome = useMutation({
     mutationFn: ({
@@ -299,7 +127,7 @@ export function useMeetings() {
       outcome: MeetingOutcome;
       notes?: string | undefined;
     }) => backend.meetings.recordOutcome(id, outcome, notes),
-    onSuccess: (meeting) => refresh(meeting.leadId),
+    onSuccess: refresh,
   });
   return {
     meetings: query.data?.data ?? [],
@@ -330,15 +158,15 @@ export function useProposals() {
         ? 8000
         : false,
   });
-  const refresh = (leadId: string) => refreshLead(client, currentWorkspaceId, leadId);
+  const refresh = () => refreshCrm(client, currentWorkspaceId);
   const create = useMutation({
     mutationFn: (input: CreateProposalInput) => backend.proposals.create(input),
-    onSuccess: (proposal) => refresh(proposal.leadId),
+    onSuccess: refresh,
   });
   const update = useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateProposalInput }) =>
       backend.proposals.update(id, input),
-    onSuccess: (proposal) => refresh(proposal.leadId),
+    onSuccess: refresh,
   });
   const status = useMutation({
     mutationFn: ({
@@ -352,7 +180,7 @@ export function useProposals() {
       lossReason?: LeadLossReason | undefined;
       lossNotes?: string | undefined;
     }) => backend.proposals.setStatus(id, status, lossReason, lossNotes),
-    onSuccess: (proposal) => refresh(proposal.leadId),
+    onSuccess: refresh,
   });
   return {
     proposals: query.data?.data ?? [],
@@ -373,17 +201,6 @@ export function useProposals() {
   };
 }
 export type ProposalsSlice = ReturnType<typeof useProposals>;
-
-export function useTimeline(leadId: string) {
-  const { currentWorkspaceId } = useWorkspace();
-  const query = useQuery({
-    queryKey: keys.timeline(currentWorkspaceId, leadId),
-    queryFn: ({ signal }) => backend.leads.timeline(leadId, signal),
-    enabled: Boolean(leadId) && Boolean(currentWorkspaceId),
-  });
-  return { timeline: query.data?.data ?? [], isLoading: query.isLoading, error: query.error };
-}
-export type TimelineSlice = ReturnType<typeof useTimeline>;
 
 export function useAutomations() {
   const client = useQueryClient();
@@ -410,15 +227,11 @@ export function useAutomations() {
     enabled,
   });
   const invalidate = () =>
-    Promise.all(
-      [
-        keys.workflows(currentWorkspaceId),
-        keys.templates(currentWorkspaceId),
-        keys.runs(currentWorkspaceId),
-        keys.scheduledActions(currentWorkspaceId),
-        keys.dashboard(currentWorkspaceId),
-      ].map((queryKey) => client.invalidateQueries({ queryKey })),
-    );
+    Promise.all([
+      refreshCrm(client, currentWorkspaceId),
+      client.invalidateQueries({ queryKey: keys.workflows(currentWorkspaceId) }),
+      client.invalidateQueries({ queryKey: keys.templates(currentWorkspaceId) }),
+    ]);
   const workflowCreate = useMutation({
     mutationFn: (input: CreateWorkflowInput) => backend.workflows.create(input),
     onSuccess: invalidate,
@@ -474,7 +287,7 @@ export function useAutomations() {
     onSuccess: invalidate,
   });
   const enroll = useMutation({
-    mutationFn: (input: { leadId: string; workflowId: string; reason?: string | undefined }) =>
+    mutationFn: (input: { dealId: string; workflowId: string; reason?: string | undefined }) =>
       backend.runs.create(input),
     onSuccess: invalidate,
   });
@@ -550,8 +363,8 @@ export function useAutomations() {
     resumeRun: (id: string) => runAction.mutateAsync({ id, action: "resume" }),
     cancelRun: (id: string) => runAction.mutateAsync({ id, action: "cancel" }),
     retryRun: (id: string) => runAction.mutateAsync({ id, action: "retry" }),
-    enrollLead: (leadId: string, workflowId: string, reason?: string) =>
-      enroll.mutateAsync({ leadId, workflowId, reason }),
+    enrollDeal: (dealId: string, workflowId: string, reason?: string) =>
+      enroll.mutateAsync({ dealId, workflowId, reason }),
     addTemplate: (input: { name: string; type: TemplateType; subject: string; body: string }) =>
       templateCreate.mutateAsync({
         name: input.name,

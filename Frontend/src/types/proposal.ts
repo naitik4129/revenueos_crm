@@ -1,4 +1,4 @@
-import type { LeadLossReason } from "./lead";
+import type { LeadLossReason } from "./crm";
 
 export const PROPOSAL_STATUSES = [
   "draft",
@@ -35,7 +35,7 @@ export type WhatsappSendStatus = (typeof PROPOSAL_WHATSAPP_SEND_STATUSES)[number
 
 export interface Proposal {
   id: string;
-  leadId: string;
+  dealId: string;
   ownerId?: string;
   ownerName?: string;
   title: string;

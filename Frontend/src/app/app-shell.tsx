@@ -402,8 +402,13 @@ export function AppShell({ children }: { children: ReactNode }) {
                         key={n.id}
                         className="flex w-full gap-2 border-b px-3 py-2.5 text-left last:border-0 hover:bg-accent"
                         onClick={() => {
-                          if (n.leadId)
-                            void navigate({ to: "/leads/$leadId", params: { leadId: n.leadId } });
+                          if (n.dealId)
+                            void navigate({ to: "/deals/$dealId", params: { dealId: n.dealId } });
+                          else if (n.contactId)
+                            void navigate({
+                              to: "/contacts/$contactId",
+                              params: { contactId: n.contactId },
+                            });
                           else if (n.href === "/automations/runs")
                             void navigate({ to: "/automations/runs" });
                           else if (n.href === "/automations") void navigate({ to: "/automations" });

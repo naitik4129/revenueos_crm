@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { PageHeader } from "@/app/app-shell";
 import { Card } from "@/components/ui/card";
@@ -14,24 +14,19 @@ import {
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
 import { isOverdue, isToday, relDay } from "@/lib/format";
-import { useLeads, useMeetings, useSession, useTasks } from "@/store";
+import { useSession, useTasks } from "@/store";
 import { messageFromError } from "@/store";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
-import { LogCallDialog } from "@/features/leads/log-call-dialog";
-import { ScheduleMeetingDialog } from "@/features/meetings/schedule-meeting-dialog";
+import { DealLink } from "@/features/deals/deal-link";
 
 type View = "today" | "overdue" | "upcoming" | "done";
 
 export function TasksPage() {
   const { tasks, completeTask, isLoading, error, isPending } = useTasks();
-  const { leads } = useLeads();
-  const meetingStore = useMeetings();
   const { users, userName } = useSession();
+  const navigate = useNavigate();
   const [view, setView] = useState<View>("today");
   const [owner, setOwner] = useState("all");
-  const [callTask, setCallTask] = useState<{ leadId: string; taskId: string } | null>(null);
-  const [scheduleMeetingTask, setScheduleMeetingTask] = useState<{ leadId: string } | null>(null);
-  const [schedulingMeeting, setSchedulingMeeting] = useState(false);
 
   const filtered = tasks.filter((t) => {
     if (owner !== "all" && t.ownerId !== owner) return false;
@@ -54,7 +49,7 @@ export function TasksPage() {
     <div className="pb-10">
       <PageHeader
         title="Tasks"
-        description="Manual and automation-created actions. Completing a task keeps the lead moving."
+        description="Manual and automation-created actions. Call and meeting tasks open their deal, where you log the call or schedule the meeting."
         tabs={
           <Tabs value={view} onValueChange={(v) => setView(v as View)}>
             <TabsList>
@@ -93,7 +88,7 @@ export function TasksPage() {
               <table className="w-full min-w-[820px] text-sm">
                 <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
                   <tr>
-                    {["", "Task", "Lead", "Type", "Due", "Owner", "Origin"].map((h, i) => (
+                    {["", "Task", "Deal", "Type", "Due", "Owner", "Origin"].map((h, i) => (
                       <th key={i} className="px-3 py-2 font-medium">
                         {h}
                       </th>
@@ -102,7 +97,6 @@ export function TasksPage() {
                 </thead>
                 <tbody>
                   {filtered.map((t) => {
-                    const lead = leads.find((l) => l.id === t.leadId);
                     return (
                       <tr key={t.id} className="border-t hover:bg-accent/40">
                         <td className="px-3 py-2">
@@ -111,12 +105,15 @@ export function TasksPage() {
                             disabled={t.status !== "open" || isPending}
                             onCheckedChange={() => {
                               if (t.status !== "open") return;
-                              if (t.type === "call") {
-                                setCallTask({ leadId: t.leadId, taskId: t.id });
-                                return;
-                              }
-                              if (t.type === "schedule_meeting") {
-                                setScheduleMeetingTask({ leadId: t.leadId });
+                              // These are done by logging the call / scheduling on the deal page.
+                              if (
+                                (t.type === "call" || t.type === "schedule_meeting") &&
+                                t.dealId
+                              ) {
+                                void navigate({
+                                  to: "/deals/$dealId",
+                                  params: { dealId: t.dealId },
+                                });
                                 return;
                               }
                               void completeTask(t.id).catch((reason) => toastError(reason));
@@ -129,15 +126,7 @@ export function TasksPage() {
                           {t.title}
                         </td>
                         <td className="px-3 py-2 text-xs">
-                          {lead && (
-                            <Link
-                              to="/leads/$leadId"
-                              params={{ leadId: lead.id }}
-                              className="hover:underline"
-                            >
-                              {lead.firstName} {lead.lastName} · {lead.company}
-                            </Link>
-                          )}
+                          <DealLink dealId={t.dealId} />
                         </td>
                         <td className="px-3 py-2">
                           <StatusBadge value={t.type} tone="neutral" />
@@ -177,40 +166,6 @@ export function TasksPage() {
           </Card>
         )}
       </div>
-      {callTask && (
-        <LogCallDialog
-          leadId={callTask.leadId}
-          taskId={callTask.taskId}
-          open={true}
-          onOpenChange={(value) => {
-            if (!value) setCallTask(null);
-          }}
-        />
-      )}
-      {scheduleMeetingTask && (
-        <ScheduleMeetingDialog
-          leadId={scheduleMeetingTask.leadId}
-          meeting={null}
-          open={true}
-          isSaving={schedulingMeeting}
-          onOpenChange={(value) => {
-            if (!value) setScheduleMeetingTask(null);
-          }}
-          onSave={(value) =>
-            void (async () => {
-              setSchedulingMeeting(true);
-              try {
-                await meetingStore.addMeeting(value);
-                toast.success("Meeting scheduled");
-              } catch (error) {
-                toastError(error);
-              } finally {
-                setSchedulingMeeting(false);
-              }
-            })()
-          }
-        />
-      )}
     </div>
   );
 }

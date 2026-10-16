@@ -1,4 +1,3 @@
-import { Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
@@ -12,7 +11,8 @@ import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { findCurrentStep } from "@/lib/workflow-timeline";
-import { messageFromError, useAutomations, useLeads } from "@/store";
+import { messageFromError, useAutomations, useDealIndex } from "@/store";
+import { DealLink } from "@/features/deals/deal-link";
 
 const RUNS_PAGE_SIZE = 10;
 const ACTIONS_PAGE_SIZE = 10;
@@ -30,30 +30,24 @@ export function RunsPage() {
     error,
     isPending,
   } = useAutomations();
-  const { leads } = useLeads();
+  const deals = useDealIndex();
+  // Search matches the deal's contact and company names.
+  const dealText = (dealId: string) => {
+    const deal = deals.get(dealId);
+    return deal ? `${deal.contactName} ${deal.companyName ?? ""}` : dealId;
+  };
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [actionsPage, setActionsPage] = useState(1);
 
-  const filteredRuns = useMemo(() => {
-    const query = q.trim().toLowerCase();
-    if (!query) return runs;
-    return runs.filter((run) => {
-      const lead = leads.find((item) => item.id === run.leadId);
-      const haystack = lead ? `${lead.firstName} ${lead.lastName} ${lead.company}` : run.leadId;
-      return haystack.toLowerCase().includes(query);
-    });
-  }, [runs, leads, q]);
+  const query = q.trim().toLowerCase();
+  const filteredRuns = query
+    ? runs.filter((run) => dealText(run.dealId).toLowerCase().includes(query))
+    : runs;
 
-  const filteredScheduledActions = useMemo(() => {
-    const query = q.trim().toLowerCase();
-    if (!query) return scheduledActions;
-    return scheduledActions.filter((action) => {
-      const lead = leads.find((item) => item.id === action.leadId);
-      const haystack = lead ? `${lead.firstName} ${lead.lastName} ${lead.company}` : action.leadId;
-      return haystack.toLowerCase().includes(query);
-    });
-  }, [scheduledActions, leads, q]);
+  const filteredScheduledActions = query
+    ? scheduledActions.filter((action) => dealText(action.dealId).toLowerCase().includes(query))
+    : scheduledActions;
 
   const totalPages = Math.max(1, Math.ceil(filteredRuns.length / RUNS_PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -101,7 +95,7 @@ export function RunsPage() {
                     setPage(1);
                     setActionsPage(1);
                   }}
-                  placeholder="Search by lead name"
+                  placeholder="Search by contact or company"
                   className="pl-8"
                 />
               </div>
@@ -116,7 +110,7 @@ export function RunsPage() {
                   <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
                     <tr>
                       {[
-                        "Lead",
+                        "Deal",
                         "Workflow",
                         "Current step",
                         "Status",
@@ -132,7 +126,6 @@ export function RunsPage() {
                   </thead>
                   <tbody>
                     {pagedRuns.map((run) => {
-                      const lead = leads.find((item) => item.id === run.leadId);
                       const workflow = workflows.find((item) => item.id === run.workflowId);
                       const currentStep = findCurrentStep(workflow, run);
                       const currentStepLabel = currentStep
@@ -143,17 +136,7 @@ export function RunsPage() {
                       return (
                         <tr key={run.id} className="border-t hover:bg-accent/40">
                           <td className="px-3 py-2 text-xs">
-                            {lead ? (
-                              <Link
-                                to="/leads/$leadId"
-                                params={{ leadId: lead.id }}
-                                className="hover:underline"
-                              >
-                                {lead.firstName} {lead.lastName} · {lead.company}
-                              </Link>
-                            ) : (
-                              run.leadId
-                            )}
+                            <DealLink dealId={run.dealId} />
                           </td>
                           <td className="px-3 py-2 text-xs">
                             {workflow?.name ?? run.workflowId} V{run.version}
@@ -260,7 +243,7 @@ export function RunsPage() {
                   <table className="w-full min-w-[760px] text-sm">
                     <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
                       <tr>
-                        {["Lead", "Action", "Scheduled for", "Status", "Attempts / error"].map(
+                        {["Deal", "Action", "Scheduled for", "Status", "Attempts / error"].map(
                           (heading) => (
                             <th key={heading} className="px-3 py-2 font-medium">
                               {heading}
@@ -271,11 +254,10 @@ export function RunsPage() {
                     </thead>
                     <tbody>
                       {pagedScheduledActions.map((action) => {
-                        const lead = leads.find((item) => item.id === action.leadId);
                         return (
                           <tr key={action.id} className="border-t">
                             <td className="px-3 py-2 text-xs">
-                              {lead ? `${lead.firstName} ${lead.lastName}` : action.leadId}
+                              <DealLink dealId={action.dealId} />
                             </td>
                             <td className="px-3 py-2">{label(action.actionType)}</td>
                             <td className="px-3 py-2 text-xs text-muted-foreground">

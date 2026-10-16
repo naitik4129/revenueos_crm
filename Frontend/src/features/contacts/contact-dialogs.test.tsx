@@ -16,6 +16,8 @@ vi.mock("@/lib/backend-client", async (importOriginal) => {
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => vi.fn(),
+  // The log-call result links to the deal; no router in this test.
+  Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
 }));
 // The real picker searches the server; here a button picks a fixed contact.
 vi.mock("./pickers", () => ({

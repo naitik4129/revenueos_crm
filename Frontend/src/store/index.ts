@@ -1,12 +1,9 @@
 export { StoreProvider } from "./store-provider";
 export {
   useSession,
-  useLeads,
-  useLead,
   useTasks,
   useMeetings,
   useProposals,
-  useTimeline,
   useAutomations,
   useNotifications,
   useDashboard,
@@ -21,15 +18,15 @@ export {
   useIndustries,
   useDeals,
   useDeal,
+  useDealDetail,
+  useDealIndex,
   useCrmMutation,
 } from "./contact-hooks";
 export type {
   SessionSlice,
-  LeadsSlice,
   TasksSlice,
   MeetingsSlice,
   ProposalsSlice,
-  TimelineSlice,
   AutomationsSlice,
   NotificationsSlice,
 } from "./server-hooks";

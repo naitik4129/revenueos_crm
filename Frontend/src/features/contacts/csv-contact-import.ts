@@ -1,10 +1,21 @@
 import Papa from "papaparse";
 import type { ImportContactRow } from "@/lib/backend-client";
 import { validateContact } from "@/lib/contact-validation";
-import { normalizeHeader } from "@/features/leads/csv-import-utils";
 import { CONTACT_SOURCES } from "@/types";
 
 export const MAX_IMPORT_ROWS = 2000;
+
+const BOM_CHAR = String.fromCharCode(0xfeff);
+/** "First Name", "first_name" and "FIRST NAME" all become "first name". */
+function normalizeHeader(raw: string): string {
+  return raw
+    .replace(BOM_CHAR, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 /** Columns are matched by name (any case, spaces or underscores), never by position. */
 const FIELDS = {

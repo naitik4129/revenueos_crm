@@ -23,8 +23,6 @@ import { Route as ContactsIndexRouteImport } from './routes/contacts.index'
 import { Route as ContactsContactIdRouteImport } from './routes/contacts.$contactId'
 import { Route as DealsIndexRouteImport } from './routes/deals.index'
 import { Route as DealsDealIdRouteImport } from './routes/deals.$dealId'
-import { Route as LeadsIndexRouteImport } from './routes/leads.index'
-import { Route as LeadsLeadIdRouteImport } from './routes/leads.$leadId'
 import { Route as ProposalsIndexRouteImport } from './routes/proposals.index'
 import { Route as AutomationsWorkflowsWorkflowIdRouteImport } from './routes/automations.workflows.$workflowId'
 
@@ -98,16 +96,6 @@ const DealsDealIdRoute = DealsDealIdRouteImport.update({
   path: '/deals/$dealId',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LeadsIndexRoute = LeadsIndexRouteImport.update({
-  id: '/leads/',
-  path: '/leads/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LeadsLeadIdRoute = LeadsLeadIdRouteImport.update({
-  id: '/leads/$leadId',
-  path: '/leads/$leadId',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ProposalsIndexRoute = ProposalsIndexRouteImport.update({
   id: '/proposals/',
   path: '/proposals/',
@@ -131,12 +119,10 @@ export interface FileRoutesByFullPath {
   '/companies/$companyId': typeof CompaniesCompanyIdRoute
   '/contacts/$contactId': typeof ContactsContactIdRoute
   '/deals/$dealId': typeof DealsDealIdRoute
-  '/leads/$leadId': typeof LeadsLeadIdRoute
   '/automations/': typeof AutomationsIndexRoute
   '/companies/': typeof CompaniesIndexRoute
   '/contacts/': typeof ContactsIndexRoute
   '/deals/': typeof DealsIndexRoute
-  '/leads/': typeof LeadsIndexRoute
   '/proposals/': typeof ProposalsIndexRoute
   '/automations/workflows/$workflowId': typeof AutomationsWorkflowsWorkflowIdRoute
 }
@@ -151,12 +137,10 @@ export interface FileRoutesByTo {
   '/companies/$companyId': typeof CompaniesCompanyIdRoute
   '/contacts/$contactId': typeof ContactsContactIdRoute
   '/deals/$dealId': typeof DealsDealIdRoute
-  '/leads/$leadId': typeof LeadsLeadIdRoute
   '/automations': typeof AutomationsIndexRoute
   '/companies': typeof CompaniesIndexRoute
   '/contacts': typeof ContactsIndexRoute
   '/deals': typeof DealsIndexRoute
-  '/leads': typeof LeadsIndexRoute
   '/proposals': typeof ProposalsIndexRoute
   '/automations/workflows/$workflowId': typeof AutomationsWorkflowsWorkflowIdRoute
 }
@@ -172,12 +156,10 @@ export interface FileRoutesById {
   '/companies/$companyId': typeof CompaniesCompanyIdRoute
   '/contacts/$contactId': typeof ContactsContactIdRoute
   '/deals/$dealId': typeof DealsDealIdRoute
-  '/leads/$leadId': typeof LeadsLeadIdRoute
   '/automations/': typeof AutomationsIndexRoute
   '/companies/': typeof CompaniesIndexRoute
   '/contacts/': typeof ContactsIndexRoute
   '/deals/': typeof DealsIndexRoute
-  '/leads/': typeof LeadsIndexRoute
   '/proposals/': typeof ProposalsIndexRoute
   '/automations/workflows/$workflowId': typeof AutomationsWorkflowsWorkflowIdRoute
 }
@@ -194,12 +176,10 @@ export interface FileRouteTypes {
     | '/companies/$companyId'
     | '/contacts/$contactId'
     | '/deals/$dealId'
-    | '/leads/$leadId'
     | '/automations/'
     | '/companies/'
     | '/contacts/'
     | '/deals/'
-    | '/leads/'
     | '/proposals/'
     | '/automations/workflows/$workflowId'
   fileRoutesByTo: FileRoutesByTo
@@ -214,12 +194,10 @@ export interface FileRouteTypes {
     | '/companies/$companyId'
     | '/contacts/$contactId'
     | '/deals/$dealId'
-    | '/leads/$leadId'
     | '/automations'
     | '/companies'
     | '/contacts'
     | '/deals'
-    | '/leads'
     | '/proposals'
     | '/automations/workflows/$workflowId'
   id:
@@ -234,12 +212,10 @@ export interface FileRouteTypes {
     | '/companies/$companyId'
     | '/contacts/$contactId'
     | '/deals/$dealId'
-    | '/leads/$leadId'
     | '/automations/'
     | '/companies/'
     | '/contacts/'
     | '/deals/'
-    | '/leads/'
     | '/proposals/'
     | '/automations/workflows/$workflowId'
   fileRoutesById: FileRoutesById
@@ -255,12 +231,10 @@ export interface RootRouteChildren {
   CompaniesCompanyIdRoute: typeof CompaniesCompanyIdRoute
   ContactsContactIdRoute: typeof ContactsContactIdRoute
   DealsDealIdRoute: typeof DealsDealIdRoute
-  LeadsLeadIdRoute: typeof LeadsLeadIdRoute
   AutomationsIndexRoute: typeof AutomationsIndexRoute
   CompaniesIndexRoute: typeof CompaniesIndexRoute
   ContactsIndexRoute: typeof ContactsIndexRoute
   DealsIndexRoute: typeof DealsIndexRoute
-  LeadsIndexRoute: typeof LeadsIndexRoute
   ProposalsIndexRoute: typeof ProposalsIndexRoute
   AutomationsWorkflowsWorkflowIdRoute: typeof AutomationsWorkflowsWorkflowIdRoute
 }
@@ -365,20 +339,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DealsDealIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/leads/': {
-      id: '/leads/'
-      path: '/leads'
-      fullPath: '/leads/'
-      preLoaderRoute: typeof LeadsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/leads/$leadId': {
-      id: '/leads/$leadId'
-      path: '/leads/$leadId'
-      fullPath: '/leads/$leadId'
-      preLoaderRoute: typeof LeadsLeadIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/proposals/': {
       id: '/proposals/'
       path: '/proposals'
@@ -407,12 +367,10 @@ const rootRouteChildren: RootRouteChildren = {
   CompaniesCompanyIdRoute: CompaniesCompanyIdRoute,
   ContactsContactIdRoute: ContactsContactIdRoute,
   DealsDealIdRoute: DealsDealIdRoute,
-  LeadsLeadIdRoute: LeadsLeadIdRoute,
   AutomationsIndexRoute: AutomationsIndexRoute,
   CompaniesIndexRoute: CompaniesIndexRoute,
   ContactsIndexRoute: ContactsIndexRoute,
   DealsIndexRoute: DealsIndexRoute,
-  LeadsIndexRoute: LeadsIndexRoute,
   ProposalsIndexRoute: ProposalsIndexRoute,
   AutomationsWorkflowsWorkflowIdRoute: AutomationsWorkflowsWorkflowIdRoute,
 }

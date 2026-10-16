@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { AlertTriangle, Video } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/app/app-shell";
@@ -25,7 +24,8 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { fmtDateTime, isToday, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
-import { messageFromError, useLeads, useMeetings, useSession } from "@/store";
+import { messageFromError, useMeetings, useSession } from "@/store";
+import { DealLink } from "@/features/deals/deal-link";
 import { ScheduleMeetingDialog } from "./schedule-meeting-dialog";
 import {
   MEETING_OUTCOMES,
@@ -37,7 +37,6 @@ import {
 
 export function MeetingsPage() {
   const store = useMeetings();
-  const { leads } = useLeads();
   const { userName } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Meeting | null>(null);
@@ -81,7 +80,7 @@ export function MeetingsPage() {
               <table className="w-full min-w-[980px] text-sm">
                 <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
                   <tr>
-                    {["Meeting", "Lead", "When", "Owner", "Status", "Outcome", ""].map(
+                    {["Meeting", "Deal", "When", "Owner", "Status", "Outcome", ""].map(
                       (heading) => (
                         <th key={heading} className="px-3 py-2 font-medium">
                           {heading}
@@ -92,7 +91,6 @@ export function MeetingsPage() {
                 </thead>
                 <tbody>
                   {sorted.map((meeting) => {
-                    const lead = leads.find((item) => item.id === meeting.leadId);
                     return (
                       <tr key={meeting.id} className="border-t hover:bg-accent/40">
                         <td className="px-3 py-2">
@@ -117,15 +115,7 @@ export function MeetingsPage() {
                           )}
                         </td>
                         <td className="px-3 py-2 text-xs">
-                          {lead && (
-                            <Link
-                              to="/leads/$leadId"
-                              params={{ leadId: lead.id }}
-                              className="hover:underline"
-                            >
-                              {lead.firstName} {lead.lastName} · {lead.company}
-                            </Link>
-                          )}
+                          <DealLink dealId={meeting.dealId} />
                         </td>
                         <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
                           {fmtDateTime(meeting.at)}
@@ -241,7 +231,7 @@ export function MeetingsPage() {
           )
         }
       />
-      <OutcomeDialog
+      <MeetingOutcomeDialog
         open={Boolean(outcomeFor)}
         onOpenChange={(open) => {
           if (!open) setOutcomeFor(null);
@@ -258,7 +248,7 @@ export function MeetingsPage() {
   );
 }
 
-function OutcomeDialog({
+export function MeetingOutcomeDialog({
   open,
   onOpenChange,
   onSave,

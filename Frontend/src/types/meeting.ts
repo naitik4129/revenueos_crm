@@ -24,7 +24,7 @@ export type MeetingOutcome = (typeof MEETING_OUTCOMES)[number];
 export type CalendarSyncStatus = "not_applicable" | "pending" | "synced" | "failed";
 export interface Meeting {
   id: string;
-  leadId: string;
+  dealId: string;
   ownerId?: string;
   ownerName?: string;
   title: string;

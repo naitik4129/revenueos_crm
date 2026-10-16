@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { DealPlaceholderPage } from "@/features/deals/deal-placeholder-page";
+import { DealDetailPage } from "@/features/deals/deal-detail-page";
 
 export const Route = createFileRoute("/deals/$dealId")({
   head: () => ({ meta: [{ title: "Deal - MOTM Flow" }] }),
@@ -8,5 +8,5 @@ export const Route = createFileRoute("/deals/$dealId")({
 
 function DealRoute() {
   const { dealId } = Route.useParams();
-  return <DealPlaceholderPage key={dealId} dealId={dealId} />;
+  return <DealDetailPage key={dealId} dealId={dealId} />;
 }

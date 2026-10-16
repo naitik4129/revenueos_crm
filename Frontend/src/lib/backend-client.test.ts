@@ -38,16 +38,44 @@ afterEach(() => {
 describe("backend client", () => {
   it.each([
     [
-      "lead",
-      () => backend.leads.create({ firstName: "Ada", company: "Northbeam", source: "referral" }),
+      "contact",
+      () => backend.contacts.create({ firstName: "Ada", email: "ada@example.com" }),
       "POST",
-      "/api/v1/leads",
+      "/api/v1/contacts",
     ],
     [
       "call",
-      () => backend.leads.logCall("lead-1", { connected: false, notConnectedReason: "no_answer" }),
+      () =>
+        backend.contacts.logCall("contact-1", {
+          connected: false,
+          notConnectedReason: "no_answer",
+        }),
       "POST",
-      "/api/v1/leads/lead-1/calls",
+      "/api/v1/contacts/contact-1/calls",
+    ],
+    [
+      "deal won",
+      () => backend.deals.setOutcome("deal-1", "won", "Signed"),
+      "POST",
+      "/api/v1/deals/deal-1/won",
+    ],
+    [
+      "deal lost",
+      () => backend.deals.markLost("deal-1", "price_budget"),
+      "POST",
+      "/api/v1/deals/deal-1/lost",
+    ],
+    [
+      "proposal",
+      () => backend.proposals.create({ dealId: "deal-1", title: "Proposal" }),
+      "POST",
+      "/api/v1/proposals",
+    ],
+    [
+      "proposal send",
+      () => backend.proposals.send("proposal-1", { emailTemplateId: "t-1" }),
+      "POST",
+      "/api/v1/proposals/proposal-1/send",
     ],
     [
       "task edit",
@@ -59,7 +87,7 @@ describe("backend client", () => {
       "meeting",
       () =>
         backend.meetings.create({
-          leadId: "lead-1",
+          dealId: "deal-1",
           title: "Discovery",
           at: "2026-08-28T04:30:00.000Z",
         }),
@@ -110,31 +138,20 @@ describe("backend client", () => {
     });
   });
 
-  it("uploads a proposal document with its multipart fields", async () => {
+  it("uploads a proposal document as multipart", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => response({ id: "proposal-1" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const document = new File(["proposal contents"], "proposal.pdf", { type: "application/pdf" });
-    await backend.proposals.create({
-      leadId: "lead-1",
-      title: "Proposal",
-      emailTemplateId: "template-email-1",
-      whatsappTemplateId: "template-whatsapp-1",
-      document,
-    });
+    await backend.proposals.uploadDocument("proposal-1", document);
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe("https://api.example.test/api/v1/proposals");
+    expect(url).toBe("https://api.example.test/api/v1/proposals/proposal-1/document");
     expect(init?.method).toBe("POST");
     expect(init?.headers).toMatchObject({ Authorization: "Bearer session-token" });
     expect(init?.headers).not.toHaveProperty("Content-Type");
-    const body = init?.body as FormData;
-    expect(body.get("leadId")).toBe("lead-1");
-    expect(body.get("title")).toBe("Proposal");
-    expect(body.get("emailTemplateId")).toBe("template-email-1");
-    expect(body.get("whatsappTemplateId")).toBe("template-whatsapp-1");
-    expect(body.get("document")).toBe(document);
+    expect((init?.body as FormData).get("document")).toBe(document);
   });
 
   it("omits retained email secrets from a connections update", async () => {
@@ -157,12 +174,12 @@ describe("backend client", () => {
     const fetchMock = vi.fn<typeof fetch>(async () => response({ data: [] }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await backend.leads.list();
+    await backend.deals.list();
     expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty(["headers", "X-Workspace-Id"]);
 
     setCurrentWorkspaceId("workspace-1");
     expect(getCurrentWorkspaceId()).toBe("workspace-1");
-    await backend.leads.list();
+    await backend.deals.list();
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
       headers: { "X-Workspace-Id": "workspace-1" },
     });

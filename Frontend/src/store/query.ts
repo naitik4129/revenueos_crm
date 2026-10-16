@@ -26,14 +26,8 @@ export const keys = {
     part ? (["company", workspaceId, id, part] as const) : (["company", workspaceId, id] as const),
   deals: (workspaceId: string | null, filters?: object) =>
     filters ? (["deals", workspaceId, filters] as const) : (["deals", workspaceId] as const),
-  deal: (workspaceId: string | null, id: string) => ["deal", workspaceId, id] as const,
-  leads: (workspaceId: string | null) => ["leads", workspaceId] as const,
-  lead: (workspaceId: string | null, id: string) => ["lead", workspaceId, id] as const,
-  notes: (workspaceId: string | null, id: string) => ["notes", workspaceId, id] as const,
-  contactability: (workspaceId: string | null, id: string) =>
-    ["contactability", workspaceId, id] as const,
-  calls: (workspaceId: string | null, id: string) => ["calls", workspaceId, id] as const,
-  timeline: (workspaceId: string | null, id: string) => ["timeline", workspaceId, id] as const,
+  deal: (workspaceId: string | null, id: string, part?: string) =>
+    part ? (["deal", workspaceId, id, part] as const) : (["deal", workspaceId, id] as const),
   tasks: (workspaceId: string | null) => ["tasks", workspaceId] as const,
   meetings: (workspaceId: string | null) => ["meetings", workspaceId] as const,
   proposals: (workspaceId: string | null) => ["proposals", workspaceId] as const,
@@ -45,14 +39,19 @@ export const keys = {
   notifications: (workspaceId: string | null) => ["notifications", workspaceId] as const,
 };
 
-export function refreshLead(client: QueryClient, workspaceId: string | null, leadId: string) {
+/**
+ * After any CRM write: refetch everything a write can touch (a call or outcome change moves
+ * deals, tasks, runs, lifecycle and the dashboard). Prefix keys, so every list and detail of
+ * this workspace is covered; only queries on screen actually refetch.
+ */
+export function refreshCrm(client: QueryClient, workspaceId: string | null) {
   const targets = [
-    keys.leads(workspaceId),
-    keys.lead(workspaceId, leadId),
-    keys.notes(workspaceId, leadId),
-    keys.contactability(workspaceId, leadId),
-    keys.calls(workspaceId, leadId),
-    keys.timeline(workspaceId, leadId),
+    ["contact", workspaceId],
+    keys.contacts(workspaceId),
+    ["company", workspaceId],
+    keys.companies(workspaceId),
+    ["deal", workspaceId],
+    keys.deals(workspaceId),
     keys.tasks(workspaceId),
     keys.meetings(workspaceId),
     keys.proposals(workspaceId),

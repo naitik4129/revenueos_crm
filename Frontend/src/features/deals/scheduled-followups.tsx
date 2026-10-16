@@ -29,21 +29,17 @@ import { messageFromError, useAutomations } from "@/store";
 import type { Run, ScheduledAction, WorkflowTrigger } from "@/types";
 
 /**
- * Manual "enroll this lead in a workflow" dialog — controlled like
- * LogCallDialog, so the empty-state prompt below, the Automation tab's
- * "Workflow runs" card, and the Lead Journey card's post-call-outcome
- * prompt can all open the same instance. When `triggerFilter` is set (the
- * lead just moved into a nurture stage from a call outcome), the workflow
- * list is narrowed to that trigger and pre-selected when there's exactly
- * one match — the rep still has to click Enroll, nothing is auto-applied.
+ * Manual "enroll this deal in a workflow" dialog. When `triggerFilter` is set (the deal is in
+ * a nurture stage, or a call just suggested a trigger), the list is narrowed to that trigger
+ * and pre-selected when there's exactly one match; nothing is enrolled without a click.
  */
 export function EnrollWorkflowDialog({
-  leadId,
+  dealId,
   open,
   onOpenChange,
   triggerFilter,
 }: {
-  leadId: string;
+  dealId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   triggerFilter?: WorkflowTrigger;
@@ -74,8 +70,8 @@ export function EnrollWorkflowDialog({
   const submit = async () => {
     if (!workflowId) return;
     try {
-      await automationStore.enrollLead(leadId, workflowId, reason.trim() || undefined);
-      toast.success("Lead enrolled in workflow");
+      await automationStore.enrollDeal(dealId, workflowId, reason.trim() || undefined);
+      toast.success("Deal enrolled in workflow");
       setWorkflowId("");
       setReason("");
       onOpenChange(false);
@@ -91,7 +87,7 @@ export function EnrollWorkflowDialog({
           <DialogTitle>Enroll in workflow</DialogTitle>
           {triggerFilter && (
             <DialogDescription>
-              This lead just moved to nurture - pick the workflow to enroll them in.
+              This deal is in nurture - pick the workflow to enroll it in.
             </DialogDescription>
           )}
         </DialogHeader>
@@ -128,7 +124,7 @@ export function EnrollWorkflowDialog({
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               rows={2}
-              placeholder="Why this lead is going into this workflow"
+              placeholder="Why this deal is going into this workflow"
             />
           </div>
         </div>
@@ -224,7 +220,7 @@ function StepRow({
 }
 
 /**
- * "At a glance" view of a lead's nurture sequence: which messages already
+ * "At a glance" view of a deal's nurture sequence: which messages already
  * went out, and exactly when the next one is due — assembled entirely from
  * data useAutomations() already loads (workflows+steps, runs, scheduled
  * actions), no extra requests.
@@ -233,26 +229,26 @@ function StepRow({
 const VISIBLE_STEP_COUNT = 2;
 
 export function ScheduledFollowupTimeline({
-  leadId,
+  dealId,
   doNotContact,
   onEnrollClick,
 }: {
-  leadId: string;
+  dealId: string;
   doNotContact: boolean;
   onEnrollClick: () => void;
 }) {
   const [viewAllOpen, setViewAllOpen] = useState(false);
   const automationStore = useAutomations();
-  const leadRuns = automationStore.runs.filter((run: Run) => run.leadId === leadId);
-  const nonTerminalRun = leadRuns.find((run) =>
+  const dealRuns = automationStore.runs.filter((run: Run) => run.dealId === dealId);
+  const nonTerminalRun = dealRuns.find((run) =>
     ["running", "waiting", "paused"].includes(run.status),
   );
   // Fall back to the most recent run (even a completed/cancelled one) so
   // there's still useful history to show — but whether the enroll shortcut
   // appears is driven by nonTerminalRun specifically, not by "any run ever",
-  // so it doesn't disappear forever the moment a lead's first workflow ends.
+  // so it doesn't disappear forever the moment a deal's first workflow ends.
   const displayRun =
-    nonTerminalRun ?? leadRuns.slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
+    nonTerminalRun ?? dealRuns.slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
 
   const enrollButton = (
     <Button size="sm" variant="outline" disabled={doNotContact} onClick={onEnrollClick}>

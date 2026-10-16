@@ -41,3 +41,25 @@ export function ContactPicker(props: {
     />
   );
 }
+
+/** Open deals, searched by contact or company. */
+export function DealPicker(props: {
+  value: PickerOption | null;
+  onChange: (option: PickerOption | null) => void;
+}) {
+  return (
+    <SearchPicker
+      kind="deal-picker"
+      placeholder="Choose a deal"
+      search={async (search, signal) =>
+        (
+          await backend.deals.list(
+            { search: search || undefined, outcome: "open", limit: 20 },
+            signal,
+          )
+        ).data.map((deal) => ({ id: deal.id, label: deal.contactName, hint: deal.companyName }))
+      }
+      {...props}
+    />
+  );
+}

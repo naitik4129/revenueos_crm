@@ -20,7 +20,8 @@ export type TaskType = (typeof TASK_TYPES)[number];
 export type TaskStatus = "open" | "completed" | "cancelled";
 export interface Task {
   id: string;
-  leadId: string;
+  dealId?: string;
+  contactId?: string;
   ownerId?: string;
   ownerName?: string;
   type: TaskType;

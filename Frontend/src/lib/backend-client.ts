@@ -2,7 +2,6 @@ import { backendBaseUrl, configurationError, supabase } from "./supabase-client"
 import type {
   AppNotification,
   AutomationMode,
-  Call,
   Company,
   Contact,
   ContactCall,
@@ -17,13 +16,9 @@ import type {
   CallConnectedOutcome,
   CallNotConnectedReason,
   Contactability,
-  Lead,
   LeadLossReason,
-  LeadNote,
-  LeadSource,
   LifecycleStage,
   LogCallResult,
-  LifecycleState,
   Meeting,
   MeetingOutcome,
   MeetingStatus,
@@ -38,7 +33,6 @@ import type {
   TaskType,
   Template,
   TemplateAttachment,
-  TimelineEvent,
   User,
   Workflow,
   WorkflowStep,
@@ -167,60 +161,6 @@ async function uploadFile<T>(path: string, formData: FormData): Promise<T> {
   return body as T;
 }
 
-export interface CreateLeadInput {
-  firstName: string;
-  lastName?: string | undefined;
-  company: string;
-  jobTitle?: string | undefined;
-  industry?: string | undefined;
-  email?: string | undefined;
-  phone?: string | undefined;
-  source: LeadSource;
-  serviceInterest?: string | undefined;
-  ownerId?: string | undefined;
-}
-export interface ImportLeadRow {
-  rowNumber: number;
-  firstName: string;
-  lastName?: string | undefined;
-  company: string;
-  jobTitle?: string | undefined;
-  industry?: string | undefined;
-  email?: string | undefined;
-  phone?: string | undefined;
-  source: string;
-  serviceInterest?: string | undefined;
-}
-export interface ImportLeadsResult {
-  created: Lead[];
-  duplicates: { rowNumber: number; reason: string }[];
-  failed: { rowNumber: number; reason: string }[];
-  totalRows: number;
-}
-export interface UpdateLeadInput {
-  firstName?: string | undefined;
-  lastName?: string | undefined;
-  company?: string | undefined;
-  jobTitle?: string | undefined;
-  industry?: string | undefined;
-  email?: string | undefined;
-  phone?: string | undefined;
-  source?: LeadSource | undefined;
-  serviceInterest?: string | undefined;
-  ownerId?: string | undefined;
-  pipelineStage?: PipelineStage | undefined;
-  responseState?: ResponseState | undefined;
-}
-export interface LeadFilters {
-  stage?: PipelineStage;
-  lifecycle?: LifecycleState;
-  ownerId?: string;
-  source?: LeadSource;
-  automationMode?: AutomationMode;
-  search?: string;
-  limit?: number;
-  offset?: number;
-}
 export interface LogCallInput {
   connected: boolean;
   notConnectedReason?: CallNotConnectedReason | undefined;
@@ -239,7 +179,8 @@ export interface LogCallInput {
     | undefined;
 }
 export interface CreateTaskInput {
-  leadId: string;
+  dealId?: string | undefined;
+  contactId?: string | undefined;
   ownerId?: string | undefined;
   type: TaskType;
   title: string;
@@ -252,7 +193,7 @@ export interface UpdateTaskInput {
   dueAt?: string | undefined;
 }
 export interface CreateMeetingInput {
-  leadId: string;
+  dealId: string;
   ownerId?: string | undefined;
   title: string;
   at: string;
@@ -269,13 +210,10 @@ export interface UpdateMeetingInput {
   notes?: string | undefined;
 }
 export interface CreateProposalInput {
-  leadId: string;
+  dealId: string;
   title: string;
   amount?: number | undefined;
   notes?: string | undefined;
-  emailTemplateId: string;
-  whatsappTemplateId: string;
-  document: File;
 }
 export interface UpdateProposalInput {
   title?: string | undefined;
@@ -551,8 +489,8 @@ export const backend = {
       send<{ data: ImportContactsResult }>("POST", "/contacts/import", { rows }),
     notes: (id: string, signal?: AbortSignal) =>
       get<{ data: ContactNote[] }>(`/contacts/${id}/notes`, signal),
-    addNote: (id: string, body: string) =>
-      send<ContactNote>("POST", `/contacts/${id}/notes`, { body }),
+    addNote: (id: string, body: string, dealId?: string) =>
+      send<ContactNote>("POST", `/contacts/${id}/notes`, { body, dealId }),
     markDnc: (id: string, reason: string) =>
       send<Contact>("POST", `/contacts/${id}/dnc`, { reason }),
     reactivateFromDnc: (id: string, reason: string) =>
@@ -587,61 +525,22 @@ export const backend = {
       id: string,
       input: { stage?: PipelineStage; ownerId?: string | null; serviceInterest?: string },
     ) => send<Deal>("PATCH", `/deals/${id}`, input),
+    setAutomation: (id: string, mode: AutomationMode, reason?: string) =>
+      send<Deal>("POST", `/deals/${id}/automation`, { mode, reason }),
+    /** won / discard / nurture / reopen take an optional reason; lost needs a loss reason. */
+    setOutcome: (id: string, action: "won" | "discard" | "nurture" | "reopen", reason?: string) =>
+      send<Deal>("POST", `/deals/${id}/${action}`, { reason }),
+    markLost: (id: string, lossReason: LeadLossReason, notes?: string) =>
+      send<Deal>("POST", `/deals/${id}/lost`, { lossReason, notes }),
+    tasks: (id: string, signal?: AbortSignal) =>
+      get<Paged<Task>>(query(`/deals/${id}/tasks`, { limit: 200 }), signal),
+    meetings: (id: string, signal?: AbortSignal) =>
+      get<{ data: Meeting[] }>(`/deals/${id}/meetings`, signal),
+    proposals: (id: string, signal?: AbortSignal) =>
+      get<{ data: Proposal[] }>(`/deals/${id}/proposals`, signal),
+    runs: (id: string, signal?: AbortSignal) => get<{ data: Run[] }>(`/deals/${id}/runs`, signal),
     timeline: (id: string, params?: Page, signal?: AbortSignal) =>
       get<{ data: CrmTimelineEvent[] }>(query(`/deals/${id}/timeline`, { ...params }), signal),
-  },
-  leads: {
-    list: (params?: LeadFilters, signal?: AbortSignal) =>
-      get<{ data: Lead[] }>(
-        query("/leads", params as Record<string, string | number | undefined>),
-        signal,
-      ),
-    get: (id: string, signal?: AbortSignal) => get<Lead>(`/leads/${id}`, signal),
-    create: (input: CreateLeadInput) => send<Lead>("POST", "/leads", input),
-    importCsv: (rows: ImportLeadRow[]) =>
-      send<{ data: ImportLeadsResult }>("POST", "/leads/import", { rows }),
-    update: (id: string, fields: UpdateLeadInput) => send<Lead>("PATCH", `/leads/${id}`, fields),
-    delete: (id: string) => del(`/leads/${id}`),
-    addNote: (id: string, body: string) => send<LeadNote>("POST", `/leads/${id}/notes`, { body }),
-    notes: (id: string, signal?: AbortSignal) =>
-      get<{ data: LeadNote[] }>(`/leads/${id}/notes`, signal),
-    contactability: (id: string, signal?: AbortSignal) =>
-      get<{ data: Contactability[] }>(`/leads/${id}/contactability`, signal),
-    setAutomation: (id: string, mode: AutomationMode, reason?: string) =>
-      send<Lead>("POST", `/leads/${id}/automation`, { mode, reason }),
-    markDnc: (id: string, reason: string) => send<Lead>("POST", `/leads/${id}/dnc`, { reason }),
-    reactivateFromDnc: (id: string, reason: string) =>
-      send<Lead>("POST", `/leads/${id}/dnc/reactivate`, { reason }),
-    markWon: (id: string, reason?: string) => send<Lead>("POST", `/leads/${id}/won`, { reason }),
-    markLost: (id: string, lossReason: LeadLossReason, notes?: string) =>
-      send<Lead>("POST", `/leads/${id}/lost`, { lossReason, notes }),
-    discard: (id: string, reason?: string) =>
-      send<Lead>("POST", `/leads/${id}/discard`, { reason }),
-    reactivate: (id: string, reason?: string) =>
-      send<Lead>("POST", `/leads/${id}/reactivate`, { reason }),
-    longTermNurture: (id: string, reason?: string) =>
-      send<Lead>("POST", `/leads/${id}/long-term-nurture`, { reason }),
-    logCall: (id: string, input: LogCallInput) =>
-      send<{
-        call: Call;
-        lead: Lead;
-        workflowTrigger?: WorkflowTrigger;
-        promptScheduleMeeting?: boolean;
-      }>("POST", `/leads/${id}/calls`, input),
-    calls: (id: string, signal?: AbortSignal) =>
-      get<{ data: Call[] }>(`/leads/${id}/calls`, signal),
-    timeline: (id: string, signal?: AbortSignal) =>
-      get<{ data: TimelineEvent[] }>(`/leads/${id}/timeline`, signal),
-    meetings: (id: string, signal?: AbortSignal) =>
-      get<{ data: Meeting[] }>(`/leads/${id}/meetings`, signal),
-    proposals: (id: string, signal?: AbortSignal) =>
-      get<{ data: Proposal[] }>(`/leads/${id}/proposals`, signal),
-    runs: (id: string, signal?: AbortSignal) => get<{ data: Run[] }>(`/leads/${id}/runs`, signal),
-    logCommunication: (id: string, channel: "email" | "whatsapp", detail?: string) =>
-      send<{ channel: string; title: string }>("POST", `/leads/${id}/communications`, {
-        channel,
-        detail,
-      }),
   },
   tasks: {
     list: (params?: Record<string, string | boolean | undefined>, signal?: AbortSignal) =>
@@ -663,17 +562,14 @@ export const backend = {
   proposals: {
     list: (params?: Record<string, string | undefined>, signal?: AbortSignal) =>
       get<{ data: Proposal[] }>(query("/proposals", params), signal),
-    create: (input: CreateProposalInput) => {
+    create: (input: CreateProposalInput) => send<Proposal>("POST", "/proposals", input),
+    uploadDocument: (id: string, file: File) => {
       const formData = new FormData();
-      formData.append("leadId", input.leadId);
-      formData.append("title", input.title);
-      if (input.amount !== undefined) formData.append("amount", String(input.amount));
-      if (input.notes) formData.append("notes", input.notes);
-      formData.append("emailTemplateId", input.emailTemplateId);
-      formData.append("whatsappTemplateId", input.whatsappTemplateId);
-      formData.append("document", input.document);
-      return uploadFile<Proposal>("/proposals", formData);
+      formData.append("document", file);
+      return uploadFile<Proposal>(`/proposals/${id}/document`, formData);
     },
+    send: (id: string, input: { emailTemplateId?: string; whatsappTemplateId?: string }) =>
+      send<Proposal>("POST", `/proposals/${id}/send`, input),
     update: (id: string, input: UpdateProposalInput) =>
       send<Proposal>("PATCH", `/proposals/${id}`, input),
     setStatus: (
@@ -727,7 +623,7 @@ export const backend = {
   runs: {
     list: (params?: Record<string, string | undefined>, signal?: AbortSignal) =>
       get<{ data: Run[] }>(query("/runs", params), signal),
-    create: (input: { leadId: string; workflowId: string; reason?: string | undefined }) =>
+    create: (input: { dealId: string; workflowId: string; reason?: string | undefined }) =>
       send<{ data: Run[] }>("POST", "/runs", input),
     pause: (id: string, reason?: string) => send<Run>("POST", `/runs/${id}/pause`, { reason }),
     resume: (id: string) => send<Run>("POST", `/runs/${id}/resume`),
