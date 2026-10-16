@@ -25,7 +25,9 @@ import { Pool, type PoolClient } from "pg";
 import type { Actor } from "../../src/authMiddleware.js";
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
+// Skipped: written for the old public schema (leads). Replaced phase by phase from P2 with
+// tests on the PGlite test database (see testDb.ts), then deleted.
+const describeIfDb = describe.skip;
 
 const WORKSPACE_ID = "00000000-0000-0000-0000-000000000001";
 
