@@ -46,7 +46,7 @@ class BaileysManagerRegistry {
    * advisory lock) are logged and skipped rather than failing the others.
    */
   async ensureManagersForAllActiveWorkspaces(): Promise<void> {
-    const result = await pool.query<{ id: string }>(`select id from public.workspaces where is_active = true`);
+    const result = await pool.query<{ id: string }>(`select id from crm.workspaces where is_active = true`);
     await Promise.all(
       result.rows.map(async (row) => {
         if (this.managers.has(row.id) || this.starting.has(row.id)) return;

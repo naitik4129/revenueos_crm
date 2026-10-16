@@ -8,14 +8,16 @@ import { withTransaction } from "../db.js";
 import { recordAdminAudit } from "../services/admin-audit.service.js";
 
 /**
- * Workspace-scoped Email/WhatsApp/Google Calendar connection management.
- * Moved out of the admin-only app (see admin.routes.ts) per the
- * multi-workspace architecture plan: Admin stays limited to user
- * management, and every active salesperson can configure the connections
- * for whichever workspace they currently have selected (requireWorkspace,
- * applied at the crmRouter level in routes/index.ts, resolves req.workspaceId).
+ * Workspace-scoped Email/WhatsApp/Google Calendar connection management (any CRM user of the
+ * workspace selected by requireWorkspace, applied at the crmRouter level in routes/index.ts).
  */
 export const connectionsRouter = Router();
+
+// No seeded rows: the workspace's connection rows are created on first use, so every update below is an upsert.
+connectionsRouter.use(asyncHandler(async (req, _res, next) => {
+  await connections.ensureConnectionRows(req.workspaceId!);
+  next();
+}));
 
 connectionsRouter.get("/email", asyncHandler(async (req, res) => res.json(await connections.getEmailConnection(req.workspaceId!))));
 

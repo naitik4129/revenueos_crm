@@ -1,21 +1,28 @@
 import { pool } from "./db.js";
 import { workerEnv as env } from "./workerEnv.js";
 import { runAutomationTick } from "./services/automation-runner.js";
+import { baileysRegistry } from "./providers/baileys-registry.js";
 
 /**
- * The automation worker: polls for due scheduled actions and runs them (automation-runner.ts).
- * shortcut: queued proposal/meeting WhatsApp sends and the per-workspace Baileys sessions come
- * back in P5 with the provider work; until then every message send is a dry run.
+ * The automation worker: polls for due scheduled actions and queued WhatsApp sends
+ * (automation-runner.ts), and holds one Baileys session per active workspace.
  */
 
 let stopped = false;
 const log = (message: string) => console.log(message);
 
+// New workspaces are rare, so the session scan runs less often than the action poll.
+const WORKSPACE_SCAN_INTERVAL_TICKS = 6;
+let tickCount = 0;
+
 async function loop(): Promise<void> {
   while (!stopped) {
     await runAutomationTick({ batchSize: env.WORKER_BATCH_SIZE, dryRun: env.WORKER_DRY_RUN, log })
-      .then((claimed) => claimed && log(`[worker] Processed ${claimed} due action(s).`))
+      .then((claimed) => claimed && log(`[worker] Processed ${claimed} item(s).`))
       .catch((err) => console.error("[worker] Poll tick failed:", err));
+    if (tickCount++ % WORKSPACE_SCAN_INTERVAL_TICKS === 0) {
+      await baileysRegistry.ensureManagersForAllActiveWorkspaces().catch((err) => console.error("[worker] Workspace WhatsApp session scan failed:", err));
+    }
     if (stopped) break;
     await new Promise((resolve) => setTimeout(resolve, env.WORKER_POLL_INTERVAL_MS));
   }
@@ -24,13 +31,21 @@ async function loop(): Promise<void> {
 console.log(
   `Northbeam CRM automation worker starting (poll interval ${env.WORKER_POLL_INTERVAL_MS}ms, batch size ${env.WORKER_BATCH_SIZE}, dry run ${env.WORKER_DRY_RUN}).`,
 );
-if (!env.WORKER_DRY_RUN) console.warn("[worker] Real email/WhatsApp sends are not wired up yet (P5): all sends run as dry run.");
-void loop();
+void baileysRegistry
+  .ensureManagersForAllActiveWorkspaces()
+  .then(() => loop())
+  .catch(async (error) => {
+    console.error("Automation worker failed to initialize per-workspace WhatsApp sessions:", error);
+    await baileysRegistry.stopAll().catch(() => undefined);
+    await pool.end().catch(() => undefined);
+    process.exit(1);
+  });
 
 async function shutdown(signal: string): Promise<void> {
   console.log(`Received ${signal}, shutting down worker...`);
   stopped = true;
   try {
+    await baileysRegistry.stopAll();
     await pool.end();
   } catch (err) {
     console.error("[worker] Error closing database pool during shutdown:", err);

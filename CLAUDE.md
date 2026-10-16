@@ -5,6 +5,7 @@
 - **Plan first, wait for "go".** Propose the step, then stop until the human says go.
 - **One small step at a time.** Finish, verify (typecheck + tests), report, stop.
 - **No commits or pushes unless told.** No GitHub remote yet.
+- **Never discard uncommitted work without asking.** No `git checkout --`, `git restore`, `git reset`, `git clean` or `git stash` on files with uncommitted changes unless the human says so first; commit or copy the files before anything that could overwrite them.
 - **Supabase MCP is READ-ONLY.** Only `list_tables`, `list_extensions`, `list_migrations`, `get_project`, `get_project_url`, `search_docs`, and `execute_sql` with `SELECT`. Never `apply_migration`, never INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/GRANT, no branches, edge functions, secrets or storage changes. If unsure whether something writes, don't run it — ask.
 - **SQL files are written here; the human runs them** (same as the brain's SQL files).
 - **Never touch `public.*` or any schema other than `crm`.** Reading `public.revenueos_profiles` / `public.revenueos_projects` is the only allowed cross-schema access.

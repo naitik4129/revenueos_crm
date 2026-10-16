@@ -8,6 +8,7 @@ import { getRunRowOr404, scheduleStepAfter, type RunRow } from "./runs.service.j
 import { dealRenderContext, getDealOr404, updateDeal, type DealRow } from "./deals.service.js";
 import { createTask } from "./tasks.service.js";
 import { getLatestMeetingForDeal, toRenderMeeting } from "./meetings.service.js";
+import { BLOCKED_EMAIL_STATUSES as BLOCKED_EMAIL, BLOCKED_WHATSAPP_STATUSES as BLOCKED_WHATSAPP } from "./consent.service.js";
 
 /**
  * The only place automation business rules run. The worker (automation-runner.ts) claims due
@@ -17,9 +18,6 @@ import { getLatestMeetingForDeal, toRenderMeeting } from "./meetings.service.js"
 const MESSAGE_ACTION_TYPES: WorkflowStepAction[] = ["send_email", "send_whatsapp"];
 const INTERNAL_ACTION_TYPES: WorkflowStepAction[] = ["create_call_task", "create_follow_up_task", "change_lead_stage", "stop_workflow"];
 
-/** Channel statuses that block a send (crm.contact_channels). */
-const BLOCKED_EMAIL = ["permanent_bounce", "unsubscribed", "invalid"];
-const BLOCKED_WHATSAPP = ["invalid", "opted_out", "do_not_contact"];
 
 /** How long a send waits when the deal's automation is paused. */
 const PAUSED_RETRY_MS = 60 * 60_000;

@@ -37,7 +37,7 @@ const SCOPES = [CALENDAR_SCOPE, "https://www.googleapis.com/auth/userinfo.email"
  * The app's own OAuth client registration (client_id/client_secret/redirect_uri).
  * Deliberately NOT read from environment variables anywhere in this file —
  * an admin enters these in Admin -> Connections and they're stored
- * encrypted in public.google_calendar_connection (see connections.service.ts),
+ * encrypted in crm.google_calendar_connection (see connections.service.ts),
  * the same as the Resend API key for email. Every function here takes this
  * config as an explicit argument so the provider has no hidden credential
  * source of its own.
