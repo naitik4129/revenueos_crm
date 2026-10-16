@@ -225,7 +225,8 @@ export async function listDeals(db: Queryable, workspaceId: string, f: ListDeals
   if (f.missingNextAction) where.push(`d.outcome = 'open' and na.id is null`);
   if (f.search) {
     const p = `$${params.push(`%${f.search}%`)}`;
-    where.push(`(c.first_name ilike ${p} or c.last_name ilike ${p} or c.email ilike ${p} or co.name ilike ${p})`);
+    // Full name too, so "Ann Lee" finds Ann Lee's deals.
+    where.push(`(concat_ws(' ', c.first_name, c.last_name) ilike ${p} or c.email ilike ${p} or co.name ilike ${p})`);
   }
   const limit = Math.min(f.limit ?? 50, 500);
   const offset = f.offset ?? 0;

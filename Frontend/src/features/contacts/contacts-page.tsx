@@ -1,18 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Search } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { useAddContact } from "@/app/add-contact-context";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { FilterSelect, Pager, SearchBox } from "@/components/common/list-controls";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { relDay } from "@/lib/format";
@@ -24,6 +16,7 @@ import {
   type ContactStatus,
   type LifecycleStage,
 } from "@/types";
+import { CompanyLink } from "@/features/companies/company-link";
 import { ImportContactsDialog } from "./import-contacts-dialog";
 
 const PAGE_SIZE = 50;
@@ -32,7 +25,6 @@ const ALL = "all";
 export function ContactsPage() {
   const { users } = useSession();
   const addContact = useAddContact();
-  const [text, setText] = useState("");
   const [search, setSearch] = useState("");
   const [lifecycle, setLifecycle] = useState(ALL);
   const [status, setStatus] = useState(ALL);
@@ -40,11 +32,6 @@ export function ContactsPage() {
   const [offset, setOffset] = useState(0);
   const [importOpen, setImportOpen] = useState(false);
 
-  // Search on the server once typing pauses.
-  useEffect(() => {
-    const timer = setTimeout(() => setSearch(text.trim()), 300);
-    return () => clearTimeout(timer);
-  }, [text]);
   // Any filter change starts again at the first page.
   useEffect(() => setOffset(0), [search, lifecycle, status, owner]);
 
@@ -79,23 +66,18 @@ export function ContactsPage() {
 
       <div className="space-y-4 p-6">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative w-64">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Name, email, phone, company"
-              aria-label="Search contacts"
-              className="pl-8"
-            />
-          </div>
-          <Filter
+          <SearchBox
+            placeholder="Name, email, phone, company"
+            label="Search contacts"
+            onSearch={setSearch}
+          />
+          <FilterSelect
             label="Lifecycle stage"
             value={lifecycle}
             onChange={setLifecycle}
             options={[[ALL, "All stages"], ...LIFECYCLE_STAGES.map((s) => [s, label(s)] as const)]}
           />
-          <Filter
+          <FilterSelect
             label="Status"
             value={status}
             onChange={setStatus}
@@ -104,7 +86,7 @@ export function ContactsPage() {
               ...CONTACT_STATUSES.map((s) => [s, label(s)] as const),
             ]}
           />
-          <Filter
+          <FilterSelect
             label="Owner"
             value={owner}
             onChange={setOwner}
@@ -144,15 +126,16 @@ export function ContactsPage() {
                         <Link
                           to="/contacts/$contactId"
                           params={{ contactId: c.id }}
-                          className="block hover:underline"
+                          className="font-medium hover:underline"
                         >
-                          <span className="font-medium">
-                            {c.firstName} {c.lastName}
-                          </span>
-                          <span className="block text-xs text-muted-foreground">
-                            {[c.jobTitle, c.companyName].filter(Boolean).join(" · ") || c.email}
-                          </span>
+                          {c.firstName} {c.lastName}
                         </Link>
+                        <span className="block text-xs text-muted-foreground">
+                          {c.jobTitle}
+                          {c.jobTitle && c.companyName && " · "}
+                          <CompanyLink id={c.companyId} name={c.companyName} />
+                          {!c.jobTitle && !c.companyName && c.email}
+                        </span>
                       </td>
                       <td className="px-3 py-2">
                         <StatusBadge value={c.lifecycleStage} tone="neutral" />
@@ -184,57 +167,8 @@ export function ContactsPage() {
           </Card>
         )}
 
-        {total > 0 && (
-          <div className="flex items-center justify-end gap-3 text-xs text-muted-foreground">
-            <span>
-              {offset + 1}-{Math.min(offset + PAGE_SIZE, total)} of {total}
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={offset === 0}
-              onClick={() => setOffset(Math.max(offset - PAGE_SIZE, 0))}
-            >
-              Previous
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={offset + PAGE_SIZE >= total}
-              onClick={() => setOffset(offset + PAGE_SIZE)}
-            >
-              Next
-            </Button>
-          </div>
-        )}
+        <Pager offset={offset} pageSize={PAGE_SIZE} total={total} onOffset={setOffset} />
       </div>
     </div>
-  );
-}
-
-function Filter({
-  label: name,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: (readonly [string, string])[];
-}) {
-  return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="w-44" aria-label={name}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {options.map(([v, text]) => (
-          <SelectItem key={v} value={v}>
-            {text}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   );
 }

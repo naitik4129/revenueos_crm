@@ -251,4 +251,36 @@ describe("companies, contacts, deals (PGlite)", () => {
     expect(await names("Quill")).toEqual(["Quill"]);
     expect(await names("zq@x")).toEqual(["Quill"]);
   });
+
+  it("deal search matches the contact's full name", async () => {
+    const c = await newContact({ firstName: "Yuri", lastName: "Vance", email: "yv@x.com" });
+    const deal = await newDeal(c.id);
+    const found = (await api("get", `/deals?search=${encodeURIComponent("yuri vance")}`)).body.data.map((d: { id: string }) => d.id);
+    expect(found).toEqual([deal.id]);
+  });
+
+  it("companies: search by name/domain/industry, filter by industry, list industries, 409 on a duplicate domain", async () => {
+    const mk = async (body: object, ws = w1) => {
+      const res = await api("post", "/companies", { body, ws });
+      expect(res.status).toBe(201);
+      return res.body as { id: string; domain?: string };
+    };
+    const kilo = await mk({ name: "Kilo Labs", website: "https://www.kilolabs.io/about", industry: "Robotics" });
+    expect(kilo.domain).toBe("kilolabs.io");
+    await mk({ name: "Lima Foods", domain: "limafoods.com", industry: "robotics " });
+    await mk({ name: "Mike Corp", industry: "Retail" });
+    await mk({ name: "Other WS", industry: "Mining" }, w2);
+
+    const names = async (query: string) =>
+      (await api("get", `/companies?${query}`)).body.data.map((c: { name: string }) => c.name);
+    expect(await names("search=kilolabs")).toEqual(["Kilo Labs"]);
+    expect(await names("search=retail")).toEqual(["Mike Corp"]);
+    expect(await names("industry=ROBOTICS")).toEqual(["Kilo Labs", "Lima Foods"]);
+    // One entry per industry, case-insensitively; another workspace's industries are not listed.
+    expect((await api("get", "/companies/industries")).body.data).toEqual(["Retail", "Robotics"]);
+
+    const dup = await api("post", "/companies", { body: { name: "Kilo Again", website: "kilolabs.io" } });
+    expect(dup.status).toBe(409);
+    expect(dup.body.error.details).toEqual({ field: "domain" });
+  });
 });

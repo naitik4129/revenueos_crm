@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { backend, type ContactFilters } from "@/lib/backend-client";
+import { backend, type CompanyFilters, type ContactFilters } from "@/lib/backend-client";
 import { keys } from "./query";
 import { useWorkspace } from "./workspace-context";
 
@@ -44,20 +44,63 @@ export function useContactDetail(id: string) {
   };
 }
 
+export function useCompanies(filters: CompanyFilters) {
+  const { currentWorkspaceId } = useWorkspace();
+  return useQuery({
+    queryKey: keys.companies(currentWorkspaceId, filters),
+    queryFn: ({ signal }) => backend.companies.list(filters, signal),
+    enabled: Boolean(currentWorkspaceId),
+    placeholderData: (previous) => previous,
+  });
+}
+
+/** Distinct industries in the workspace, for the companies filter. */
+export function useIndustries() {
+  const { currentWorkspaceId } = useWorkspace();
+  const query = useQuery({
+    queryKey: keys.companies(currentWorkspaceId, { industries: true }),
+    queryFn: ({ signal }) => backend.companies.industries(signal),
+    enabled: Boolean(currentWorkspaceId),
+  });
+  return query.data?.data ?? [];
+}
+
+/** One company and everything shown on its detail page. */
+export function useCompanyDetail(id: string) {
+  const { currentWorkspaceId: ws } = useWorkspace();
+  const opts = <T>(part: string, fn: (signal: AbortSignal) => Promise<T>) => ({
+    queryKey: keys.company(ws, id, part),
+    queryFn: ({ signal }: { signal: AbortSignal }) => fn(signal),
+    enabled: Boolean(ws),
+  });
+  return {
+    company: useQuery(opts("company", (s) => backend.companies.get(id, s))),
+    contacts: useQuery(opts("contacts", (s) => backend.companies.contacts(id, { limit: 200 }, s))),
+    deals: useQuery(opts("deals", (s) => backend.companies.deals(id, { limit: 200 }, s))),
+    timeline: useQuery(opts("timeline", (s) => backend.companies.timeline(id, { limit: 100 }, s))),
+  };
+}
+
 /**
- * Wraps a contact write: afterwards refreshes that contact's detail, contact lists and the
- * dashboard (a call or DNC can change lifecycle, deals and tasks).
+ * Wraps a contact or company write: afterwards refreshes contact and company lists and detail
+ * pages, the dashboard and tasks (a call or DNC can change lifecycle, deals and tasks; a
+ * contact edit changes its company's contact list).
  */
-export function useContactMutation<I, O>(fn: (input: I) => Promise<O>) {
+export function useCrmMutation<I, O>(fn: (input: I) => Promise<O>) {
   const client = useQueryClient();
   const { currentWorkspaceId: ws } = useWorkspace();
   return useMutation({
     mutationFn: fn,
     onSuccess: () =>
       Promise.all(
-        [["contact", ws], keys.contacts(ws), keys.dashboard(ws), keys.tasks(ws)].map((queryKey) =>
-          client.invalidateQueries({ queryKey }),
-        ),
+        [
+          ["contact", ws],
+          keys.contacts(ws),
+          ["company", ws],
+          keys.companies(ws),
+          keys.dashboard(ws),
+          keys.tasks(ws),
+        ].map((queryKey) => client.invalidateQueries({ queryKey })),
       ),
   });
 }

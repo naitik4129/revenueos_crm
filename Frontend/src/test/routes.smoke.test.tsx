@@ -44,7 +44,14 @@ vi.mock("@/store", () => {
       error: null,
       isFetching: false,
     }),
-    useContactMutation: () => ({ mutateAsync: noop, isPending: false }),
+    useCrmMutation: () => ({ mutateAsync: noop, isPending: false }),
+    useCompanies: () => ({
+      data: { data: [], total: 0, limit: 50, offset: 0 },
+      isLoading: false,
+      error: null,
+      isFetching: false,
+    }),
+    useIndustries: () => [],
     useTasks: () => ({
       tasks: [],
       isLoading: false,
@@ -114,6 +121,7 @@ vi.mock("@/store", () => {
 });
 
 import { DashboardPage } from "@/features/dashboard/dashboard-page";
+import { CompaniesPage } from "@/features/companies/companies-page";
 import { ContactsPage } from "@/features/contacts/contacts-page";
 import { LeadsPage } from "@/features/leads/leads-page";
 import { TasksPage } from "@/features/tasks/tasks-page";
@@ -141,6 +149,7 @@ describe("zero-record route states", () => {
   it.each([
     [DashboardPage, "Nothing due today."],
     [ContactsPage, "No contacts match these filters."],
+    [CompaniesPage, "No companies match these filters."],
     [LeadsPage, "No leads match these filters."],
     [TasksPage, "Nothing here."],
     [MeetingsPage, "No meetings."],

@@ -16,7 +16,10 @@ export {
   useContacts,
   useContactSearch,
   useContactDetail,
-  useContactMutation,
+  useCompanies,
+  useCompanyDetail,
+  useIndustries,
+  useCrmMutation,
 } from "./contact-hooks";
 export type {
   SessionSlice,

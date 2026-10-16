@@ -351,9 +351,23 @@ export interface ImportContactRow {
   createDeal?: string | undefined;
   dealTitle?: string | undefined;
 }
+export interface CompanyInput {
+  name?: string | undefined;
+  domain?: string | null | undefined;
+  website?: string | null | undefined;
+  industry?: string | null | undefined;
+  phone?: string | null | undefined;
+  city?: string | null | undefined;
+  country?: string | null | undefined;
+  location?: string | null | undefined;
+  headcount?: number | null | undefined;
+  linkedinUrl?: string | null | undefined;
+  ownerId?: string | null | undefined;
+}
 export interface CompanyFilters extends Page {
   search?: string | undefined;
   ownerId?: string | undefined;
+  industry?: string | undefined;
 }
 export interface DealFilters extends Page {
   outcome?: DealOutcome | undefined;
@@ -516,6 +530,9 @@ export const backend = {
     list: (params?: CompanyFilters, signal?: AbortSignal) =>
       get<Paged<Company>>(query("/companies", { ...params }), signal),
     get: (id: string, signal?: AbortSignal) => get<Company>(`/companies/${id}`, signal),
+    create: (input: CompanyInput) => send<Company>("POST", "/companies", input),
+    update: (id: string, input: CompanyInput) => send<Company>("PATCH", `/companies/${id}`, input),
+    industries: (signal?: AbortSignal) => get<{ data: string[] }>("/companies/industries", signal),
     contacts: (id: string, params?: Page, signal?: AbortSignal) =>
       get<Paged<Contact>>(query(`/companies/${id}/contacts`, { ...params }), signal),
     deals: (id: string, params?: Page, signal?: AbortSignal) =>

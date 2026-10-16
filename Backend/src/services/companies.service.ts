@@ -94,6 +94,7 @@ export async function getCompanyOr404(db: Queryable, workspaceId: string, id: st
 export interface ListCompaniesFilters {
   search?: string;
   ownerId?: string;
+  industry?: string;
   limit?: number;
   offset?: number;
 }
@@ -102,7 +103,11 @@ export async function listCompanies(db: Queryable, workspaceId: string, f: ListC
   const params: unknown[] = [workspaceId];
   const where = [`co.workspace_id = $1`];
   if (f.ownerId) where.push(`co.owner_id = $${params.push(f.ownerId)}`);
-  if (f.search) where.push(`(co.name ilike $${params.push(`%${f.search}%`)} or co.domain ilike $${params.length})`);
+  if (f.industry) where.push(`lower(co.industry) = lower($${params.push(f.industry)})`);
+  if (f.search) {
+    const p = `$${params.push(`%${f.search}%`)}`;
+    where.push(`(co.name ilike ${p} or co.domain ilike ${p} or co.industry ilike ${p})`);
+  }
   const limit = Math.min(f.limit ?? 50, 500);
   const result = await db.query<CompanyRow & { total: number }>(
     `select co.*, count(*) over()::int as total from (${COMPANY_SELECT}) co
@@ -112,6 +117,17 @@ export async function listCompanies(db: Queryable, workspaceId: string, f: ListC
     params,
   );
   return { data: result.rows.map(companyToDto), total: result.rows[0]?.total ?? 0, limit, offset: f.offset ?? 0 };
+}
+
+/** Distinct industries in the workspace (case-insensitive), for the list filter. */
+export async function listIndustries(db: Queryable, workspaceId: string) {
+  const result = await db.query<{ industry: string }>(
+    `select min(industry) as industry from crm.companies
+      where workspace_id = $1 and nullif(trim(industry), '') is not null
+      group by lower(trim(industry)) order by 1`,
+    [workspaceId],
+  );
+  return result.rows.map((r) => r.industry);
 }
 
 function validSource(source: string | null | undefined): LeadSource | null {

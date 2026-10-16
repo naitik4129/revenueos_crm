@@ -24,7 +24,7 @@ import { backend, type LogCallInput } from "@/lib/backend-client";
 import { dateInputValue, toIsoFromIst } from "@/lib/dates";
 import { label } from "@/lib/labels";
 import { cn } from "@/lib/utils";
-import { messageFromError, useContactMutation } from "@/store";
+import { messageFromError, useCrmMutation } from "@/store";
 import {
   CALL_CONNECTED_OUTCOMES,
   CALL_NOT_CONNECTED_REASONS,
@@ -59,7 +59,7 @@ export function LogCallDialog({
     decisionOwner: "",
   });
   const [result, setResult] = useState<LogCallResult | null>(null);
-  const logCall = useContactMutation((input: LogCallInput) =>
+  const logCall = useCrmMutation((input: LogCallInput) =>
     backend.contacts.logCall(contact.id, input),
   );
 

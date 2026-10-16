@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { backend, type ImportContactRow } from "@/lib/backend-client";
-import { messageFromError, useContactMutation } from "@/store";
+import { messageFromError, useCrmMutation } from "@/store";
 import type { ImportContactsResult } from "@/types";
 import {
   downloadSampleCsv,
@@ -36,9 +36,7 @@ export function ImportContactsDialog({
   const [fileError, setFileError] = useState<string | null>(null);
   const [parsed, setParsed] = useState<ParsedContactsCsv | null>(null);
   const [result, setResult] = useState<ImportContactsResult | null>(null);
-  const importRows = useContactMutation((rows: ImportContactRow[]) =>
-    backend.contacts.importCsv(rows),
-  );
+  const importRows = useCrmMutation((rows: ImportContactRow[]) => backend.contacts.importCsv(rows));
 
   const step = result ? "results" : parsed ? "preview" : "select";
   const rows = parsed?.rows ?? [];

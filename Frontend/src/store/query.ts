@@ -18,6 +18,12 @@ export const keys = {
     filters ? (["contacts", workspaceId, filters] as const) : (["contacts", workspaceId] as const),
   contact: (workspaceId: string | null, id: string, part?: string) =>
     part ? (["contact", workspaceId, id, part] as const) : (["contact", workspaceId, id] as const),
+  companies: (workspaceId: string | null, filters?: object) =>
+    filters
+      ? (["companies", workspaceId, filters] as const)
+      : (["companies", workspaceId] as const),
+  company: (workspaceId: string | null, id: string, part?: string) =>
+    part ? (["company", workspaceId, id, part] as const) : (["company", workspaceId, id] as const),
   leads: (workspaceId: string | null) => ["leads", workspaceId] as const,
   lead: (workspaceId: string | null, id: string) => ["lead", workspaceId, id] as const,
   notes: (workspaceId: string | null, id: string) => ["notes", workspaceId, id] as const,

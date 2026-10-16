@@ -31,8 +31,19 @@ const companyFields = {
 companiesRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    const q = parseQuery(z.object({ search: z.string().optional(), ownerId: z.string().uuid().optional(), ...page }), req.query);
+    const q = parseQuery(
+      z.object({ search: z.string().optional(), ownerId: z.string().uuid().optional(), industry: z.string().optional(), ...page }),
+      req.query,
+    );
     res.json(await companies.listCompanies(pool, req.workspaceId!, q));
+  }),
+);
+
+// Before "/:id" so "industries" is not read as an id.
+companiesRouter.get(
+  "/industries",
+  asyncHandler(async (req, res) => {
+    res.json({ data: await companies.listIndustries(pool, req.workspaceId!) });
   }),
 );
 

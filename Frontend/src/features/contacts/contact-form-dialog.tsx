@@ -29,7 +29,7 @@ import {
   type ContactFormErrors,
 } from "@/lib/contact-validation";
 import { label } from "@/lib/labels";
-import { messageFromError, useContactMutation, useSession } from "@/store";
+import { messageFromError, useCrmMutation, useSession } from "@/store";
 import { CONTACT_SOURCES, type Contact } from "@/types";
 import { CompanyPicker } from "./pickers";
 
@@ -85,7 +85,7 @@ export function ContactFormDialog({
     setServerError(null);
   }, [open, contact, currentUser?.id]);
 
-  const save = useContactMutation((input: ContactInput) =>
+  const save = useCrmMutation((input: ContactInput) =>
     contact
       ? backend.contacts.update(contact.id, input)
       : backend.contacts.create({ ...input, createDeal }),

@@ -9,11 +9,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
+import { InfoRow, Section, TimelineList } from "@/components/common/detail-parts";
 import { backend } from "@/lib/backend-client";
 import { fmtDateTime, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
-import { messageFromError, useContactDetail, useContactMutation, useSession } from "@/store";
+import { messageFromError, useContactDetail, useCrmMutation, useSession } from "@/store";
 import { LIFECYCLE_STAGES, type ContactCall, type EmailActivity } from "@/types";
+import { CompanyLink } from "@/features/companies/company-link";
 import { ContactFormDialog } from "./contact-form-dialog";
 import { ContactabilityDialog, DncDialog, LifecycleDialog, MergeDialog } from "./contact-dialogs";
 import { LogCallDialog } from "./log-call-dialog";
@@ -25,7 +27,7 @@ export function ContactDetailPage({ contactId }: { contactId: string }) {
   const { currentUser } = useSession();
   const [dialog, setDialog] = useState<DialogName | null>(null);
   const [note, setNote] = useState("");
-  const addNote = useContactMutation((body: string) => backend.contacts.addNote(contactId, body));
+  const addNote = useCrmMutation((body: string) => backend.contacts.addNote(contactId, body));
 
   const contact = detail.contact.data;
   if (detail.contact.isLoading)
@@ -62,7 +64,10 @@ export function ContactDetailPage({ contactId }: { contactId: string }) {
             </Link>
             <h1 className="text-xl font-semibold tracking-tight">{name}</h1>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              {[contact.jobTitle, contact.companyName].filter(Boolean).join(" · ") || "No company"}
+              {contact.jobTitle}
+              {contact.jobTitle && contact.companyName && " · "}
+              <CompanyLink id={contact.companyId} name={contact.companyName} />
+              {!contact.jobTitle && !contact.companyName && "No company"}
             </p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               <StatusBadge value={contact.lifecycleStage} tone="primary" />
@@ -131,32 +136,7 @@ export function ContactDetailPage({ contactId }: { contactId: string }) {
             </TabsList>
 
             <TabsContent value="activity" className="mt-4">
-              <Section query={detail.timeline} empty="No activity yet.">
-                {(data) =>
-                  data.data.map((event) => (
-                    <div key={event.id} className="flex gap-3 border-b py-3 last:border-0">
-                      <div className="w-36 shrink-0 text-xs text-muted-foreground">
-                        {relDay(event.at)}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-medium">{event.title}</span>
-                          <StatusBadge
-                            value={event.source}
-                            tone={event.source === "user" ? "muted" : "primary"}
-                          />
-                        </div>
-                        {event.detail && (
-                          <p className="whitespace-pre-wrap pt-0.5 text-sm text-muted-foreground">
-                            {event.detail}
-                          </p>
-                        )}
-                        <div className="pt-0.5 text-xs text-muted-foreground">{event.actor}</div>
-                      </div>
-                    </div>
-                  ))
-                }
-              </Section>
+              <TimelineList query={detail.timeline} />
             </TabsContent>
 
             <TabsContent value="calls" className="mt-4">
@@ -245,9 +225,9 @@ export function ContactDetailPage({ contactId }: { contactId: string }) {
               <CardTitle className="text-sm">Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
-              <Row name="Email" value={contact.email} />
-              <Row name="Phone" value={contact.phone} />
-              <Row
+              <InfoRow name="Email" value={contact.email} />
+              <InfoRow name="Phone" value={contact.phone} />
+              <InfoRow
                 name="LinkedIn"
                 value={
                   contact.linkedinUrl && (
@@ -262,13 +242,20 @@ export function ContactDetailPage({ contactId }: { contactId: string }) {
                   )
                 }
               />
-              <Row name="Company" value={contact.companyName} />
-              <Row
+              <InfoRow
+                name="Company"
+                value={
+                  contact.companyName && (
+                    <CompanyLink id={contact.companyId} name={contact.companyName} />
+                  )
+                }
+              />
+              <InfoRow
                 name="Location"
                 value={[contact.location, contact.country].filter(Boolean).join(", ")}
               />
-              <Row name="Owner" value={contact.ownerName ?? "Unassigned"} />
-              <Row name="Added" value={fmtDateTime(contact.createdAt)} />
+              <InfoRow name="Owner" value={contact.ownerName ?? "Unassigned"} />
+              <InfoRow name="Added" value={fmtDateTime(contact.createdAt)} />
             </CardContent>
           </Card>
 
@@ -341,34 +328,6 @@ export function ContactDetailPage({ contactId }: { contactId: string }) {
       {dialog === "channel" && <ContactabilityDialog {...dialogProps("channel")} />}
       {dialog === "merge" && <MergeDialog {...dialogProps("merge")} />}
     </div>
-  );
-}
-
-function Section<T extends { data: unknown[] }>({
-  query,
-  empty,
-  children,
-}: {
-  query: { data?: T | undefined; isLoading: boolean; error: unknown };
-  empty: string;
-  children: (data: T) => ReactNode;
-}) {
-  return (
-    <Card>
-      <CardContent className="py-2">
-        {query.isLoading ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
-        ) : query.error ? (
-          <p className="py-6 text-center text-sm text-destructive">
-            {messageFromError(query.error)}
-          </p>
-        ) : query.data && query.data.data.length > 0 ? (
-          children(query.data)
-        ) : (
-          <p className="py-6 text-center text-sm text-muted-foreground">{empty}</p>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 
@@ -464,15 +423,6 @@ function EmailRow({ email }: { email: EmailActivity }) {
           {email.replyText}
         </p>
       )}
-    </div>
-  );
-}
-
-function Row({ name, value }: { name: string; value: ReactNode }) {
-  return (
-    <div className="flex justify-between gap-3">
-      <span className="text-muted-foreground">{name}</span>
-      <span className="min-w-0 truncate text-right">{value || "-"}</span>
     </div>
   );
 }

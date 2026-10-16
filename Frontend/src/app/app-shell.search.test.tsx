@@ -35,7 +35,7 @@ vi.mock("@/store", () => ({
   }),
   useContactSearch: (text: string) => ({ results: text ? search(text) : [], isFetching: false }),
   // The Add contact dialog (closed in these tests) uses these.
-  useContactMutation: () => ({ mutateAsync: noop, isPending: false }),
+  useCrmMutation: () => ({ mutateAsync: noop, isPending: false }),
   useNotifications: () => ({
     notifications: [],
     markNotificationsRead: noop,

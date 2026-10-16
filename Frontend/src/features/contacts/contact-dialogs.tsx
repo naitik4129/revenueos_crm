@@ -23,7 +23,7 @@ import {
 import type { PickerOption } from "@/components/common/search-picker";
 import { backend } from "@/lib/backend-client";
 import { label } from "@/lib/labels";
-import { messageFromError, useContactMutation } from "@/store";
+import { messageFromError, useCrmMutation } from "@/store";
 import {
   CONTACT_CHANNELS,
   LIFECYCLE_STAGES,
@@ -123,7 +123,7 @@ type DialogProps = { contact: Contact; open: boolean; onOpenChange: (open: boole
 export function DncDialog({ contact, open, onOpenChange }: DialogProps) {
   const [reason, setReason] = useState("");
   const lifting = contact.doNotContact;
-  const save = useContactMutation((text: string) =>
+  const save = useCrmMutation((text: string) =>
     lifting
       ? backend.contacts.reactivateFromDnc(contact.id, text)
       : backend.contacts.markDnc(contact.id, text),
@@ -170,7 +170,7 @@ export function LifecycleDialog({
 }: DialogProps & { isAdmin: boolean }) {
   const [stage, setStage] = useState<LifecycleStage>(contact.lifecycleStage);
   const [note, setNote] = useState("");
-  const save = useContactMutation(() =>
+  const save = useCrmMutation(() =>
     backend.contacts.setLifecycle(contact.id, stage, note.trim() || undefined),
   );
 
@@ -228,7 +228,7 @@ export function ContactabilityDialog({ contact, open, onOpenChange }: DialogProp
   const [channel, setChannel] = useState<ContactChannel>("phone");
   const [status, setStatus] = useState("valid");
   const [reason, setReason] = useState("");
-  const save = useContactMutation(() =>
+  const save = useCrmMutation(() =>
     backend.contacts.setContactability(contact.id, {
       channel,
       status,
@@ -308,7 +308,7 @@ export function MergeDialog({ contact, open, onOpenChange }: DialogProps) {
   const navigate = useNavigate();
   const [target, setTarget] = useState<PickerOption | null>(null);
   const [reason, setReason] = useState("");
-  const save = useContactMutation((targetId: string) =>
+  const save = useCrmMutation((targetId: string) =>
     backend.contacts.merge(contact.id, targetId, reason.trim() || undefined),
   );
 
