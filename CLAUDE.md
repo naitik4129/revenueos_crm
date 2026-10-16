@@ -48,6 +48,14 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), being reworked. `C
 - Removed: website lead intake (`/public/leads`, `INGEST_*`), `/privacy` page, retired enum values (`maybe`, `negative`, `maybe_nurture`, `negative_nurture`, `call_outcome_maybe`, `call_outcome_negative`), `lead_source = 'website'`.
 - Leak fixes: `notifications.workspace_id` NOT NULL; default meeting-scheduled templates are per-workspace columns on `crm.workspaces` (not global flags on templates).
 
+### Backend rework rules (2026-10-16)
+- Phases: P0 PGlite test DB → P1 auth/workspaces → P2 companies/contacts/deals → P3 calls/tasks/meetings/proposals → P4 automation/worker → P5 WhatsApp/email/calendar → P6 dashboard/notifications → P7 frontend. One phase per "go".
+- **Call with no open deal**: the call is always saved. If the outcome moves the pipeline and the contact has no open deal, reopen its `nurture` deal if one exists, else create a new open deal, then route. Contact-level outcomes (DNC, wrong number) never create a deal.
+- **Merge + DNC**: if either contact is DNC, the target becomes DNC. Merge moves deals first, then tasks' `contact_id`; blocked if both have an open deal.
+- **Template variables**: `{{contact.*}}`, `{{company.*}}`, `{{deal.*}}`; no aliases for the old `{{lead.*}}` names.
+- **CRM user management**: an email that already has a shared account (found in `public.revenueos_profiles`) only gets a `crm.profiles` row; otherwise the account is created via Supabase Auth admin. The CRM changes only `role` and `is_active`; name, email and password belong to the platform. No `crm.profiles` row → 403 (not 401). Admins cannot deactivate or demote themselves.
+- **Test database**: integration tests run on PGlite + pglite-socket (`Backend/tests/integration/testDb.ts`, migrations 000-010 on stand-in `auth`/`public` tables), no Docker. **Single-session limit**: all connections share one PGlite session — an open transaction blocks the others and `SET` leaks between connections — so tests must run sequentially; use a real Postgres if tests ever need concurrent transactions.
+
 ### Kept features
 CSV import, calls + routing, nurture workflows + worker, templates + attachments, email (Resend/SMTP), WhatsApp (Baileys), Google Calendar, meetings, proposals, tasks, DNC, merge, delete + audit, notifications, dashboard, workspaces, admin users.
 
@@ -121,5 +129,5 @@ Enums live in `crm` too.
 
 ## Commands
 
-Backend (`cd Backend`): `npm run typecheck`, `npm run lint`, `npm run test:run`, `npm run build`.
+Backend (`cd Backend`): `npm run typecheck`, `npm run lint`, `npm run test:run` (includes PGlite integration tests), `npm run build`.
 Frontend (`cd Frontend`): `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run test:run`, `npm run build` (the build regenerates `src/routeTree.gen.ts`).
