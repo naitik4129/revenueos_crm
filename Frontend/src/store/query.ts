@@ -12,6 +12,7 @@ export const keys = {
   session: ["session"] as const,
   profiles: ["profiles"] as const,
   workspaces: ["workspaces"] as const,
+  templateVariables: ["templateVariables"] as const,
   // Contact lists (any filters) share the prefix ["contacts", ws]; everything on one contact
   // shares ["contact", ws, id], so one invalidation refreshes the whole detail page.
   contacts: (workspaceId: string | null, filters?: object) =>

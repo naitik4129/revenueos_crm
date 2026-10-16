@@ -357,6 +357,25 @@ export interface UpdateWorkspaceInput {
   defaultOwnerId?: string | null;
 }
 
+export type TemplateVariableGroup = "contact" | "company" | "deal" | "meeting" | "date";
+
+/** A `{{token}}` the backend renderer fills (GET /templates/variables is the only list). */
+export interface TemplateVariable {
+  token: string;
+  label: string;
+  group: TemplateVariableGroup;
+}
+
+export interface TemplatePreviewResult {
+  subject: string | null;
+  body: string;
+  /** Tokens left as `{{...}}` in the output, and why. */
+  missing: { token: string; reason: "unknown" | "needs_deal" | "needs_meeting" }[];
+  /** The deal used (a contact previews as its open deal), or null. */
+  dealId: string | null;
+  meeting: { title: string; at: string } | null;
+}
+
 /** A brain service key; the full key is only in the create response. */
 export interface BrainKey {
   id: string;
@@ -651,6 +670,10 @@ export const backend = {
   },
   templates: {
     list: (signal?: AbortSignal) => get<{ data: Template[] }>("/templates", signal),
+    variables: (signal?: AbortSignal) =>
+      get<{ data: TemplateVariable[] }>("/templates/variables", signal),
+    preview: (input: { subject?: string; body: string; dealId?: string; contactId?: string }) =>
+      send<TemplatePreviewResult>("POST", "/templates/preview", input),
     create: (input: CreateTemplateInput) => send<Template>("POST", "/templates", input),
     update: (id: string, input: UpdateTemplateInput) =>
       send<Template>("PATCH", `/templates/${id}`, input),

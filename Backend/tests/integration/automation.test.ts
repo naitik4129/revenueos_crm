@@ -90,6 +90,30 @@ describe("automation and worker (PGlite)", () => {
     await testDb?.stop();
   });
 
+  it("serves the variable list and previews unsaved text against a deal or a contact", async () => {
+    const vars = (await api("get", "/templates/variables")).body.data as { token: string; group: string }[];
+    expect(new Set(vars.map((v) => v.group))).toEqual(new Set(["contact", "company", "deal", "meeting", "date"]));
+    expect(vars.some((v) => v.token.startsWith("lead."))).toBe(false);
+
+    const text = { subject: "Hi {{contact.firstName}}", body: "<p>{{company.name}} / {{deal.stage}} / {{meeting.date}} / {{contact.nickname}}</p>" };
+    const { contactId, dealId } = await newDeal();
+    const byDeal = (await api("post", "/templates/preview", { ...text, dealId })).body;
+    expect(byDeal).toMatchObject({ subject: "Hi Asha", dealId, meeting: null });
+    expect(byDeal.body).toMatch(/^<p>Acme \d+ \/ new \/ \{\{meeting\.date\}\} \/ \{\{contact\.nickname\}\}<\/p>$/);
+    expect(byDeal.missing).toEqual([
+      { token: "meeting.date", reason: "needs_meeting" },
+      { token: "contact.nickname", reason: "unknown" },
+    ]);
+    // A contact with an open deal previews as that deal; one without keeps deal.* unfilled.
+    expect((await api("post", "/templates/preview", { ...text, contactId })).body.dealId).toBe(dealId);
+    const prospect = (await api("post", "/templates/preview", { ...text, contactId: await newContact() })).body;
+    expect(prospect.dealId).toBeNull();
+    expect(prospect.missing).toContainEqual({ token: "deal.stage", reason: "needs_deal" });
+
+    expect((await api("post", "/templates/preview", { ...text, dealId, contactId })).status).toBe(400);
+    expect((await api("post", "/templates/preview", { ...text, contactId: "00000000-0000-4000-8000-000000000000" })).status).toBe(404);
+  });
+
   it("a published version's steps cannot be edited", async () => {
     const id = await workflow("manual_enrollment", [{ action: "create_call_task" }]);
     const res = await api("put", `/workflows/${id}/versions/1/steps`, { steps: [{ order: 0, delayDays: 0, action: "stop_workflow", enabled: true }] });

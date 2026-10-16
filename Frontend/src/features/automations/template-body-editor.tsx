@@ -21,7 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { TEMPLATE_VARIABLES } from "@/lib/template-variables";
+import type { TemplateVariable } from "@/lib/backend-client";
+import { VariablePicker } from "./variable-picker";
 
 import { normalizeLegacyBody } from "@/lib/template-html";
 
@@ -46,11 +47,14 @@ function escapeHtml(value: string): string {
 }
 
 export function TemplateBodyEditor({
+  variables,
   value,
   onChange,
   loadKey,
   disabled,
 }: {
+  /** From useTemplateVariables (the backend's list). */
+  variables: TemplateVariable[];
   value: string;
   onChange: (html: string) => void;
   /** Changes only when a different template is loaded into the dialog — gates the one-time content reset so we don't fight the user's typing on every keystroke. */
@@ -252,22 +256,13 @@ export function TemplateBodyEditor({
           </PopoverContent>
         </Popover>
         <div className="ml-auto">
-          <Select
+          <VariablePicker
+            variables={variables}
             disabled={!!disabled}
-            value=""
-            onValueChange={(token) => editor.chain().focus().insertContent(`{{${token}}}`).run()}
-          >
-            <SelectTrigger className="h-7 w-[160px] text-xs">
-              <SelectValue placeholder="Insert variable" />
-            </SelectTrigger>
-            <SelectContent>
-              {TEMPLATE_VARIABLES.map((v) => (
-                <SelectItem key={v.token} value={v.token} className="text-xs">
-                  {v.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            ariaLabel="Insert body variable"
+            className="h-7 w-[160px] text-xs"
+            onInsert={(token) => editor.chain().focus().insertContent(`{{${token}}}`).run()}
+          />
         </div>
       </div>
       <EditorContent editor={editor} className="min-w-0" />

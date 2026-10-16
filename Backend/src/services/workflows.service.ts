@@ -352,7 +352,7 @@ export type EnrollmentMode = "keep_existing" | "migrate_to_new_version" | "resta
  * reference a template containing a `{{...}}` token outside the known set
  * (src/domain/templateRenderer.ts's KNOWN_TEMPLATE_VARIABLES) — a typo'd
  * variable would otherwise ship straight to a real customer's inbox/WhatsApp
- * as literal `{{lead.nikname}}`-style text (src/worker.ts's renderer leaves
+ * as literal `{{contact.nikname}}`-style text (src/worker.ts's renderer leaves
  * unknown tokens untouched by design, rather than guessing or blanking).
  */
 async function assertNoUnknownTemplateVariables(db: Queryable, versionId: string): Promise<void> {

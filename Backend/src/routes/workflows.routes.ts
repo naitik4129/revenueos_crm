@@ -9,6 +9,8 @@ import { parseBody, parseId, parseParams, parseQuery } from "../validation/parse
 import { WORKFLOW_STATUSES, WORKFLOW_STEP_ACTIONS, WORKFLOW_TRIGGERS, TEMPLATE_CHANNELS } from "../domain/enums.js";
 import * as workflowsService from "../services/workflows.service.js";
 import { ValidationError } from "../errors.js";
+import { TEMPLATE_VARIABLES } from "../domain/templateRenderer.js";
+import { previewTemplateFor } from "../services/template-preview.service.js";
 
 export const workflowsRouter = Router();
 workflowsRouter.use(requireAuth);
@@ -142,6 +144,29 @@ templatesRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     res.json({ data: await workflowsService.listTemplatesWithAttachments(pool, req.workspaceId!) });
+  }),
+);
+
+/** The variables the renderer fills (one list: domain/templateRenderer.ts), for the editor picker. */
+templatesRouter.get("/variables", (_req, res) => {
+  res.json({ data: TEMPLATE_VARIABLES });
+});
+
+const previewSchema = z
+  .object({
+    subject: z.string().optional(),
+    body: z.string(),
+    dealId: z.string().uuid().optional(),
+    contactId: z.string().uuid().optional(),
+  })
+  .refine((v) => Boolean(v.dealId) !== Boolean(v.contactId), { message: "Preview needs exactly one of dealId or contactId." });
+
+/** Renders unsaved template text against a deal or contact; unfilled tokens are listed, not blanked. */
+templatesRouter.post(
+  "/preview",
+  asyncHandler(async (req, res) => {
+    const { subject, body, dealId, contactId } = parseBody(previewSchema, req.body);
+    res.json(await previewTemplateFor(pool, req.workspaceId!, { subject: subject ?? null, body }, { dealId, contactId }));
   }),
 );
 

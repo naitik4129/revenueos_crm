@@ -88,6 +88,10 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), being reworked. `C
 - Platform project id is pasted (checked in code against `revenueos_projects`); no project picker.
 - A brain key's full value is shown once, in the create dialog; lists show only the prefix.
 
+### P7g template variables (2026-10-16)
+- One list: `TEMPLATE_VARIABLES` in `Backend/src/domain/templateRenderer.ts` (token, label, group contact/company/deal/meeting/date). The frontend picker reads it from `GET /templates/variables`; there is no frontend copy.
+- `POST /templates/preview` renders unsaved text against a deal or a contact. A contact previews as its open deal; with none, `deal.*` stay unfilled. `meeting.*` use the deal's latest meeting. Unfilled tokens stay as `{{...}}`, highlighted and listed as unknown / needs a deal / needs a meeting.
+
 ### Kept features
 CSV import, calls + routing, nurture workflows + worker, templates + attachments, email (Resend/SMTP), WhatsApp (Baileys), Google Calendar, meetings, proposals, tasks, DNC, merge, delete + audit, notifications, dashboard, workspaces, admin users.
 

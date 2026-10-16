@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { findUnknownTemplateTokens, renderTemplate, type TemplateRenderContext, type TemplateRenderMeeting } from "../../src/domain/templateRenderer.js";
+import {
+  findUnknownTemplateTokens,
+  KNOWN_TEMPLATE_VARIABLES,
+  previewTemplate,
+  renderTemplate,
+  type TemplateRenderContext,
+  type TemplateRenderMeeting,
+} from "../../src/domain/templateRenderer.js";
 
-const lead: TemplateRenderContext = {
+const asha: TemplateRenderContext = {
   contact: { firstName: "Asha", lastName: "Rao", email: "asha@raotextiles.example", phone: "+919876543210", jobTitle: "Founder" },
   company: { name: "Rao Textiles", industry: "Textiles", website: "https://raotextiles.example" },
   deal: { stage: "meeting_scheduled", serviceInterest: "Outbound SDR team", ownerName: "Priya Singh" },
@@ -15,7 +22,7 @@ describe("renderTemplate", () => {
         body: "Hello {{contact.fullName}} ({{contact.jobTitle}}) at {{company.name}}, {{company.industry}}, {{company.website}}. " +
           "Re: {{deal.serviceInterest}} - {{deal.stage}}. Regards {{deal.ownerName}}, {{contact.email}} {{contact.phone}}",
       },
-      lead,
+      asha,
     );
     expect(result.subject).toBe("Hi Asha");
     expect(result.body).toBe(
@@ -25,13 +32,13 @@ describe("renderTemplate", () => {
   });
 
   it("falls back contact.fullName to firstName when lastName is empty", () => {
-    const result = renderTemplate({ subject: null, body: "{{contact.fullName}}" }, { ...lead, contact: { ...lead.contact, lastName: "" } });
+    const result = renderTemplate({ subject: null, body: "{{contact.fullName}}" }, { ...asha, contact: { ...asha.contact, lastName: "" } });
     expect(result.body).toBe("Asha");
   });
 
   it("renders missing values (no company, no email/phone) as empty strings", () => {
     const empty: TemplateRenderContext = {
-      contact: { ...lead.contact, email: null, phone: null, jobTitle: null },
+      contact: { ...asha.contact, email: null, phone: null, jobTitle: null },
       company: { name: null, industry: null, website: null },
       deal: { stage: null, serviceInterest: null, ownerName: null },
     };
@@ -39,16 +46,16 @@ describe("renderTemplate", () => {
   });
 
   it("escapes values in the HTML body but not in the plain-text subject", () => {
-    const ctx = { ...lead, company: { ...lead.company, name: "R&D <Labs>" } };
+    const ctx = { ...asha, company: { ...asha.company, name: "R&D <Labs>" } };
     const result = renderTemplate({ subject: "{{company.name}}", body: "{{company.name}}" }, ctx);
     expect(result.subject).toBe("R&D <Labs>");
     expect(result.body).toBe("R&amp;D &lt;Labs&gt;");
   });
 
-  it("leaves unknown and retired tokens (e.g. lead.*) as literal text and reports them", () => {
-    const result = renderTemplate({ subject: null, body: "Hi {{contact.firstName}}, {{lead.firstName}} {{owner.name}}." }, lead);
-    expect(result.body).toBe("Hi Asha, {{lead.firstName}} {{owner.name}}.");
-    expect(result.unknownTokens).toEqual(["lead.firstName", "owner.name"]);
+  it("leaves unknown tokens as literal text and reports them", () => {
+    const result = renderTemplate({ subject: null, body: "Hi {{contact.firstName}}, {{contact.nickname}} {{company.size}}." }, asha);
+    expect(result.body).toBe("Hi Asha, {{contact.nickname}} {{company.size}}.");
+    expect(result.unknownTokens).toEqual(["contact.nickname", "company.size"]);
   });
 
   const meeting: TemplateRenderMeeting = {
@@ -61,7 +68,7 @@ describe("renderTemplate", () => {
   it("substitutes meeting tokens when a meeting is provided", () => {
     const result = renderTemplate(
       { subject: null, body: "{{meeting.title}} on {{meeting.date}} at {{meeting.time}} ({{meeting.duration}}): {{meeting.link}}" },
-      lead,
+      asha,
       meeting,
     );
     expect(result.body).toContain("Discovery call on");
@@ -71,8 +78,8 @@ describe("renderTemplate", () => {
   });
 
   it.each(["meeting.date", "meeting.time", "meeting.title", "meeting.duration", "meeting.link"])("rejects %s without meeting context in either subject or body", (token) => {
-    expect(() => renderTemplate({ subject: null, body: `{{${token}}}` }, lead)).toThrow("require a scheduled meeting");
-    expect(() => renderTemplate({ subject: `{{ ${token} }}`, body: "Hello" }, lead)).toThrow("require a scheduled meeting");
+    expect(() => renderTemplate({ subject: null, body: `{{${token}}}` }, asha)).toThrow("require a scheduled meeting");
+    expect(() => renderTemplate({ subject: `{{ ${token} }}`, body: "Hello" }, asha)).toThrow("require a scheduled meeting");
   });
 
   it.each([
@@ -81,7 +88,7 @@ describe("renderTemplate", () => {
     ["2028-02-28T08:00:00Z", "28 Feb 2028", "29 Feb 2028", "1:30 pm"],
   ])("uses IST and handles calendar rollover at %s", (instant, today, tomorrow, time) => {
     const text = "{{current.date}} / {{tomorrow.date}} / {{current.time}}";
-    const result = renderTemplate({ subject: text, body: text }, lead, undefined, new Date(instant));
+    const result = renderTemplate({ subject: text, body: text }, asha, undefined, new Date(instant));
     expect(result.body).toBe(`${today} / ${tomorrow} / ${time}`);
     expect(result.subject).toBe(result.body);
     expect(result.unknownTokens).toEqual([]);
@@ -91,7 +98,7 @@ describe("renderTemplate", () => {
   it("maps meeting date/time to the meeting instant independently of the send date", () => {
     const result = renderTemplate(
       { subject: "{{meeting.date}} at {{meeting.time}}", body: "Today {{current.date}}; meeting {{meeting.date}} at {{meeting.time}}" },
-      lead,
+      asha,
       { ...meeting, at: "2030-01-03T19:00:00Z" },
       new Date("2026-09-08T08:00:00Z"),
     );
@@ -100,13 +107,13 @@ describe("renderTemplate", () => {
   });
 
   it("escapes meeting fields in HTML bodies while retaining plain subject values", () => {
-    const result = renderTemplate({ subject: "{{meeting.title}}", body: "{{meeting.title}}" }, lead, { ...meeting, title: "<Call> & chat" });
+    const result = renderTemplate({ subject: "{{meeting.title}}", body: "{{meeting.title}}" }, asha, { ...meeting, title: "<Call> & chat" });
     expect(result.subject).toBe("<Call> & chat");
     expect(result.body).toBe("&lt;Call&gt; &amp; chat");
   });
 
   it("renders a null meeting link as empty string rather than throwing", () => {
-    const result = renderTemplate({ subject: null, body: "{{meeting.link}}" }, lead, { ...meeting, link: null });
+    const result = renderTemplate({ subject: null, body: "{{meeting.link}}" }, asha, { ...meeting, link: null });
     expect(result.body).toBe("");
   });
 });
@@ -117,10 +124,36 @@ describe("findUnknownTemplateTokens", () => {
   });
 
   it("flags unrecognized and retired tokens without needing a contact to render against", () => {
-    expect(findUnknownTemplateTokens("Hi {{contact.firstName}}, {{contact.birthday}} {{lead.company}}")).toEqual(["contact.birthday", "lead.company"]);
+    expect(findUnknownTemplateTokens("Hi {{contact.firstName}}, {{contact.birthday}} {{company.size}}")).toEqual(["contact.birthday", "company.size"]);
   });
 
   it("de-duplicates repeated unknown tokens", () => {
     expect(findUnknownTemplateTokens("{{contact.x}} and {{contact.x}} again")).toEqual(["contact.x"]);
+  });
+});
+
+describe("previewTemplate", () => {
+  const meeting: TemplateRenderMeeting = { title: "Intro", at: "2030-01-03T09:30:00.000Z", durationMin: 30, link: null };
+
+  it("fills every known variable when it has a deal and a meeting", () => {
+    const body = KNOWN_TEMPLATE_VARIABLES.map((t) => `{{${t}}}`).join(" ");
+    const result = previewTemplate({ subject: null, body }, asha, meeting);
+    expect(result.missing).toEqual([]);
+    expect(result.body).not.toContain("{{");
+  });
+
+  it("keeps unfilled tokens visible and says why: unknown, needs a deal, needs a meeting", () => {
+    const result = previewTemplate(
+      { subject: "{{deal.stage}} for {{contact.firstName}}", body: "{{meeting.date}} {{contact.nickname}} {{deal.stage}} {{company.name}}" },
+      { ...asha, deal: null },
+      null,
+    );
+    expect(result.subject).toBe("{{deal.stage}} for Asha");
+    expect(result.body).toBe("{{meeting.date}} {{contact.nickname}} {{deal.stage}} Rao Textiles");
+    expect(result.missing).toEqual([
+      { token: "deal.stage", reason: "needs_deal" },
+      { token: "meeting.date", reason: "needs_meeting" },
+      { token: "contact.nickname", reason: "unknown" },
+    ]);
   });
 });

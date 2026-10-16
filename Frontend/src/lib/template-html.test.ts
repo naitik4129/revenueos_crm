@@ -25,10 +25,10 @@ describe("template HTML", () => {
   });
   it("isolates preview without altering source styles or placeholders", () => {
     const source =
-      '<html><head><style>body{background:red}</style></head><body><script>alert(1)</script><meta http-equiv="refresh" content="0;url=https://example.com"><iframe src="https://example.com"></iframe><a href="https://example.com" onclick="alert(1)">{{lead.firstName}}</a><img src="https://example.com/a.png"></body></html>';
+      '<html><head><style>body{background:red}</style></head><body><script>alert(1)</script><meta http-equiv="refresh" content="0;url=https://example.com"><iframe src="https://example.com"></iframe><a href="https://example.com" onclick="alert(1)">{{contact.firstName}}</a><img src="https://example.com/a.png"></body></html>';
     const preview = emailPreviewDocument(source);
     expect(preview).toContain("body{background:red}");
-    expect(preview).toContain("{{lead.firstName}}");
+    expect(preview).toContain("{{contact.firstName}}");
     expect(preview).toContain("Content-Security-Policy");
     expect(preview).not.toMatch(/<script|<iframe|onclick=|href=|http-equiv="refresh"/);
     expect(source).toContain("<script>");

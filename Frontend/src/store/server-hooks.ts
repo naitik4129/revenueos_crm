@@ -406,6 +406,18 @@ export function useAutomations() {
 }
 export type AutomationsSlice = ReturnType<typeof useAutomations>;
 
+/** The variables the backend fills, for the template editor picker; fixed per backend build. */
+export function useTemplateVariables() {
+  const { currentWorkspaceId } = useWorkspace();
+  const query = useQuery({
+    queryKey: keys.templateVariables,
+    queryFn: ({ signal }) => backend.templates.variables(signal),
+    enabled: Boolean(currentWorkspaceId),
+    staleTime: Infinity,
+  });
+  return query.data?.data ?? [];
+}
+
 export function useNotifications() {
   const client = useQueryClient();
   const { currentWorkspaceId } = useWorkspace();

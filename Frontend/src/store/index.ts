@@ -7,6 +7,7 @@ export {
   useProposals,
   useAutomations,
   useNotifications,
+  useTemplateVariables,
   useDashboard,
 } from "./server-hooks";
 export { messageFromError } from "./query";

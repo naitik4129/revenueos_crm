@@ -12,7 +12,7 @@ afterEach(cleanup);
 describe("TemplateBodyEditor", () => {
   it("inserts a normalized http link into the saved HTML", async () => {
     const onChange = vi.fn();
-    render(<TemplateBodyEditor value="" onChange={onChange} loadKey="new" />);
+    render(<TemplateBodyEditor variables={[]} value="" onChange={onChange} loadKey="new" />);
 
     fireEvent.click(screen.getByRole("button", { name: /insert link/i }));
     fireEvent.change(screen.getByLabelText("Link"), { target: { value: "example.com/demo" } });
@@ -34,9 +34,17 @@ describe("TemplateBodyEditor", () => {
 it("does not emit content updates when loading or disabling the editor", () => {
   const onChange = vi.fn();
   const { rerender } = render(
-    <TemplateBodyEditor value="Legacy text" onChange={onChange} loadKey="one" />,
+    <TemplateBodyEditor variables={[]} value="Legacy text" onChange={onChange} loadKey="one" />,
   );
-  rerender(<TemplateBodyEditor value="Other text" onChange={onChange} loadKey="two" disabled />);
+  rerender(
+    <TemplateBodyEditor
+      variables={[]}
+      value="Other text"
+      onChange={onChange}
+      loadKey="two"
+      disabled
+    />,
+  );
   expect(onChange).not.toHaveBeenCalled();
 });
 
@@ -46,7 +54,7 @@ it.each([
 ])("toggles %s and updates toolbar state", async (label, tag) => {
   const onChange = vi.fn();
   const { container } = render(
-    <TemplateBodyEditor value="<p>First</p>" onChange={onChange} loadKey="new" />,
+    <TemplateBodyEditor variables={[]} value="<p>First</p>" onChange={onChange} loadKey="new" />,
   );
   const button = screen.getByRole("button", { name: label });
   fireEvent.click(button);
@@ -60,7 +68,7 @@ it.each([
 
 it("adds a list item with Enter and nests it with Tab", async () => {
   const { container } = render(
-    <TemplateBodyEditor value="<p>First</p>" onChange={vi.fn()} loadKey="keys" />,
+    <TemplateBodyEditor variables={[]} value="<p>First</p>" onChange={vi.fn()} loadKey="keys" />,
   );
   fireEvent.click(screen.getByRole("button", { name: "Bullet list" }));
   const content = container.querySelector('[contenteditable="true"]')!;

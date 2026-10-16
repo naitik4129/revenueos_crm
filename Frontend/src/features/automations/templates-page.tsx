@@ -26,15 +26,13 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
-import { messageFromError, useAutomations } from "@/store";
+import { messageFromError, useAutomations, useTemplateVariables } from "@/store";
 import type { Template, TemplateAttachment, TemplateType } from "@/types";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { TemplateBodyEditor } from "@/features/automations/template-body-editor";
-import { htmlToWhatsAppText } from "@/lib/html-to-whatsapp-text";
-import { TEMPLATE_VARIABLES } from "@/lib/template-variables";
-
+import { VariablePicker } from "@/features/automations/variable-picker";
+import { TemplatePreviewPanel } from "@/features/automations/template-preview-panel";
 import {
-  emailPreviewDocument,
   isTemplateBodyEmpty,
   needsHtmlMode,
   sanitizeEmailHtml,
@@ -251,6 +249,7 @@ function TemplateDialog({
   const [conversionTarget, setConversionTarget] = useState<"visual" | "whatsapp" | null>(null);
   const htmlInputRef = useRef<HTMLTextAreaElement>(null);
   const subjectInputRef = useRef<HTMLInputElement>(null);
+  const variables = useTemplateVariables();
 
   const key = template?.id ?? "new";
   if (open && loadedFor !== key) {
@@ -434,21 +433,12 @@ function TemplateDialog({
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
                   />
-                  <Select value="" onValueChange={insertSubjectVariable}>
-                    <SelectTrigger
-                      aria-label="Insert subject variable"
-                      className="h-9 w-[170px] shrink-0 text-xs"
-                    >
-                      <SelectValue placeholder="Insert variable" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TEMPLATE_VARIABLES.map((v) => (
-                        <SelectItem key={v.token} value={v.token} className="text-xs">
-                          {v.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <VariablePicker
+                    variables={variables}
+                    onInsert={insertSubjectVariable}
+                    ariaLabel="Insert subject variable"
+                    className="h-9 w-[170px] shrink-0 text-xs"
+                  />
                 </div>
               </div>
             )}
@@ -463,7 +453,7 @@ function TemplateDialog({
                   Use as default &quot;Meeting Scheduled&quot; {type} template
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Automatically sent to the lead whenever a meeting is scheduled. Only one {type}{" "}
+                  Automatically sent to the contact whenever a meeting is scheduled. Only one {type}{" "}
                   template can hold this at a time - enabling it here disables it on any other.
                 </p>
               </div>
@@ -488,6 +478,7 @@ function TemplateDialog({
                 <TabsContent value="visual" className="mt-1.5">
                   {bodyMode === "visual" && (
                     <TemplateBodyEditor
+                      variables={variables}
                       value={body}
                       onChange={setBody}
                       loadKey={key}
@@ -499,21 +490,13 @@ function TemplateDialog({
                   <TabsContent value="html" className="mt-1.5 space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <Label htmlFor="template-html">HTML source</Label>
-                      <Select value="" disabled={saving} onValueChange={insertHtmlVariable}>
-                        <SelectTrigger
-                          aria-label="Insert HTML variable"
-                          className="h-8 w-[170px] text-xs"
-                        >
-                          <SelectValue placeholder="Insert variable" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {TEMPLATE_VARIABLES.map((v) => (
-                            <SelectItem key={v.token} value={v.token}>
-                              {v.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <VariablePicker
+                        variables={variables}
+                        onInsert={insertHtmlVariable}
+                        ariaLabel="Insert HTML variable"
+                        className="h-8 w-[170px] text-xs"
+                        disabled={saving}
+                      />
                     </div>
                     <textarea
                       ref={htmlInputRef}
@@ -534,26 +517,17 @@ function TemplateDialog({
                   </TabsContent>
                 )}
                 <TabsContent value="preview" className="mt-1.5">
-                  {type === "email" ? (
-                    <iframe
-                      title="Email template preview"
-                      sandbox=""
-                      referrerPolicy="no-referrer"
-                      className="block h-[360px] max-h-[60dvh] w-full min-w-0 rounded-md border bg-white"
-                      srcDoc={emailPreviewDocument(body)}
-                    />
-                  ) : (
-                    <pre className="min-h-[150px] max-h-[320px] overflow-y-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-sans text-sm [overflow-wrap:anywhere]">
-                      {htmlToWhatsAppText(body)}
-                    </pre>
+                  {bodyMode === "preview" && (
+                    <TemplatePreviewPanel type={type} subject={subject} body={body} />
                   )}
                 </TabsContent>
               </Tabs>
               <p className="pt-1 text-xs text-muted-foreground">
-                Insert lead, owner, date/time, or meeting details in the subject or body. Dates and
-                times use IST (Asia/Kolkata). Current date/time and tomorrow's date are calculated
-                when sending. Meeting details use the scheduled meeting and are only available for
-                Meeting Scheduled notifications; other sends using meeting variables will fail.
+                Insert contact, company, deal, meeting or date details in the subject or body. Dates
+                and times use IST (Asia/Kolkata); today's date, tomorrow's date and the current time
+                are calculated when sending. Meeting details use the scheduled meeting and are only
+                available for Meeting Scheduled notifications; other sends using meeting variables
+                will fail.
               </p>
             </div>
 
