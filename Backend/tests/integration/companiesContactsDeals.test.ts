@@ -242,4 +242,13 @@ describe("companies, contacts, deals (PGlite)", () => {
     expect(pageOne.data).toHaveLength(2);
     expect(pageOne.total).toBeGreaterThan(2);
   });
+
+  it("search matches a full name, as well as email, phone and company", async () => {
+    await newContact({ firstName: "Zara", lastName: "Quill", email: "zq@x.com" });
+    const names = async (q: string) =>
+      (await api("get", `/contacts?search=${encodeURIComponent(q)}`)).body.data.map((c: { lastName: string }) => c.lastName);
+    expect(await names("zara quill")).toEqual(["Quill"]);
+    expect(await names("Quill")).toEqual(["Quill"]);
+    expect(await names("zq@x")).toEqual(["Quill"]);
+  });
 });

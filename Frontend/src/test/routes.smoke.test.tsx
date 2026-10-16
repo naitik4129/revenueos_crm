@@ -38,6 +38,13 @@ vi.mock("@/store", () => {
       logCommunication: noop,
       setLifecycle: noop,
     }),
+    useContacts: () => ({
+      data: { data: [], total: 0, limit: 50, offset: 0 },
+      isLoading: false,
+      error: null,
+      isFetching: false,
+    }),
+    useContactMutation: () => ({ mutateAsync: noop, isPending: false }),
     useTasks: () => ({
       tasks: [],
       isLoading: false,
@@ -107,6 +114,7 @@ vi.mock("@/store", () => {
 });
 
 import { DashboardPage } from "@/features/dashboard/dashboard-page";
+import { ContactsPage } from "@/features/contacts/contacts-page";
 import { LeadsPage } from "@/features/leads/leads-page";
 import { TasksPage } from "@/features/tasks/tasks-page";
 import { MeetingsPage } from "@/features/meetings/meetings-page";
@@ -132,6 +140,7 @@ async function renderScreen(Screen: () => ReactNode) {
 describe("zero-record route states", () => {
   it.each([
     [DashboardPage, "Nothing due today."],
+    [ContactsPage, "No contacts match these filters."],
     [LeadsPage, "No leads match these filters."],
     [TasksPage, "Nothing here."],
     [MeetingsPage, "No meetings."],

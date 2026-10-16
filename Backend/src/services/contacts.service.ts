@@ -243,7 +243,8 @@ export async function listContacts(db: Queryable, workspaceId: string, f: ListCo
   if (f.companyId) where.push(`c.company_id = $${params.push(f.companyId)}`);
   if (f.search) {
     const p = `$${params.push(`%${f.search}%`)}`;
-    where.push(`(c.first_name ilike ${p} or c.last_name ilike ${p} or c.email ilike ${p} or c.phone ilike ${p} or co.name ilike ${p})`);
+    // Full name too, so "Ann Lee" finds Ann Lee.
+    where.push(`(concat_ws(' ', c.first_name, c.last_name) ilike ${p} or c.email ilike ${p} or c.phone ilike ${p} or co.name ilike ${p})`);
   }
   const limit = Math.min(f.limit ?? 50, 500);
   const offset = f.offset ?? 0;

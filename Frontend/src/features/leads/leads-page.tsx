@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle, Search } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
-import { useAddLead } from "@/app/add-lead-context";
+import { useAddContact as useAddLead } from "@/app/add-contact-context";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";

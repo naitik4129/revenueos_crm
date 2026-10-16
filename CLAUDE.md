@@ -72,6 +72,14 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), being reworked. `C
 - **Email events beyond `sent`** (delivered, opened, replied, bounced, unsubscribed) wait for the Email Tool results endpoint.
 - Workflow trigger `lead_created` is renamed `deal_created`: prospects never auto-enroll; only deals do.
 
+### P7 frontend rework (2026-10-16)
+- Sub-phases, one per "go", each passing typecheck/lint/format:check/tests/build and committed: **P7a** foundation (types + API client beside the old ones, workspace switcher, nav, dashboard) → **P7b** contacts → **P7c** companies → **P7d1** deals pipeline board → **P7d2** deal detail + delete `features/leads/`, the leads routes and `types/lead.ts` → **P7e** tasks/meetings/proposals/runs pages + notifications bell → **P7f** admin (users, workspaces, members, brain API keys) → **P7g** template variable picker (`{{contact.*}}`/`{{company.*}}`/`{{deal.*}}`) → then refresh `CONTEXT.md` as its own step.
+- Deals board: native HTML5 drag-and-drop plus a stage dropdown on each card; **no new library**.
+- `deals.closed_at` (012) is set whenever the outcome leaves `open`, so a nurture deal later won moves to the win date; cleared on reopen.
+- Overdue = due before the start of today (Asia/Kolkata); never overlaps "due today" (dashboard and the tasks list agree).
+- Admins use the whole app (all workspaces) plus `/admin`; only admins see "Create workspace". A user with no workspace sees an empty state; a saved workspace id that is no longer allowed is dropped.
+- Until P7d2 the old leads screens still compile but call the removed `/leads` API; placeholder pages are marked `shortcut:`.
+
 ### Kept features
 CSV import, calls + routing, nurture workflows + worker, templates + attachments, email (Resend/SMTP), WhatsApp (Baileys), Google Calendar, meetings, proposals, tasks, DNC, merge, delete + audit, notifications, dashboard, workspaces, admin users.
 

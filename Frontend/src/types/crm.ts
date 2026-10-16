@@ -27,6 +27,17 @@ export type ContactStatus = (typeof CONTACT_STATUSES)[number];
 export const DEAL_OUTCOMES = ["open", "won", "lost", "nurture", "discarded"] as const;
 export type DealOutcome = (typeof DEAL_OUTCOMES)[number];
 
+/** Backend LEAD_SOURCES ("brain" is set by the brain only). */
+export const CONTACT_SOURCES = [
+  "linkedin",
+  "email",
+  "cold_call",
+  "referral",
+  "event",
+  "inbound_form",
+  "other",
+] as const;
+
 export type EmailStatus = "sent" | "delivered" | "opened" | "replied" | "bounced" | "unsubscribed";
 export type CallSource = "human" | "ai";
 export type ActorSource = "user" | "system" | "automation" | "brain";
@@ -218,4 +229,28 @@ export interface DashboardSummary {
     type: TaskType;
     dueAt: string;
   }[];
+}
+
+export interface ContactNote {
+  id: string;
+  dealId?: string;
+  author: string;
+  body: string;
+  at: string;
+}
+
+export interface LogCallResult {
+  call: ContactCall;
+  contact: Contact;
+  /** The deal the call was routed to: the open one, a reopened nurture deal, or a new one. */
+  deal: Deal | null;
+  workflowTrigger?: string;
+  promptScheduleMeeting?: boolean;
+}
+
+export interface ImportContactsResult {
+  created: string[];
+  duplicates: { rowNumber: number; reason: string }[];
+  failed: { rowNumber: number; reason: string }[];
+  totalRows: number;
 }

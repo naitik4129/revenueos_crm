@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -42,15 +42,14 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { toast } from "sonner";
-import { AddLeadContext } from "@/app/add-lead-context";
-import { AddLeadDialog } from "@/features/leads/add-lead-dialog";
-import { messageFromError, useLeads, useNotifications, useSession } from "@/store";
+import { AddContactContext } from "@/app/add-contact-context";
+import { ContactFormDialog } from "@/features/contacts/contact-form-dialog";
+import { messageFromError, useContactSearch, useNotifications, useSession } from "@/store";
 import { backend } from "@/lib/backend-client";
 import { keys } from "@/store/query";
 import { useWorkspace } from "@/store/workspace-context";
 import { cn } from "@/lib/utils";
 import { relDay } from "@/lib/format";
-import { label } from "@/lib/labels";
 import { supabase } from "@/lib/supabase-client";
 
 const NAV = [
@@ -78,7 +77,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const client = useQueryClient();
-  const { leads } = useLeads();
   const { notifications, markNotificationsRead } = useNotifications();
   const { currentUser } = useSession();
   const {
@@ -129,28 +127,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const unread = notifications.filter((n) => !n.read).length;
   const trimmedQuery = query.trim();
-  const results = useMemo(() => {
-    const tokens = trimmedQuery.toLowerCase().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) return [];
-    return leads
-      .filter((l) => {
-        const text = [
-          l.firstName,
-          l.lastName,
-          l.company,
-          l.email,
-          l.phone,
-          l.jobTitle,
-          l.industry,
-          l.serviceInterest,
-          label(l.pipelineStage),
-        ]
-          .join(" ")
-          .toLowerCase();
-        return tokens.every((t) => text.includes(t));
-      })
-      .slice(0, 6);
-  }, [leads, trimmedQuery]);
+  // Server-side search (name, email, phone, company); typing pauses before each request.
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(trimmedQuery), 250);
+    return () => clearTimeout(timer);
+  }, [trimmedQuery]);
+  const { results, isFetching } = useContactSearch(debouncedQuery);
   const showSearchPanel = searchOpen && trimmedQuery.length > 0;
 
   const resetSearch = () => {
@@ -160,7 +143,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AddLeadContext.Provider value={{ open: () => setAddOpen(true) }}>
+    <AddContactContext.Provider value={{ open: () => setAddOpen(true) }}>
       <div className="flex min-h-screen bg-background">
         <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
           <div className="px-3 py-5">
@@ -173,7 +156,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               size="sm"
               onClick={() => setAddOpen(true)}
             >
-              <Plus className="size-4" /> Add Lead
+              <Plus className="size-4" /> Add contact
             </Button>
           </div>
 
@@ -323,11 +306,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                     if (target) {
                       e.preventDefault();
                       resetSearch();
-                      void navigate({ to: "/leads/$leadId", params: { leadId: target.id } });
+                      void navigate({
+                        to: "/contacts/$contactId",
+                        params: { contactId: target.id },
+                      });
                     }
                   }
                 }}
-                placeholder="Search leads and companies…"
+                placeholder="Search contacts…"
                 className="h-9 pl-8"
               />
               {showSearchPanel && (
@@ -337,14 +323,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                   className="absolute left-0 right-0 top-11 z-40 overflow-hidden rounded-md border bg-popover shadow-lg"
                 >
                   {results.length > 0 ? (
-                    results.map((l, i) => (
+                    results.map((c, i) => (
                       <Link
-                        key={l.id}
+                        key={c.id}
                         id={`header-search-result-${i}`}
                         role="option"
                         aria-selected={i === activeIndex}
-                        to="/leads/$leadId"
-                        params={{ leadId: l.id }}
+                        to="/contacts/$contactId"
+                        params={{ contactId: c.id }}
                         onClick={resetSearch}
                         onMouseEnter={() => setActiveIndex(i)}
                         className={cn(
@@ -353,14 +339,20 @@ export function AppShell({ children }: { children: ReactNode }) {
                         )}
                       >
                         <span>
-                          {l.firstName} {l.lastName}
+                          {c.firstName} {c.lastName}
                         </span>
-                        <span className="text-xs text-muted-foreground">{l.company}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {c.companyName ?? c.email}
+                        </span>
                       </Link>
                     ))
                   ) : (
                     <div className="px-3 py-2.5 text-sm text-muted-foreground">
-                      No leads match &ldquo;{trimmedQuery}&rdquo;
+                      {isFetching || debouncedQuery !== trimmedQuery ? (
+                        "Searching…"
+                      ) : (
+                        <>No contacts match &ldquo;{trimmedQuery}&rdquo;</>
+                      )}
                     </div>
                   )}
                 </div>
@@ -441,7 +433,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Popover>
 
               <Button size="sm" className="gap-1.5" onClick={() => setAddOpen(true)}>
-                <Plus className="size-4" /> Add Lead
+                <Plus className="size-4" /> Add contact
               </Button>
             </div>
           </header>
@@ -457,7 +449,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </div>
 
-      <AddLeadDialog open={addOpen} onOpenChange={setAddOpen} />
+      <ContactFormDialog open={addOpen} onOpenChange={setAddOpen} />
 
       <Dialog open={createWorkspaceOpen} onOpenChange={setCreateWorkspaceOpen}>
         <DialogContent className="sm:max-w-sm">
@@ -502,7 +494,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 setAddOpen(true);
               }}
             >
-              Add Lead
+              Add contact
             </CommandItem>
             <CommandItem
               onSelect={() => {
@@ -537,23 +529,9 @@ export function AppShell({ children }: { children: ReactNode }) {
               Open Automations
             </CommandItem>
           </CommandGroup>
-          <CommandGroup heading="Leads">
-            {leads.slice(0, 8).map((l) => (
-              <CommandItem
-                key={l.id}
-                value={`${l.firstName} ${l.lastName} ${l.company}`}
-                onSelect={() => {
-                  setPaletteOpen(false);
-                  void navigate({ to: "/leads/$leadId", params: { leadId: l.id } });
-                }}
-              >
-                {l.firstName} {l.lastName} · {l.company}
-              </CommandItem>
-            ))}
-          </CommandGroup>
         </CommandList>
       </CommandDialog>
-    </AddLeadContext.Provider>
+    </AddContactContext.Provider>
   );
 }
 

@@ -8,55 +8,21 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Lead } from "@/types/lead";
+import type { Contact } from "@/types";
 
 const noop = vi.fn(async () => undefined);
 const workspaceState = vi.hoisted(() => ({ list: [{ id: "w1", name: "One" }] }));
 
-const leads: Lead[] = [
-  {
-    id: "lead-1",
-    firstName: "John",
-    lastName: "Smith",
-    company: "Acme Corp",
-    jobTitle: "VP Sales",
-    industry: "Manufacturing",
-    phone: "+1-555-0100",
-    email: "john.smith@acme.test",
-    source: "linkedin",
-    serviceInterest: "Automation Suite",
-    pipelineStage: "connected_qualifying",
-    lifecycleState: "active",
-    automationMode: "active",
-    responseState: "no_response",
-    doNotContact: false,
-    lastActivityAt: "2026-09-01T00:00:00.000Z",
-    nextAction: null,
-    createdAt: "2026-08-01T00:00:00.000Z",
-    updatedAt: "2026-09-01T00:00:00.000Z",
-  },
-  {
-    id: "lead-2",
-    firstName: "Priya",
-    lastName: "Nair",
-    company: "Globex",
-    jobTitle: "CTO",
-    industry: "Software",
-    phone: "+1-555-0101",
-    email: "priya.nair@globex.test",
-    source: "referral",
-    serviceInterest: "Consulting",
-    pipelineStage: "negotiation",
-    lifecycleState: "active",
-    automationMode: "manual",
-    responseState: "responded",
-    doNotContact: false,
-    lastActivityAt: "2026-09-02T00:00:00.000Z",
-    nextAction: null,
-    createdAt: "2026-08-02T00:00:00.000Z",
-    updatedAt: "2026-09-02T00:00:00.000Z",
-  },
-];
+const contacts = [
+  { id: "c-1", firstName: "John", lastName: "Smith", companyName: "Acme Corp" },
+  { id: "c-2", firstName: "Priya", lastName: "Nair", companyName: "Globex" },
+] as Contact[];
+
+// Stands in for the server-side search: name or company contains the text.
+const search = (text: string) =>
+  contacts.filter((c) =>
+    `${c.firstName} ${c.lastName} ${c.companyName}`.toLowerCase().includes(text.toLowerCase()),
+  );
 
 vi.mock("@/store", () => ({
   messageFromError: (error: unknown) => (error instanceof Error ? error.message : "Request failed"),
@@ -67,22 +33,9 @@ vi.mock("@/store", () => ({
     isLoading: false,
     error: null,
   }),
-  useLeads: () => ({
-    leads,
-    getLead: (id: string) => leads.find((l) => l.id === id),
-    isLoading: false,
-    error: null,
-    isPending: false,
-    addLead: noop,
-    updateLead: noop,
-    addNote: noop,
-    setAutomation: noop,
-    markDnc: noop,
-    reactivateFromDnc: noop,
-    logCall: noop,
-    logCommunication: noop,
-    setLifecycle: noop,
-  }),
+  useContactSearch: (text: string) => ({ results: text ? search(text) : [], isFetching: false }),
+  // The Add contact dialog (closed in these tests) uses these.
+  useContactMutation: () => ({ mutateAsync: noop, isPending: false }),
   useNotifications: () => ({
     notifications: [],
     markNotificationsRead: noop,
@@ -123,51 +76,28 @@ async function renderShell() {
     path: "/",
     component: () => <div>home</div>,
   });
-  const leadRoute = createRoute({
+  const contactRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: "/leads/$leadId",
-    component: function LeadScreen() {
-      return <div>lead detail</div>;
+    path: "/contacts/$contactId",
+    component: function ContactScreen() {
+      return <div>contact detail</div>;
     },
   });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, leadRoute]),
+    routeTree: rootRoute.addChildren([indexRoute, contactRoute]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   await router.load();
   const view = render(<RouterProvider router={router} />);
-  const input = screen.getByPlaceholderText("Search leads and companies…");
+  const input = screen.getByPlaceholderText("Search contacts…");
   return { view, input, router };
 }
 
 describe("AppShell top search bar", () => {
-  it("is case-insensitive", async () => {
+  it("shows the server's matches with their company", async () => {
     const { input } = await renderShell();
     fireEvent.change(input, { target: { value: "SMITH" } });
     expect(await screen.findByText("Acme Corp")).toBeInTheDocument();
-  });
-
-  it("matches on fields beyond name/company: email, phone, job title, stage", async () => {
-    const { input } = await renderShell();
-
-    fireEvent.change(input, { target: { value: "priya.nair@globex.test" } });
-    expect(await screen.findByText("Globex")).toBeInTheDocument();
-
-    fireEvent.change(input, { target: { value: "555-0100" } });
-    expect(await screen.findByText("Acme Corp")).toBeInTheDocument();
-
-    fireEvent.change(input, { target: { value: "CTO" } });
-    expect(await screen.findByText("Globex")).toBeInTheDocument();
-
-    fireEvent.change(input, { target: { value: "Negotiation" } });
-    expect(await screen.findByText("Globex")).toBeInTheDocument();
-  });
-
-  it("matches multi-word queries regardless of token order", async () => {
-    const { input } = await renderShell();
-    fireEvent.change(input, { target: { value: "Corp John" } });
-    expect(await screen.findByText("Acme Corp")).toBeInTheDocument();
-    expect(screen.queryByText("Globex")).not.toBeInTheDocument();
   });
 
   it("shows nothing for a whitespace-only query", async () => {
@@ -179,7 +109,7 @@ describe("AppShell top search bar", () => {
   it("shows a no-results message instead of nothing", async () => {
     const { input } = await renderShell();
     fireEvent.change(input, { target: { value: "zzzznomatch" } });
-    expect(await screen.findByText(/No leads match/)).toBeInTheDocument();
+    expect(await screen.findByText(/No contacts match/)).toBeInTheDocument();
   });
 
   it("closes the dropdown on Escape while keeping the query text", async () => {
@@ -202,10 +132,10 @@ describe("AppShell top search bar", () => {
   it("navigates to the highlighted result on ArrowDown + Enter", async () => {
     const { input } = await renderShell();
     fireEvent.change(input, { target: { value: "a" } });
-    await screen.findByRole("listbox");
+    await screen.findAllByRole("option"); // results arrive after the typing pause
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(await screen.findByText("lead detail")).toBeInTheDocument();
+    expect(await screen.findByText("contact detail")).toBeInTheDocument();
     expect(input).toHaveValue("");
   });
 });

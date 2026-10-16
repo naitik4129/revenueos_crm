@@ -12,6 +12,12 @@ export const keys = {
   session: ["session"] as const,
   profiles: ["profiles"] as const,
   workspaces: ["workspaces"] as const,
+  // Contact lists (any filters) share the prefix ["contacts", ws]; everything on one contact
+  // shares ["contact", ws, id], so one invalidation refreshes the whole detail page.
+  contacts: (workspaceId: string | null, filters?: object) =>
+    filters ? (["contacts", workspaceId, filters] as const) : (["contacts", workspaceId] as const),
+  contact: (workspaceId: string | null, id: string, part?: string) =>
+    part ? (["contact", workspaceId, id, part] as const) : (["contact", workspaceId, id] as const),
   leads: (workspaceId: string | null) => ["leads", workspaceId] as const,
   lead: (workspaceId: string | null, id: string) => ["lead", workspaceId, id] as const,
   notes: (workspaceId: string | null, id: string) => ["notes", workspaceId, id] as const,

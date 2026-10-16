@@ -12,6 +12,12 @@ export {
   useDashboard,
 } from "./server-hooks";
 export { messageFromError } from "./query";
+export {
+  useContacts,
+  useContactSearch,
+  useContactDetail,
+  useContactMutation,
+} from "./contact-hooks";
 export type {
   SessionSlice,
   LeadsSlice,

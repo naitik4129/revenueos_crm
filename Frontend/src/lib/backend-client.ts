@@ -6,12 +6,14 @@ import type {
   Company,
   Contact,
   ContactCall,
+  ContactNote,
   ContactStatus,
   CrmTimelineEvent,
   DashboardSummary,
   Deal,
   DealOutcome,
   EmailActivity,
+  ImportContactsResult,
   CallConnectedOutcome,
   CallNotConnectedReason,
   Contactability,
@@ -20,6 +22,7 @@ import type {
   LeadNote,
   LeadSource,
   LifecycleStage,
+  LogCallResult,
   LifecycleState,
   Meeting,
   MeetingOutcome,
@@ -308,29 +311,59 @@ export interface UpdateTemplateInput {
 }
 
 export interface Page {
-  limit?: number;
-  offset?: number;
+  limit?: number | undefined;
+  offset?: number | undefined;
 }
 export interface ContactFilters extends Page {
-  search?: string;
-  lifecycleStage?: LifecycleStage;
-  status?: ContactStatus;
-  ownerId?: string;
-  companyId?: string;
+  search?: string | undefined;
+  lifecycleStage?: LifecycleStage | undefined;
+  status?: ContactStatus | undefined;
+  ownerId?: string | undefined;
+  companyId?: string | undefined;
+}
+export interface ContactInput {
+  firstName?: string | undefined;
+  lastName?: string | undefined;
+  jobTitle?: string | undefined;
+  email?: string | undefined;
+  phone?: string | undefined;
+  linkedinUrl?: string | undefined;
+  country?: string | undefined;
+  location?: string | undefined;
+  source?: string | undefined;
+  companyId?: string | null | undefined;
+  ownerId?: string | null | undefined;
+}
+export interface ImportContactRow {
+  rowNumber: number;
+  firstName: string;
+  lastName?: string | undefined;
+  jobTitle?: string | undefined;
+  email?: string | undefined;
+  phone?: string | undefined;
+  linkedinUrl?: string | undefined;
+  country?: string | undefined;
+  location?: string | undefined;
+  source?: string | undefined;
+  company?: string | undefined;
+  website?: string | undefined;
+  industry?: string | undefined;
+  createDeal?: string | undefined;
+  dealTitle?: string | undefined;
 }
 export interface CompanyFilters extends Page {
-  search?: string;
-  ownerId?: string;
+  search?: string | undefined;
+  ownerId?: string | undefined;
 }
 export interface DealFilters extends Page {
-  outcome?: DealOutcome;
-  stage?: PipelineStage;
-  ownerId?: string;
-  automationMode?: AutomationMode;
-  contactId?: string;
-  companyId?: string;
-  missingNextAction?: boolean;
-  search?: string;
+  outcome?: DealOutcome | undefined;
+  stage?: PipelineStage | undefined;
+  ownerId?: string | undefined;
+  automationMode?: AutomationMode | undefined;
+  contactId?: string | undefined;
+  companyId?: string | undefined;
+  missingNextAction?: boolean | undefined;
+  search?: string | undefined;
 }
 
 export interface AdminUser {
@@ -494,6 +527,30 @@ export const backend = {
     list: (params?: ContactFilters, signal?: AbortSignal) =>
       get<Paged<Contact>>(query("/contacts", { ...params }), signal),
     get: (id: string, signal?: AbortSignal) => get<Contact>(`/contacts/${id}`, signal),
+    create: (input: ContactInput & { createDeal?: boolean }) =>
+      send<Contact>("POST", "/contacts", input),
+    update: (id: string, input: ContactInput) => send<Contact>("PATCH", `/contacts/${id}`, input),
+    importCsv: (rows: ImportContactRow[]) =>
+      send<{ data: ImportContactsResult }>("POST", "/contacts/import", { rows }),
+    notes: (id: string, signal?: AbortSignal) =>
+      get<{ data: ContactNote[] }>(`/contacts/${id}/notes`, signal),
+    addNote: (id: string, body: string) =>
+      send<ContactNote>("POST", `/contacts/${id}/notes`, { body }),
+    markDnc: (id: string, reason: string) =>
+      send<Contact>("POST", `/contacts/${id}/dnc`, { reason }),
+    reactivateFromDnc: (id: string, reason: string) =>
+      send<Contact>("POST", `/contacts/${id}/dnc/reactivate`, { reason }),
+    setLifecycle: (id: string, stage: LifecycleStage, note?: string) =>
+      send<Contact>("POST", `/contacts/${id}/lifecycle`, { stage, note }),
+    /** Merges this contact into the target; returns the target. */
+    merge: (id: string, targetContactId: string, reason?: string) =>
+      send<Contact>("POST", `/contacts/${id}/merge`, { targetContactId, reason }),
+    contactability: (id: string, signal?: AbortSignal) =>
+      get<{ data: Contactability[] }>(`/contacts/${id}/contactability`, signal),
+    setContactability: (id: string, input: { channel: string; status: string; reason?: string }) =>
+      send<{ data: Contactability[] }>("POST", `/contacts/${id}/contactability`, input),
+    logCall: (id: string, input: LogCallInput) =>
+      send<LogCallResult>("POST", `/contacts/${id}/calls`, input),
     deals: (id: string, params?: Page, signal?: AbortSignal) =>
       get<Paged<Deal>>(query(`/contacts/${id}/deals`, { ...params }), signal),
     calls: (id: string, signal?: AbortSignal) =>

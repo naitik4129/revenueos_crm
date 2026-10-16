@@ -19,6 +19,7 @@ import { Route as AutomationsRunsRouteImport } from './routes/automations.runs'
 import { Route as AutomationsTemplatesRouteImport } from './routes/automations.templates'
 import { Route as CompaniesIndexRouteImport } from './routes/companies.index'
 import { Route as ContactsIndexRouteImport } from './routes/contacts.index'
+import { Route as ContactsContactIdRouteImport } from './routes/contacts.$contactId'
 import { Route as DealsIndexRouteImport } from './routes/deals.index'
 import { Route as LeadsIndexRouteImport } from './routes/leads.index'
 import { Route as LeadsLeadIdRouteImport } from './routes/leads.$leadId'
@@ -75,6 +76,11 @@ const ContactsIndexRoute = ContactsIndexRouteImport.update({
   path: '/contacts/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ContactsContactIdRoute = ContactsContactIdRouteImport.update({
+  id: '/contacts/$contactId',
+  path: '/contacts/$contactId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DealsIndexRoute = DealsIndexRouteImport.update({
   id: '/deals/',
   path: '/deals/',
@@ -110,6 +116,7 @@ export interface FileRoutesByFullPath {
   '/tasks': typeof TasksRoute
   '/automations/runs': typeof AutomationsRunsRoute
   '/automations/templates': typeof AutomationsTemplatesRoute
+  '/contacts/$contactId': typeof ContactsContactIdRoute
   '/leads/$leadId': typeof LeadsLeadIdRoute
   '/automations/': typeof AutomationsIndexRoute
   '/companies/': typeof CompaniesIndexRoute
@@ -127,6 +134,7 @@ export interface FileRoutesByTo {
   '/tasks': typeof TasksRoute
   '/automations/runs': typeof AutomationsRunsRoute
   '/automations/templates': typeof AutomationsTemplatesRoute
+  '/contacts/$contactId': typeof ContactsContactIdRoute
   '/leads/$leadId': typeof LeadsLeadIdRoute
   '/automations': typeof AutomationsIndexRoute
   '/companies': typeof CompaniesIndexRoute
@@ -145,6 +153,7 @@ export interface FileRoutesById {
   '/tasks': typeof TasksRoute
   '/automations/runs': typeof AutomationsRunsRoute
   '/automations/templates': typeof AutomationsTemplatesRoute
+  '/contacts/$contactId': typeof ContactsContactIdRoute
   '/leads/$leadId': typeof LeadsLeadIdRoute
   '/automations/': typeof AutomationsIndexRoute
   '/companies/': typeof CompaniesIndexRoute
@@ -164,6 +173,7 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/automations/runs'
     | '/automations/templates'
+    | '/contacts/$contactId'
     | '/leads/$leadId'
     | '/automations/'
     | '/companies/'
@@ -181,6 +191,7 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/automations/runs'
     | '/automations/templates'
+    | '/contacts/$contactId'
     | '/leads/$leadId'
     | '/automations'
     | '/companies'
@@ -198,6 +209,7 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/automations/runs'
     | '/automations/templates'
+    | '/contacts/$contactId'
     | '/leads/$leadId'
     | '/automations/'
     | '/companies/'
@@ -216,6 +228,7 @@ export interface RootRouteChildren {
   TasksRoute: typeof TasksRoute
   AutomationsRunsRoute: typeof AutomationsRunsRoute
   AutomationsTemplatesRoute: typeof AutomationsTemplatesRoute
+  ContactsContactIdRoute: typeof ContactsContactIdRoute
   LeadsLeadIdRoute: typeof LeadsLeadIdRoute
   AutomationsIndexRoute: typeof AutomationsIndexRoute
   CompaniesIndexRoute: typeof CompaniesIndexRoute
@@ -298,6 +311,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ContactsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/contacts/$contactId': {
+      id: '/contacts/$contactId'
+      path: '/contacts/$contactId'
+      fullPath: '/contacts/$contactId'
+      preLoaderRoute: typeof ContactsContactIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/deals/': {
       id: '/deals/'
       path: '/deals'
@@ -344,6 +364,7 @@ const rootRouteChildren: RootRouteChildren = {
   TasksRoute: TasksRoute,
   AutomationsRunsRoute: AutomationsRunsRoute,
   AutomationsTemplatesRoute: AutomationsTemplatesRoute,
+  ContactsContactIdRoute: ContactsContactIdRoute,
   LeadsLeadIdRoute: LeadsLeadIdRoute,
   AutomationsIndexRoute: AutomationsIndexRoute,
   CompaniesIndexRoute: CompaniesIndexRoute,
