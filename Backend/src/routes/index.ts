@@ -14,11 +14,14 @@ import { adminRouter } from "./admin.routes.js";
 import { workspacesRouter } from "./workspaces.routes.js";
 import { connectionsRouter } from "./connections.routes.js";
 import { googleCalendarOAuthRouter } from "./googleCalendarOAuth.routes.js";
+import { brainRouter } from "./brain.routes.js";
 import { requireAuth, requireCrmUser, requireWorkspace } from "../authMiddleware.js";
 
 export const apiRouter = Router();
 
 apiRouter.use("/me", meRouter);
+// Brain API key auth, not a user session; mounted before the user-gated routers below.
+apiRouter.use("/brain/v1", brainRouter);
 // Mounted before adminRouter so Google's unauthenticated OAuth redirect
 // reaches this specific, unauthenticated route rather than being rejected
 // by adminRouter's blanket requireAuth — every other /admin/... path falls

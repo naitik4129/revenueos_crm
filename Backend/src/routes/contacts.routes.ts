@@ -58,7 +58,6 @@ contactsRouter.post(
 );
 
 const importSchema = z.object({
-  createDeals: z.boolean().optional(),
   rows: z
     .array(
       z.object({
@@ -76,6 +75,8 @@ const importSchema = z.object({
         company: z.string().optional(),
         website: z.string().optional(),
         industry: z.string().optional(),
+        createDeal: z.union([z.boolean(), z.string()]).optional(),
+        dealTitle: z.string().optional(),
       }),
     )
     .min(1, "The file has no data rows to import.")
@@ -85,8 +86,8 @@ const importSchema = z.object({
 contactsRouter.post(
   "/import",
   asyncHandler(async (req, res) => {
-    const { rows, createDeals } = parseBody(importSchema, req.body);
-    const data = await withTransaction((db) => contacts.importContacts(db, req.actor!, req.workspaceId!, rows, { createDeals }));
+    const { rows } = parseBody(importSchema, req.body);
+    const data = await withTransaction((db) => contacts.importContacts(db, req.actor!, req.workspaceId!, rows));
     res.status(201).json({ data });
   }),
 );

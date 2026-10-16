@@ -136,14 +136,15 @@ describe("companies, contacts, deals (PGlite)", () => {
     expect((await api("get", `/contacts/${a.id}`)).body.status).toBe("active");
   });
 
-  it("CSV import dedups by email and phone, reuses companies and can open deals", async () => {
+  it("CSV import dedups by email and phone, reuses companies and opens deals only for rows that ask", async () => {
     await newContact({ email: "existing@x.com", phone: "+919800000001" });
     const res = await api("post", "/contacts/import", {
       body: {
-        createDeals: true,
         rows: [
-          { rowNumber: 1, firstName: "Ann", email: "ann@acme.com", company: "Acme", source: "event" },
+          { rowNumber: 1, firstName: "Ann", email: "ann@acme.com", company: "Acme", source: "event", createDeal: "yes" },
           { rowNumber: 2, firstName: "Ben", phone: "9800000002", company: "ACME" },
+          { rowNumber: 8, firstName: "Cat", email: "cat@acme.com", company: "Acme", dealTitle: "Website rebuild" },
+          { rowNumber: 9, firstName: "Dan", email: "dan@acme.com", company: "Acme", createDeal: "no" },
           { rowNumber: 3, firstName: "Dup", email: "EXISTING@x.com" },
           { rowNumber: 4, firstName: "Dup", phone: "09800000001" },
           { rowNumber: 5, firstName: "Again", phone: "+91 98000 00002" },
@@ -154,8 +155,8 @@ describe("companies, contacts, deals (PGlite)", () => {
     });
     expect(res.status).toBe(201);
     const { created, duplicates, failed, totalRows } = res.body.data;
-    expect(totalRows).toBe(7);
-    expect(created).toHaveLength(2);
+    expect(totalRows).toBe(9);
+    expect(created).toHaveLength(4);
     expect(duplicates).toEqual([
       { rowNumber: 3, reason: "Matches an existing contact by email or phone." },
       { rowNumber: 4, reason: "Matches an existing contact by email or phone." },
@@ -166,11 +167,19 @@ describe("companies, contacts, deals (PGlite)", () => {
     const companies = await seed.query(`select id from crm.companies where workspace_id = $1 and lower(name) = 'acme'`, [w1]);
     expect(companies.rows).toHaveLength(1);
     const imported = await seed.query(
-      `select c.company_id, c.lifecycle_stage, (select count(*)::int from crm.deals d where d.contact_id = c.id and d.outcome = 'open') open_deals
-         from crm.contacts c where c.id = any($1::uuid[])`,
+      `select c.first_name, c.company_id, c.lifecycle_stage, d.service_interest,
+              (select count(*)::int from crm.deals x where x.contact_id = c.id) deals
+         from crm.contacts c left join crm.deals d on d.contact_id = c.id
+        where c.id = any($1::uuid[]) order by c.first_name`,
       [created],
     );
-    for (const c of imported.rows) expect(c).toEqual({ company_id: companies.rows[0].id, lifecycle_stage: "qualified", open_deals: 1 });
+    const acme = companies.rows[0].id;
+    expect(imported.rows).toEqual([
+      { first_name: "Ann", company_id: acme, lifecycle_stage: "qualified", service_interest: null, deals: 1 },
+      { first_name: "Ben", company_id: acme, lifecycle_stage: "prospect", service_interest: null, deals: 0 },
+      { first_name: "Cat", company_id: acme, lifecycle_stage: "qualified", service_interest: "Website rebuild", deals: 1 },
+      { first_name: "Dan", company_id: acme, lifecycle_stage: "prospect", service_interest: null, deals: 0 },
+    ]);
   });
 
   it("lifecycle only moves forward automatically; only an admin can move it back, with a note", async () => {

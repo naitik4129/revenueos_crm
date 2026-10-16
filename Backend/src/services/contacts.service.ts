@@ -13,7 +13,7 @@ import { lifecycleIndex } from "../domain/pipeline.js";
 import { normalizeEmail } from "../domain/email.js";
 import { normalizePhoneE164 } from "../domain/phone.js";
 import { userNameSql } from "./profiles.service.js";
-import { actorEvent, addTimelineEvent, AUTOMATION_ACTOR, type AddTimelineEventInput } from "./timeline.service.js";
+import { actorEvent, addTimelineEvent, toEventActor, type EventActor } from "./timeline.service.js";
 import { findOrCreateCompany, writeDeletedAudit } from "./companies.service.js";
 import { createDeal } from "./deals.service.js";
 
@@ -368,9 +368,9 @@ export async function listNotes(db: Queryable, workspaceId: string, contactId: s
 /**
  * DNC: the 009 trigger writes dnc_events, stops automation on the contact's deals and cancels
  * their runs/actions; deals stay open. Open tasks (the contact's and its deals') are cancelled
- * here so no next action survives.
+ * here so no next action survives. actor: a user, or the brain for an AI-call DNC.
  */
-export async function markDnc(db: Queryable, actor: Actor, workspaceId: string, contactId: string, input: { reason: string }) {
+export async function markDnc(db: Queryable, actor: Actor | EventActor, workspaceId: string, contactId: string, input: { reason: string }) {
   const reason = input.reason.trim();
   if (!reason) throw new ValidationError("A reason is required to mark Do Not Contact.");
   const current = await getContactOr404(db, workspaceId, contactId);
@@ -381,14 +381,14 @@ export async function markDnc(db: Queryable, actor: Actor, workspaceId: string, 
     `update crm.contacts
         set status = 'do_not_contact', dnc_reason = $2, dnc_by = $3, dnc_by_name = $4, dnc_at = now(), last_activity_at = now()
       where id = $1`,
-    [contactId, reason, actor.id, actor.fullName],
+    [contactId, reason, "fullName" in actor ? actor.id : null, "fullName" in actor ? actor.fullName : actor.actorName],
   );
   await db.query(
     `update crm.tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = 'Contact marked Do Not Contact'
       where status = 'open' and (contact_id = $1 or deal_id in (select id from crm.deals where contact_id = $1))`,
     [contactId],
   );
-  await addTimelineEvent(db, { contactId, kind: "system", title: "Do Not Contact", detail: reason, ...actorEvent(actor) });
+  await addTimelineEvent(db, { contactId, kind: "system", title: "Do Not Contact", detail: reason, ...toEventActor(actor) });
   return getContactOr404(db, workspaceId, contactId);
 }
 
@@ -467,8 +467,6 @@ export async function logManualCommunication(
 
 // --- Lifecycle stage ---------------------------------------------------------------------
 
-type EventActor = Pick<AddTimelineEventInput, "actorId" | "actorName" | "actorSource">;
-
 /**
  * Moves a contact's lifecycle forward only (relies on the enum's declared order). Returns
  * true when it moved. Used by activity and deal code; never moves a stage back.
@@ -480,8 +478,7 @@ export async function advanceLifecycle(db: Queryable, contactId: string, stage: 
     [contactId, stage],
   );
   if (!moved.rowCount) return false;
-  const who = !actor ? AUTOMATION_ACTOR : "fullName" in actor ? actorEvent(actor) : actor;
-  await addTimelineEvent(db, { contactId, kind: "lifecycle", title: `Lifecycle: ${stage}`, ...who });
+  await addTimelineEvent(db, { contactId, kind: "lifecycle", title: `Lifecycle: ${stage}`, ...toEventActor(actor) });
   return true;
 }
 
@@ -567,6 +564,16 @@ export interface ImportContactRowInput extends ContactFieldsInput {
   company?: string;
   website?: string;
   industry?: string;
+  /** CSV "create_deal" column: true, or yes/y/true/1. */
+  createDeal?: boolean | string;
+  /** CSV "deal_title" column; non-empty also asks for a deal. Stored as the deal's service interest (deals have no title). */
+  dealTitle?: string;
+}
+
+/** A row asks for a deal with create_deal = yes/true/1, or any deal_title. */
+export function rowWantsDeal(row: Pick<ImportContactRowInput, "createDeal" | "dealTitle">): boolean {
+  const flag = typeof row.createDeal === "string" ? ["yes", "y", "true", "1"].includes(row.createDeal.trim().toLowerCase()) : row.createDeal === true;
+  return flag || !!row.dealTitle?.trim();
 }
 
 export interface ImportRowOutcome {
@@ -577,14 +584,14 @@ export interface ImportRowOutcome {
 /**
  * Partial import: invalid rows and duplicates (same email/phone as an existing contact in this
  * workspace, or an earlier row in the file) are skipped and reported. Each row's company is
- * matched by domain/name or created. With createDeals, every new contact also gets an open deal.
+ * matched by domain/name or created. New contacts are prospects; only rows that ask for a deal
+ * (rowWantsDeal) also get an open deal, which makes them qualified.
  */
 export async function importContacts(
   db: Queryable,
   actor: Actor,
   workspaceId: string,
   rows: ImportContactRowInput[],
-  options: { createDeals?: boolean } = {},
 ) {
   const failed: ImportRowOutcome[] = [];
   const duplicates: ImportRowOutcome[] = [];
@@ -636,7 +643,7 @@ export async function importContacts(
 
     const id = await insertContact(db, actor, workspaceId, fields, companyId, defaultOwner(actor));
     await addTimelineEvent(db, { contactId: id, kind: "system", title: "Contact Created", detail: `Source: ${fields.source} (CSV import)`, ...actorEvent(actor) });
-    if (options.createDeals) await createDeal(db, actor, workspaceId, { contactId: id });
+    if (rowWantsDeal(row)) await createDeal(db, actor, workspaceId, { contactId: id, serviceInterest: row.dealTitle });
     created.push(id);
   }
 

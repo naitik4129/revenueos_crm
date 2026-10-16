@@ -26,6 +26,8 @@ export interface AddTimelineEventInput {
   relatedWorkflowRunId?: string | null;
   metadata?: Record<string, unknown> | null;
   occurredAt?: Date;
+  /** Brain event id; unique per workspace, so a re-sent event cannot be recorded twice. */
+  external?: { source: string; id: string };
 }
 
 /**
@@ -37,10 +39,10 @@ export async function addTimelineEvent(db: Queryable, input: AddTimelineEventInp
     `insert into crm.timeline_events
       (workspace_id, company_id, contact_id, deal_id, occurred_at, event_kind, title, detail,
        actor_id, actor_name, actor_source, related_task_id, related_meeting_id, related_proposal_id,
-       related_call_id, related_workflow_run_id, metadata)
+       related_call_id, related_workflow_run_id, metadata, external_source, external_id)
      select coalesce(d.workspace_id, c.workspace_id, co.workspace_id),
             co.id, coalesce(c.id, d.contact_id), d.id,
-            coalesce($4, now()), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+            coalesce($4, now()), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
        from (select 1) one
        left join crm.deals d on d.id = $3
        left join crm.contacts c on c.id = $2
@@ -62,6 +64,8 @@ export async function addTimelineEvent(db: Queryable, input: AddTimelineEventInp
       input.relatedCallId ?? null,
       input.relatedWorkflowRunId ?? null,
       input.metadata ? JSON.stringify(input.metadata) : null,
+      input.external?.source ?? null,
+      input.external?.id ?? null,
     ],
   );
 }
@@ -73,6 +77,14 @@ export function actorEvent(actor: Actor): { actorId: string; actorName: string; 
 export const SYSTEM_ACTOR = { actorId: null, actorName: "System", actorSource: "system" as const };
 export const AUTOMATION_ACTOR = { actorId: null, actorName: "Automation", actorSource: "automation" as const };
 export const BRAIN_ACTOR = { actorId: null, actorName: "RevenueOS Brain", actorSource: "brain" as const };
+
+/** Who an event is attributed to when it is not always a signed-in user. */
+export type EventActor = Pick<AddTimelineEventInput, "actorId" | "actorName" | "actorSource">;
+
+/** A user -> user event; the brain/system -> as given; nobody -> automation. */
+export function toEventActor(actor: Actor | EventActor | null): EventActor {
+  return !actor ? AUTOMATION_ACTOR : "fullName" in actor ? actorEvent(actor) : actor;
+}
 
 interface TimelineRow {
   id: string;

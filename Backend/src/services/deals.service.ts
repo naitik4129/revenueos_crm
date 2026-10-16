@@ -15,7 +15,7 @@ import type {
 } from "../domain/enums.js";
 import { assertPipelineStageEditable, assertValidPipelineStage, canRunAutomation } from "../domain/pipeline.js";
 import { userNameSql } from "./profiles.service.js";
-import { actorEvent, addTimelineEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
+import { actorEvent, addTimelineEvent, toEventActor, type EventActor } from "./timeline.service.js";
 import { writeDeletedAudit } from "./companies.service.js";
 import { advanceLifecycle } from "./contacts.service.js";
 
@@ -129,7 +129,7 @@ export async function getDealOr404(db: Queryable, workspaceId: string, id: strin
   return row;
 }
 
-const eventActor = (actor: Actor | null) => (actor ? actorEvent(actor) : AUTOMATION_ACTOR);
+const eventActor = toEventActor;
 
 function openDealConflict(err: unknown): never {
   if (isUniqueViolation(err, "deals_one_open_per_contact")) {
@@ -147,8 +147,12 @@ export interface CreateDealInput {
   serviceInterest?: string;
 }
 
-/** One open deal per contact (409 otherwise). Creating a deal makes the contact `qualified`. */
-export async function createDeal(db: Queryable, actor: Actor | null, workspaceId: string, input: CreateDealInput): Promise<DealRow> {
+/**
+ * One open deal per contact (409 otherwise). Creating a deal makes the contact `qualified`.
+ * actor: a user, the brain (BRAIN_ACTOR) or null (automation).
+ */
+export async function createDeal(db: Queryable, actor: Actor | EventActor | null, workspaceId: string, input: CreateDealInput): Promise<DealRow> {
+  const user = actor && "fullName" in actor ? actor : null;
   const contact = await db.query<{ status: ContactStatus; company_id: string | null; owner_id: string | null }>(
     `select status, company_id, owner_id from crm.contacts where id = $1 and workspace_id = $2`,
     [input.contactId, workspaceId],
@@ -158,12 +162,12 @@ export async function createDeal(db: Queryable, actor: Actor | null, workspaceId
   if (c.status === "merged") throw new ConflictError("This contact was merged into another contact.");
   if (input.stage) assertValidPipelineStage(input.stage);
 
-  const ownerId = input.ownerId !== undefined ? input.ownerId : c.owner_id ?? (actor?.role === "salesperson" ? actor.id : null);
+  const ownerId = input.ownerId !== undefined ? input.ownerId : c.owner_id ?? (user?.role === "salesperson" ? user.id : null);
   const id = await db
     .query<{ id: string }>(
       `insert into crm.deals (workspace_id, contact_id, company_id, owner_id, stage, service_interest, created_by)
        values ($1, $2, $3, $4, $5, $6, $7) returning id`,
-      [workspaceId, input.contactId, c.company_id, ownerId, input.stage ?? "new", input.serviceInterest?.trim() || null, actor?.id ?? null],
+      [workspaceId, input.contactId, c.company_id, ownerId, input.stage ?? "new", input.serviceInterest?.trim() || null, user?.id ?? null],
     )
     .then((r) => r.rows[0]!.id, openDealConflict);
 

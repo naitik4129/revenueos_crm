@@ -15,6 +15,8 @@ export function createApp() {
       credentials: true,
     }),
   );
+  // Brain batches (up to 500 items, with call transcripts) need more room than user requests.
+  app.use("/api/v1/brain", express.json({ limit: "25mb" }));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
