@@ -5,7 +5,7 @@ import { asyncHandler } from "../asyncHandler.js";
 import { pool, withTransaction } from "../db.js";
 import { parseBody, parseId, parseQuery } from "../validation/parse.js";
 import { LEAD_LOSS_REASONS, PROPOSAL_STATUSES } from "../domain/enums.js";
-import { createProposal, getProposalOr404, listProposals, updateProposal, updateProposalStatus } from "../services/proposals.service.js";
+import { createProposal, getProposalOr404, listProposals, proposalsSummary, updateProposal, updateProposalStatus } from "../services/proposals.service.js";
 import { sendProposal, uploadProposalDocument } from "../services/proposalSending.service.js";
 import { ValidationError } from "../errors.js";
 
@@ -16,6 +16,7 @@ import { ValidationError } from "../errors.js";
 export const proposalsRouter = Router();
 
 const id = (req: { params: Record<string, string | undefined> }) => parseId(req.params.id, "Proposal");
+const page = { limit: z.coerce.number().int().positive().max(500).optional(), offset: z.coerce.number().int().min(0).optional() };
 
 const ALLOWED_DOCUMENT_MIME_TYPES = new Set([
   "application/pdf",
@@ -55,11 +56,24 @@ function uploadDocument(req: Request, res: Response, next: NextFunction) {
 proposalsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    const q = parseQuery(
-      z.object({ dealId: z.string().uuid().optional(), status: z.enum(PROPOSAL_STATUSES).optional(), ownerId: z.string().uuid().optional() }),
+    const { limit = 50, offset = 0, ...filters } = parseQuery(
+      z.object({
+        dealId: z.string().uuid().optional(),
+        status: z.enum(PROPOSAL_STATUSES).optional(),
+        ownerId: z.string().uuid().optional(),
+        ...page,
+      }),
       req.query,
     );
-    res.json({ data: await listProposals(pool, req.workspaceId!, q) });
+    res.json({ ...(await listProposals(pool, req.workspaceId!, filters, { limit, offset })), limit, offset });
+  }),
+);
+
+// Before "/:id" so "summary" is not read as an id.
+proposalsRouter.get(
+  "/summary",
+  asyncHandler(async (req, res) => {
+    res.json(await proposalsSummary(pool, req.workspaceId!));
   }),
 );
 

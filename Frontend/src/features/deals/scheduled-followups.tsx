@@ -221,25 +221,27 @@ function StepRow({
 
 /**
  * "At a glance" view of a deal's nurture sequence: which messages already
- * went out, and exactly when the next one is due — assembled entirely from
- * data useAutomations() already loads (workflows+steps, runs, scheduled
- * actions), no extra requests.
+ * went out, and exactly when the next one is due — from the deal's own runs
+ * and scheduled actions (useDealDetail) plus the workflows useAutomations()
+ * loads. The workspace-wide lists are paged, so they are never used here.
  */
 /** How many upcoming steps the card shows inline before collapsing the rest behind "View all". */
 const VISIBLE_STEP_COUNT = 2;
 
 export function ScheduledFollowupTimeline({
-  dealId,
+  runs: dealRuns,
+  scheduledActions,
   doNotContact,
   onEnrollClick,
 }: {
-  dealId: string;
+  /** This deal's runs and scheduled actions. */
+  runs: Run[];
+  scheduledActions: ScheduledAction[];
   doNotContact: boolean;
   onEnrollClick: () => void;
 }) {
   const [viewAllOpen, setViewAllOpen] = useState(false);
   const automationStore = useAutomations();
-  const dealRuns = automationStore.runs.filter((run: Run) => run.dealId === dealId);
   const nonTerminalRun = dealRuns.find((run) =>
     ["running", "waiting", "paused"].includes(run.status),
   );
@@ -275,9 +277,7 @@ export function ScheduledFollowupTimeline({
   const workflow = automationStore.workflows.find((item) => item.id === displayRun.workflowId);
   const version = workflow?.versions.find((item) => item.version === displayRun.version);
   const rows = stepsWithCumulativeDay(version?.steps ?? []);
-  const actionsForRun = automationStore.scheduledActions.filter(
-    (action) => action.workflowRunId === displayRun.id,
-  );
+  const actionsForRun = scheduledActions.filter((action) => action.workflowRunId === displayRun.id);
   const currentOrder = findCurrentStep(workflow, displayRun)?.order;
   const actionFor = (stepId: string) =>
     actionsForRun.find((action) => action.workflowStepId === stepId);

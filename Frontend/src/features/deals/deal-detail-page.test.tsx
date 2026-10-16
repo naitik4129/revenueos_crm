@@ -10,7 +10,7 @@ import {
 } from "@tanstack/react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackendError } from "@/lib/backend-client";
-import type { Contact, Deal, Task } from "@/types";
+import type { Contact, Deal, Run, Task } from "@/types";
 
 const api = vi.hoisted(() => ({ setOutcome: vi.fn(), markLost: vi.fn(), logCall: vi.fn() }));
 vi.mock("@/lib/backend-client", async (importOriginal) => {
@@ -24,7 +24,7 @@ vi.mock("@/lib/backend-client", async (importOriginal) => {
     },
   };
 });
-const state = vi.hoisted(() => ({ deal: {} as Deal, tasks: [] as Task[] }));
+const state = vi.hoisted(() => ({ deal: {} as Deal, tasks: [] as Task[], runs: [] as Run[] }));
 const loaded = <T,>(data: T) => ({ data, isLoading: false, error: null });
 vi.mock("@/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/store")>()),
@@ -34,7 +34,8 @@ vi.mock("@/store", async (importOriginal) => ({
     tasks: loaded({ data: state.tasks }),
     meetings: loaded({ data: [] }),
     proposals: loaded({ data: [] }),
-    runs: loaded({ data: [] }),
+    runs: loaded({ data: state.runs }),
+    scheduledActions: loaded({ data: [] }),
     timeline: loaded({ data: [] }),
     notes: loaded({ data: [] }),
     contact: loaded({
@@ -61,8 +62,6 @@ vi.mock("@/store", async (importOriginal) => ({
         versions: [{ status: "published" }],
       },
     ],
-    runs: [],
-    scheduledActions: [],
     templateName: () => "-",
   }),
 }));
@@ -86,9 +85,10 @@ const baseDeal = {
   createdAt: new Date().toISOString(),
 } as unknown as Deal;
 
-async function renderDeal(deal: Partial<Deal> = {}, tasks: Task[] = []) {
+async function renderDeal(deal: Partial<Deal> = {}, tasks: Task[] = [], runs: Run[] = []) {
   state.deal = { ...baseDeal, ...deal };
   state.tasks = tasks;
+  state.runs = runs;
   const root = createRootRoute({ component: () => <Outlet /> });
   const router = createRouter({
     routeTree: root.addChildren([
@@ -150,6 +150,15 @@ describe("deal page", () => {
     await renderDeal({ stage: "interested_later" });
     fireEvent.click(screen.getByRole("button", { name: "Enroll" }));
     expect(await screen.findByText(/This deal is in nurture/)).toBeInTheDocument();
+  });
+
+  it("reads the deal's own runs, not the paged workspace list, to know it is enrolled", async () => {
+    await renderDeal({ stage: "interested_later" });
+    expect(screen.getByText("This deal needs a nurture workflow.")).toBeInTheDocument();
+    cleanup();
+    const run = { id: "r1", workflowId: "w1", version: 1, dealId: "d1", status: "waiting" };
+    await renderDeal({ stage: "interested_later" }, [], [run as unknown as Run]);
+    expect(screen.queryByText("This deal needs a nurture workflow.")).toBeNull();
   });
 
   it("logs a call from a call task, sending that task's id", async () => {

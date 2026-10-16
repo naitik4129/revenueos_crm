@@ -148,7 +148,8 @@ for (const [path, list] of Object.entries(related)) {
     `/:id/${path}`,
     asyncHandler(async (req, res) => {
       const dealId = (await deals.getDealOr404(pool, req.workspaceId!, id(req))).id;
-      res.json({ data: await list(pool, req.workspaceId!, { dealId }) });
+      // Unpaged on purpose: one deal has only a handful of these, and the deal page needs them all.
+      res.json({ data: (await list(pool, req.workspaceId!, { dealId })).data });
     }),
   );
 }

@@ -78,8 +78,6 @@ beforeEach(() => {
   storeState.current = {
     workflows: [workflow],
     templates: [],
-    runs: [],
-    scheduledActions: [],
     isLoading: false,
     error: null,
     isPending: false,

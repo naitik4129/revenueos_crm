@@ -72,6 +72,9 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
   const dealQuery = useDeal(dealId);
   const deal = dealQuery.data;
   const detail = useDealDetail(dealId, deal?.contactId);
+  // The deal's own runs/actions; the workspace lists are paged.
+  const dealRuns = detail.runs.data?.data ?? [];
+  const dealActions = detail.scheduledActions.data?.data ?? [];
   const { users } = useSession();
   const { workflows } = useAutomations();
   const [tab, setTab] = useState("tasks");
@@ -237,7 +240,8 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
         <div className="space-y-4 lg:col-span-2">
           {open && (
             <DealJourneyCard
-              dealId={deal.id}
+              runs={dealRuns}
+              scheduledActions={dealActions}
               stage={deal.stage}
               doNotContact={deal.doNotContact}
               onCallClick={() => setDialog({ kind: "call" })}
@@ -500,7 +504,8 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
             <TabsContent value="automation" className="mt-4 space-y-3">
               {open && (
                 <ScheduledFollowupTimeline
-                  dealId={deal.id}
+                  runs={dealRuns}
+                  scheduledActions={dealActions}
                   doNotContact={deal.doNotContact}
                   onEnrollClick={() => enroll()}
                 />

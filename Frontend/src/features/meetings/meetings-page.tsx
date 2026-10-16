@@ -20,9 +20,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Pager } from "@/components/common/list-controls";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
-import { fmtDateTime, isToday, relDay } from "@/lib/format";
+import { fmtDateTime, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { messageFromError, useMeetings, useSession } from "@/store";
 import { DealLink } from "@/features/deals/deal-link";
@@ -35,15 +37,19 @@ import {
   type MeetingStatus,
 } from "@/types";
 
+const PAGE_SIZE = 50;
+
 export function MeetingsPage() {
-  const store = useMeetings();
+  // Upcoming = from the start of today (soonest first), Past = before it (latest first); IST days.
+  const [view, setView] = useState<"upcoming" | "past">("upcoming");
+  const [offset, setOffset] = useState(0);
+  const store = useMeetings({ when: view, limit: PAGE_SIZE, offset });
+  const today = useMeetings({ when: "today", limit: PAGE_SIZE }).meetings;
   const { userName } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Meeting | null>(null);
   const [outcomeFor, setOutcomeFor] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const sorted = store.meetings.slice().sort((a, b) => a.at.localeCompare(b.at));
-  const today = sorted.filter((meeting) => isToday(meeting.at));
   const mutate = async (work: () => Promise<unknown>, success: string) => {
     setSaving(true);
     try {
@@ -63,6 +69,20 @@ export function MeetingsPage() {
       <PageHeader
         title="Meetings"
         description="Every meeting booked from the CRM, with backend-owned outcome routing."
+        tabs={
+          <Tabs
+            value={view}
+            onValueChange={(value) => {
+              setView(value as "upcoming" | "past");
+              setOffset(0);
+            }}
+          >
+            <TabsList>
+              <TabsTrigger value="upcoming">Upcoming</TabsTrigger>
+              <TabsTrigger value="past">Past</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        }
         actions={
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             Schedule meeting
@@ -90,7 +110,7 @@ export function MeetingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sorted.map((meeting) => {
+                  {store.meetings.map((meeting) => {
                     return (
                       <tr key={meeting.id} className="border-t hover:bg-accent/40">
                         <td className="px-3 py-2">
@@ -182,18 +202,26 @@ export function MeetingsPage() {
                       </tr>
                     );
                   })}
-                  {sorted.length === 0 && (
+                  {store.meetings.length === 0 && (
                     <tr>
                       <td
                         colSpan={7}
                         className="px-3 py-10 text-center text-sm text-muted-foreground"
                       >
-                        No meetings.
+                        {view === "upcoming" ? "No upcoming meetings." : "No past meetings."}
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
+            </div>
+            <div className="border-t px-3 py-2">
+              <Pager
+                offset={offset}
+                pageSize={PAGE_SIZE}
+                total={store.total}
+                onOffset={setOffset}
+              />
             </div>
           </Card>
         )}

@@ -2,8 +2,7 @@ import { CalendarDays, FileText, Phone, Workflow as WorkflowIcon } from "lucide-
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { useAutomations } from "@/store";
-import type { PipelineStage } from "@/types";
+import type { PipelineStage, Run, ScheduledAction } from "@/types";
 import { ScheduledFollowupTimeline } from "./scheduled-followups";
 
 const CALL_STAGES: PipelineStage[] = [
@@ -53,7 +52,8 @@ const PHASES: { key: Phase; label: string }[] = [
  * in nurture, whether a workflow is already running).
  */
 export function DealJourneyCard({
-  dealId,
+  runs,
+  scheduledActions,
   stage,
   doNotContact,
   onCallClick,
@@ -61,7 +61,9 @@ export function DealJourneyCard({
   onMeetingClick,
   onProposalClick,
 }: {
-  dealId: string;
+  /** This deal's runs and scheduled actions (useDealDetail). */
+  runs: Run[];
+  scheduledActions: ScheduledAction[];
   stage: PipelineStage;
   doNotContact: boolean;
   onCallClick: () => void;
@@ -69,11 +71,8 @@ export function DealJourneyCard({
   onMeetingClick: () => void;
   onProposalClick: () => void;
 }) {
-  const automationStore = useAutomations();
   const phase = phaseFor(stage);
-  const hasActiveRun = automationStore.runs.some(
-    (run) => run.dealId === dealId && ["running", "waiting", "paused"].includes(run.status),
-  );
+  const hasActiveRun = runs.some((run) => ["running", "waiting", "paused"].includes(run.status));
 
   return (
     <Card>
@@ -116,7 +115,8 @@ export function DealJourneyCard({
           </div>
         ) : phase === "nurture" ? (
           <ScheduledFollowupTimeline
-            dealId={dealId}
+            runs={runs}
+            scheduledActions={scheduledActions}
             doNotContact={doNotContact}
             onEnrollClick={onEnrollClick}
           />

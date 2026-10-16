@@ -1,4 +1,4 @@
-import { subjectNamesJoin, subjectNamesToDto, type Queryable, type SubjectNames } from "../dto.js";
+import { pageSql, subjectNamesJoin, subjectNamesToDto, type Page, type Queryable, type SubjectNames } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import type { EmailSendStatus, LeadLossReason, ProposalStatus, WhatsappSendStatus } from "../domain/enums.js";
@@ -153,14 +153,35 @@ export interface ListProposalsFilters {
   ownerId?: string;
 }
 
-export async function listProposals(db: Queryable, workspaceId: string, f: ListProposalsFilters) {
+export async function listProposals(db: Queryable, workspaceId: string, f: ListProposalsFilters, page?: Page) {
   const params: unknown[] = [workspaceId];
   const where = [`p.workspace_id = $1`];
   if (f.dealId) where.push(`p.deal_id = $${params.push(f.dealId)}`);
   if (f.status) where.push(`p.status = $${params.push(f.status)}`);
   if (f.ownerId) where.push(`p.owner_id = $${params.push(f.ownerId)}`);
-  const result = await db.query<ProposalRow>(`${PROPOSAL_SELECT} where ${where.join(" and ")} order by p.updated_at desc`, params);
-  return result.rows.map(proposalToDto);
+  const result = await db.query<ProposalRow & { total: number }>(
+    `select q.*, count(*) over()::int as total from (${PROPOSAL_SELECT} where ${where.join(" and ")}) q
+      order by q.updated_at desc, q.id ${pageSql(params, page)}`,
+    params,
+  );
+  return { data: result.rows.map(proposalToDto), total: result.rows[0]?.total ?? 0 };
+}
+
+/**
+ * The Proposals page stat cards, for the whole workspace (the list is paged). Open = not yet
+ * terminal; value in play = amounts of proposals out with the client (sent / revision requested / revised).
+ */
+export async function proposalsSummary(db: Queryable, workspaceId: string) {
+  const row = (
+    await db.query<{ open: number; awaiting_decision: number; value_in_play: string }>(
+      `select count(*) filter (where status not in ('accepted', 'rejected', 'withdrawn', 'expired'))::int as open,
+              count(*) filter (where status = 'sent')::int as awaiting_decision,
+              coalesce(sum(amount) filter (where status in ('sent', 'revision_requested', 'revised')), 0) as value_in_play
+         from crm.proposals where workspace_id = $1`,
+      [workspaceId],
+    )
+  ).rows[0]!;
+  return { open: row.open, awaitingDecision: row.awaiting_decision, valueInPlay: Number(row.value_in_play) };
 }
 
 export interface UpdateProposalInput {

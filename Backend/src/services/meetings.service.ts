@@ -1,4 +1,4 @@
-import { subjectNamesJoin, subjectNamesToDto, type Queryable, type SubjectNames } from "../dto.js";
+import { pageSql, START_OF_TODAY_IST, subjectNamesJoin, subjectNamesToDto, type Page, type Queryable, type SubjectNames } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import type { MeetingOutcome, MeetingStatus } from "../domain/enums.js";
@@ -148,20 +148,32 @@ export function toRenderMeeting(meeting: MeetingRow): TemplateRenderMeeting {
   };
 }
 
+export const MEETING_WHEN = ["upcoming", "past", "today"] as const;
+
 export interface ListMeetingsFilters {
   dealId?: string;
   status?: MeetingStatus;
   ownerId?: string;
+  /** Asia/Kolkata days: upcoming = from the start of today (soonest first), past = before it (latest first). */
+  when?: (typeof MEETING_WHEN)[number];
 }
 
-export async function listMeetings(db: Queryable, workspaceId: string, f: ListMeetingsFilters) {
+export async function listMeetings(db: Queryable, workspaceId: string, f: ListMeetingsFilters, page?: Page) {
   const params: unknown[] = [workspaceId];
   const where = [`m.workspace_id = $1`];
   if (f.dealId) where.push(`m.deal_id = $${params.push(f.dealId)}`);
   if (f.status) where.push(`m.status = $${params.push(f.status)}`);
   if (f.ownerId) where.push(`m.owner_id = $${params.push(f.ownerId)}`);
-  const result = await db.query<MeetingRow>(`${MEETING_SELECT} where ${where.join(" and ")} order by m.scheduled_at asc`, params);
-  return result.rows.map(meetingToDto);
+  if (f.when === "upcoming") where.push(`m.scheduled_at >= ${START_OF_TODAY_IST}`);
+  if (f.when === "past") where.push(`m.scheduled_at < ${START_OF_TODAY_IST}`);
+  if (f.when === "today") where.push(`m.scheduled_at >= ${START_OF_TODAY_IST} and m.scheduled_at < ${START_OF_TODAY_IST} + interval '1 day'`);
+  const direction = f.when === "past" ? "desc" : "asc";
+  const result = await db.query<MeetingRow & { total: number }>(
+    `select q.*, count(*) over()::int as total from (${MEETING_SELECT} where ${where.join(" and ")}) q
+      order by q.scheduled_at ${direction}, q.id ${pageSql(params, page)}`,
+    params,
+  );
+  return { data: result.rows.map(meetingToDto), total: result.rows[0]?.total ?? 0 };
 }
 
 export interface UpdateMeetingInput {

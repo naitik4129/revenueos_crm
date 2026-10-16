@@ -56,6 +56,7 @@ vi.mock("@/store", () => {
     }),
     useMeetings: () => ({
       meetings: [],
+      total: 0,
       isLoading: false,
       error: null,
       isPending: false,
@@ -63,8 +64,10 @@ vi.mock("@/store", () => {
       updateMeeting: noop,
       recordOutcome: noop,
     }),
+    useProposalSummary: () => ({ data: { open: 0, awaitingDecision: 0, valueInPlay: 0 } }),
     useProposals: () => ({
       proposals: [],
+      total: 0,
       isLoading: false,
       error: null,
       isPending: false,
@@ -75,8 +78,6 @@ vi.mock("@/store", () => {
     useAutomations: () => ({
       workflows: [],
       templates: [],
-      runs: [],
-      scheduledActions: [],
       isLoading: false,
       error: null,
       isPending: false,
@@ -144,7 +145,7 @@ describe("zero-record route states", () => {
     [CompaniesPage, "No companies match these filters."],
     [DealsPage, "New"],
     [TasksPage, "Nothing here."],
-    [MeetingsPage, "No meetings."],
+    [MeetingsPage, "No upcoming meetings."],
     [ProposalsPage, "No proposals."],
   ])("renders an empty backend dataset", async (Screen, expectedText) => {
     const view = await renderScreen(Screen);

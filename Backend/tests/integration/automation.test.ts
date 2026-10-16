@@ -114,6 +114,24 @@ describe("automation and worker (PGlite)", () => {
     expect((await api("post", "/templates/preview", { ...text, contactId: "00000000-0000-4000-8000-000000000000" })).status).toBe(404);
   });
 
+  it("pages runs and scheduled actions and searches them by contact or company name (P7h)", async () => {
+    const id = await workflow("manual_enrollment", [{ action: "create_call_task", config: "Call", delayDays: 3 }]);
+    const deals = [await newDeal(), await newDeal(), await newDeal()];
+    for (const { dealId } of deals) expect((await api("post", "/runs", { dealId, workflowId: id })).status).toBe(201);
+    const company = (await api("get", `/deals/${deals[1]!.dealId}`)).body.companyName as string;
+
+    const runs = (await api("get", `/runs?workflowId=${id}&limit=2`)).body;
+    expect(runs).toMatchObject({ total: 3, limit: 2, offset: 0 });
+    expect(runs.data).toHaveLength(2);
+    const searched = (await api("get", `/runs?search=${encodeURIComponent(company)}`)).body;
+    expect(searched.data.map((r: { dealId: string }) => r.dealId)).toEqual([deals[1]!.dealId]);
+
+    const actions = (await api("get", `/scheduled-actions?search=${encodeURIComponent(company)}`)).body;
+    expect(actions.total).toBe(1);
+    expect(actions.data[0]).toMatchObject({ dealId: deals[1]!.dealId, companyName: company });
+    expect((await api("get", "/scheduled-actions?limit=1&offset=1")).body).toMatchObject({ limit: 1, offset: 1 });
+  });
+
   it("a published version's steps cannot be edited", async () => {
     const id = await workflow("manual_enrollment", [{ action: "create_call_task" }]);
     const res = await api("put", `/workflows/${id}/versions/1/steps`, { steps: [{ order: 0, delayDays: 0, action: "stop_workflow", enabled: true }] });

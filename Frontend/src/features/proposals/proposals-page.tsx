@@ -11,11 +11,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Pager } from "@/components/common/list-controls";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { money, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
-import { messageFromError, useProposals, useSession } from "@/store";
+import { messageFromError, useProposalSummary, useProposals, useSession } from "@/store";
 import { PROPOSAL_STATUSES, type Proposal, type ProposalStatus } from "@/types";
 import { DealLink } from "@/features/deals/deal-link";
 import {
@@ -24,16 +25,18 @@ import {
   SendProposalDialog,
 } from "./components/proposal-dialogs";
 
+const PAGE_SIZE = 50;
+
 export function ProposalsPage() {
-  const store = useProposals();
+  const [offset, setOffset] = useState(0);
+  const store = useProposals({ limit: PAGE_SIZE, offset });
+  // The stat cards cover the whole workspace, not just this page.
+  const summary = useProposalSummary().data;
   const { userName } = useSession();
   const [newOpen, setNewOpen] = useState(false);
   const [sending, setSending] = useState<Proposal | null>(null);
   // Rejected / expired need a loss reason first.
   const [losing, setLosing] = useState<{ proposal: Proposal; status: ProposalStatus } | null>(null);
-  const pipelineValue = store.proposals
-    .filter((proposal) => ["sent", "revision_requested", "revised"].includes(proposal.status))
-    .reduce((sum, proposal) => sum + (proposal.amount ?? 0), 0);
   const setStatus = async (id: string, status: ProposalStatus) => {
     if (status === "rejected" || status === "expired") {
       const proposal = store.proposals.find((p) => p.id === id);
@@ -60,20 +63,12 @@ export function ProposalsPage() {
       />
       <div className="space-y-4 p-6">
         <div className="grid gap-3 sm:grid-cols-3">
-          <Stat
-            label="Open proposals"
-            value={String(
-              store.proposals.filter(
-                (proposal) =>
-                  !["accepted", "rejected", "withdrawn", "expired"].includes(proposal.status),
-              ).length,
-            )}
-          />
+          <Stat label="Open proposals" value={summary ? String(summary.open) : "…"} />
           <Stat
             label="Awaiting decision"
-            value={String(store.proposals.filter((proposal) => proposal.status === "sent").length)}
+            value={summary ? String(summary.awaitingDecision) : "…"}
           />
-          <Stat label="Value in play" value={money(pipelineValue)} />
+          <Stat label="Value in play" value={summary ? money(summary.valueInPlay) : "…"} />
         </div>
         {store.isLoading ? (
           <LoadingBlock label="Loading proposals…" />
@@ -203,6 +198,7 @@ export function ProposalsPage() {
             </div>
           </Card>
         )}
+        <Pager offset={offset} pageSize={PAGE_SIZE} total={store.total} onOffset={setOffset} />
       </div>
       {newOpen && <NewProposalDialog onOpenChange={setNewOpen} />}
       {sending && <SendProposalDialog proposal={sending} onOpenChange={() => setSending(null)} />}

@@ -130,14 +130,14 @@ async function seedAcme(ws: string, sam: Actor, priya: Actor) {
   // --- Qualified handovers -> open deals owned by Sam and Priya ----------------------------
   const handover = (i: number, ownerEmail: string, summary: string) =>
     applyHandover(pool, ws, { source: "quickicp", externalId: `h-${i}`, contact: person(i), ownerEmail, summary });
-  const kiloDeal = (await handover(10, "sam@demo.local", "Interested in outbound support; meeting requested for Thursday.")).id!;
+  const pixelDeal = (await handover(10, "sam@demo.local", "Interested in outbound support; meeting requested for Thursday.")).id!;
   const orbitDeal = (await handover(14, "priya@demo.local", "Wants pricing for a 3-month pilot.")).id!;
   const novaDeal = (await handover(3, "sam@demo.local", "Replied to the campaign asking for case studies.")).id!;
   const quartzDeal = (await handover(6, "priya@demo.local", "Replied: exploring for next quarter.")).id!;
 
   // Move them along the pipeline, with a meeting today and a proposal awaiting a decision.
-  await updateDeal(pool, sam, ws, kiloDeal, { stage: "meeting_scheduled", serviceInterest: "Outbound lead generation" });
-  await scheduleMeeting(pool, sam, ws, { dealId: kiloDeal, title: "Discovery call - Kilo Robotics", at: hoursFromNow(3), durationMin: 30, url: "https://meet.example.com/kilo" });
+  await updateDeal(pool, sam, ws, pixelDeal, { stage: "meeting_scheduled", serviceInterest: "Outbound lead generation" });
+  await scheduleMeeting(pool, sam, ws, { dealId: pixelDeal, title: "Discovery call - Pixel Retail", at: hoursFromNow(3), durationMin: 30, url: "https://meet.example.com/pixel" });
   await updateDeal(pool, priya, ws, orbitDeal, { stage: "proposal_sent", serviceInterest: "3-month outbound pilot" });
   const proposal = await createProposal(pool, priya, ws, { dealId: orbitDeal, title: "Orbit Logistics - 3-month pilot", amount: 450000, notes: "Pilot: 2 SDRs, LinkedIn + email + calling." });
   await pool.query(`update crm.proposals set status = 'sent', sent_at = $2, follow_up_at = $3 where id = $1`, [proposal.id, daysAgo(2), hoursFromNow(24)]);
@@ -180,7 +180,7 @@ async function seedAcme(ws: string, sam: Actor, priya: Actor) {
 
   // --- Tasks: due today, overdue and later ----------------------------------------------------
   await createTask(pool, sam, ws, { dealId: novaDeal, ownerId: sam.id, type: "send_case_study", title: "Send ABM case study", dueAt: hoursFromNow(2) });
-  await createTask(pool, sam, ws, { dealId: kiloDeal, ownerId: sam.id, type: "follow_up", title: "Confirm meeting agenda", dueAt: daysAgo(2) });
+  await createTask(pool, sam, ws, { dealId: pixelDeal, ownerId: sam.id, type: "follow_up", title: "Confirm meeting agenda", dueAt: daysAgo(2) });
   await createTask(pool, priya, ws, { dealId: orbitDeal, ownerId: priya.id, type: "proposal_follow_up", title: "Follow up on pilot proposal", dueAt: daysAgo(1) });
   await createTask(pool, priya, ws, { dealId: quartzDeal, ownerId: priya.id, type: "call", title: "Discovery call", dueAt: hoursFromNow(26) });
   // Spread "first call" tasks: some overdue, so the queue and overdue counts are not all "now".
@@ -192,8 +192,8 @@ async function seedAcme(ws: string, sam: Actor, priya: Actor) {
 
   // A notification for the admin path would be wrong (admins get none); Sam gets one more.
   await pool.query(
-    `insert into crm.notifications (workspace_id, recipient_id, deal_id, title, detail, kind, href) values ($1, $2, $3, 'Meeting today', 'Discovery call - Kilo Robotics in 3 hours.', 'info', $4)`,
-    [ws, sam.id, kiloDeal, `/deals/${kiloDeal}`],
+    `insert into crm.notifications (workspace_id, recipient_id, deal_id, title, detail, kind, href) values ($1, $2, $3, 'Meeting today', 'Discovery call - Pixel Retail in 3 hours.', 'info', $4)`,
+    [ws, sam.id, pixelDeal, `/deals/${pixelDeal}`],
   );
 }
 

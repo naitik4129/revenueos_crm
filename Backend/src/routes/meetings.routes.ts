@@ -5,7 +5,7 @@ import { pool, withTransaction } from "../db.js";
 import { env } from "../env.js";
 import { parseBody, parseId, parseQuery } from "../validation/parse.js";
 import { MEETING_OUTCOMES, MEETING_STATUSES } from "../domain/enums.js";
-import { getMeetingOr404, listMeetings, recordMeetingOutcome, scheduleMeeting, updateMeeting } from "../services/meetings.service.js";
+import { getMeetingOr404, listMeetings, MEETING_WHEN, recordMeetingOutcome, scheduleMeeting, updateMeeting } from "../services/meetings.service.js";
 import { syncMeetingCancelled, syncMeetingCreated, syncMeetingRescheduled } from "../services/meeting-calendar-sync.service.js";
 import { notifyMeetingScheduled } from "../services/meetingScheduledNotification.service.js";
 
@@ -13,6 +13,7 @@ import { notifyMeetingScheduled } from "../services/meetingScheduledNotification
 export const meetingsRouter = Router();
 
 const id = (req: { params: Record<string, string | undefined> }) => parseId(req.params.id, "Meeting");
+const page = { limit: z.coerce.number().int().positive().max(500).optional(), offset: z.coerce.number().int().min(0).optional() };
 
 /** Calendar sync and notifications run after the meeting is saved and must never undo or fail it. */
 async function bestEffort(label: string, fn: () => Promise<unknown>) {
@@ -26,11 +27,17 @@ async function bestEffort(label: string, fn: () => Promise<unknown>) {
 meetingsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    const q = parseQuery(
-      z.object({ dealId: z.string().uuid().optional(), status: z.enum(MEETING_STATUSES).optional(), ownerId: z.string().uuid().optional() }),
+    const { limit = 50, offset = 0, ...filters } = parseQuery(
+      z.object({
+        dealId: z.string().uuid().optional(),
+        status: z.enum(MEETING_STATUSES).optional(),
+        ownerId: z.string().uuid().optional(),
+        when: z.enum(MEETING_WHEN).optional(),
+        ...page,
+      }),
       req.query,
     );
-    res.json({ data: await listMeetings(pool, req.workspaceId!, q) });
+    res.json({ ...(await listMeetings(pool, req.workspaceId!, filters, { limit, offset })), limit, offset });
   }),
 );
 

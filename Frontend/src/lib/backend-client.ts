@@ -108,6 +108,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+/** Filters + paging for the meetings, proposals, runs and scheduled-actions lists. */
+export type ListParams = Record<string, string | number | undefined>;
+
+export interface ProposalSummary {
+  open: number;
+  awaitingDecision: number;
+  valueInPlay: number;
+}
+
 export type TaskListParams = Partial<
   Record<"ownerId" | "dealId" | "contactId" | "status" | "type", string | undefined> &
     Record<"overdueOnly" | "dueTodayOnly" | "upcomingOnly", boolean | undefined> &
@@ -613,8 +622,8 @@ export const backend = {
     cancel: (id: string, reason?: string) => send<Task>("POST", `/tasks/${id}/cancel`, { reason }),
   },
   meetings: {
-    list: (params?: Record<string, string | undefined>, signal?: AbortSignal) =>
-      get<{ data: Meeting[] }>(query("/meetings", params), signal),
+    list: (params?: ListParams, signal?: AbortSignal) =>
+      get<Paged<Meeting>>(query("/meetings", params), signal),
     create: (input: CreateMeetingInput) => send<Meeting>("POST", "/meetings", input),
     update: (id: string, input: UpdateMeetingInput) =>
       send<Meeting>("PATCH", `/meetings/${id}`, input),
@@ -622,8 +631,9 @@ export const backend = {
       send<Meeting>("POST", `/meetings/${id}/outcome`, { outcome, notes }),
   },
   proposals: {
-    list: (params?: Record<string, string | undefined>, signal?: AbortSignal) =>
-      get<{ data: Proposal[] }>(query("/proposals", params), signal),
+    list: (params?: ListParams, signal?: AbortSignal) =>
+      get<Paged<Proposal>>(query("/proposals", params), signal),
+    summary: (signal?: AbortSignal) => get<ProposalSummary>("/proposals/summary", signal),
     create: (input: CreateProposalInput) => send<Proposal>("POST", "/proposals", input),
     uploadDocument: (id: string, file: File) => {
       const formData = new FormData();
@@ -687,8 +697,8 @@ export const backend = {
       del(`/templates/${templateId}/attachments/${attachmentId}`),
   },
   runs: {
-    list: (params?: Record<string, string | undefined>, signal?: AbortSignal) =>
-      get<{ data: Run[] }>(query("/runs", params), signal),
+    list: (params?: ListParams, signal?: AbortSignal) =>
+      get<Paged<Run>>(query("/runs", params), signal),
     create: (input: { dealId: string; workflowId: string; reason?: string | undefined }) =>
       send<{ data: Run[] }>("POST", "/runs", input),
     pause: (id: string, reason?: string) => send<Run>("POST", `/runs/${id}/pause`, { reason }),
@@ -697,8 +707,8 @@ export const backend = {
     retry: (id: string) => send<Run>("POST", `/runs/${id}/retry`),
   },
   scheduledActions: {
-    list: (params?: Record<string, string | undefined>, signal?: AbortSignal) =>
-      get<{ data: ScheduledAction[] }>(query("/scheduled-actions", params), signal),
+    list: (params?: ListParams, signal?: AbortSignal) =>
+      get<Paged<ScheduledAction>>(query("/scheduled-actions", params), signal),
   },
   dashboard: {
     summary: (signal?: AbortSignal) => get<DashboardSummary>("/dashboard/summary", signal),

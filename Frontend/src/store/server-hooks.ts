@@ -12,6 +12,7 @@ import {
   type CreateTaskInput,
   type CreateTemplateInput,
   type CreateWorkflowInput,
+  type ListParams,
   type TaskListParams,
   type UpdateMeetingInput,
   type UpdateProposalInput,
@@ -122,13 +123,15 @@ export function useTaskTotals(paramsList: TaskListParams[]) {
   }).map((q) => q.data?.total);
 }
 
-export function useMeetings() {
+/** One page of meetings, filtered on the server (e.g. when: upcoming | past | today). */
+export function useMeetings(params: ListParams = {}) {
   const client = useQueryClient();
   const { currentWorkspaceId } = useWorkspace();
   const query = useQuery({
-    queryKey: keys.meetings(currentWorkspaceId),
-    queryFn: ({ signal }) => backend.meetings.list(undefined, signal),
+    queryKey: [...keys.meetings(currentWorkspaceId), params],
+    queryFn: ({ signal }) => backend.meetings.list(params, signal),
     enabled: Boolean(currentWorkspaceId),
+    placeholderData: keepPreviousData,
   });
   const refresh = () => refreshCrm(client, currentWorkspaceId);
   const create = useMutation({
@@ -154,6 +157,7 @@ export function useMeetings() {
   });
   return {
     meetings: query.data?.data ?? [],
+    total: query.data?.total ?? 0,
     isLoading: query.isLoading,
     error: query.error,
     isPending: create.isPending || update.isPending || outcome.isPending,
@@ -165,13 +169,15 @@ export function useMeetings() {
 }
 export type MeetingsSlice = ReturnType<typeof useMeetings>;
 
-export function useProposals() {
+/** One page of proposals (newest activity first). */
+export function useProposals(params: ListParams = {}) {
   const client = useQueryClient();
   const { currentWorkspaceId } = useWorkspace();
   const query = useQuery({
-    queryKey: keys.proposals(currentWorkspaceId),
-    queryFn: ({ signal }) => backend.proposals.list(undefined, signal),
+    queryKey: [...keys.proposals(currentWorkspaceId), params],
+    queryFn: ({ signal }) => backend.proposals.list(params, signal),
     enabled: Boolean(currentWorkspaceId),
+    placeholderData: keepPreviousData,
     // Keeps polling while any proposal's WhatsApp send is still in flight on
     // the worker (email resolves synchronously, but WhatsApp can only be
     // sent from the automation worker process — see Backend/src/worker.ts —
@@ -207,6 +213,7 @@ export function useProposals() {
   });
   return {
     proposals: query.data?.data ?? [],
+    total: query.data?.total ?? 0,
     isLoading: query.isLoading,
     error: query.error,
     isPending: create.isPending || update.isPending || status.isPending,
@@ -225,6 +232,38 @@ export function useProposals() {
 }
 export type ProposalsSlice = ReturnType<typeof useProposals>;
 
+/** Proposals page stat cards, for the whole workspace. */
+export function useProposalSummary() {
+  const { currentWorkspaceId } = useWorkspace();
+  return useQuery({
+    queryKey: [...keys.proposals(currentWorkspaceId), "summary"],
+    queryFn: ({ signal }) => backend.proposals.summary(signal),
+    enabled: Boolean(currentWorkspaceId),
+  });
+}
+
+/** One page of workflow runs (search: contact or company name). */
+export function useRuns(params: ListParams) {
+  const { currentWorkspaceId } = useWorkspace();
+  return useQuery({
+    queryKey: [...keys.runs(currentWorkspaceId), params],
+    queryFn: ({ signal }) => backend.runs.list(params, signal),
+    enabled: Boolean(currentWorkspaceId),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** One page of scheduled actions (search: contact or company name). */
+export function useScheduledActions(params: ListParams) {
+  const { currentWorkspaceId } = useWorkspace();
+  return useQuery({
+    queryKey: [...keys.scheduledActions(currentWorkspaceId), params],
+    queryFn: ({ signal }) => backend.scheduledActions.list(params, signal),
+    enabled: Boolean(currentWorkspaceId),
+    placeholderData: keepPreviousData,
+  });
+}
+
 export function useAutomations() {
   const client = useQueryClient();
   const { currentWorkspaceId } = useWorkspace();
@@ -237,16 +276,6 @@ export function useAutomations() {
   const templates = useQuery({
     queryKey: keys.templates(currentWorkspaceId),
     queryFn: ({ signal }) => backend.templates.list(signal),
-    enabled,
-  });
-  const runs = useQuery({
-    queryKey: keys.runs(currentWorkspaceId),
-    queryFn: ({ signal }) => backend.runs.list(undefined, signal),
-    enabled,
-  });
-  const scheduled = useQuery({
-    queryKey: keys.scheduledActions(currentWorkspaceId),
-    queryFn: ({ signal }) => backend.scheduledActions.list(undefined, signal),
     enabled,
   });
   const invalidate = () =>
@@ -341,10 +370,8 @@ export function useAutomations() {
   return {
     workflows: workflowList,
     templates: templates.data?.data ?? [],
-    runs: runs.data?.data ?? [],
-    scheduledActions: scheduled.data?.data ?? [],
-    isLoading: workflows.isLoading || templates.isLoading || runs.isLoading || scheduled.isLoading,
-    error: workflows.error ?? templates.error ?? runs.error ?? scheduled.error,
+    isLoading: workflows.isLoading || templates.isLoading,
+    error: workflows.error ?? templates.error,
     isPending: [
       workflowCreate,
       workflowUpdate,

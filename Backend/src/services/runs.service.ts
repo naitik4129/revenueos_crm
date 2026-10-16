@@ -1,4 +1,4 @@
-import { subjectNamesJoin, subjectNamesToDto, type Queryable, type SubjectNames } from "../dto.js";
+import { pageSql, subjectNamesJoin, subjectNamesToDto, type Page, type Queryable, type SubjectNames } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, NotFoundError } from "../errors.js";
 import type { AutomationMode, ContactStatus, DealOutcome, WorkflowRunStatus, WorkflowStepAction, WorkflowTrigger } from "../domain/enums.js";
@@ -63,9 +63,17 @@ export interface ListRunsFilters {
   workflowId?: string;
   dealId?: string;
   status?: WorkflowRunStatus;
+  /** Contact or company name. */
+  search?: string;
 }
 
-export async function listRuns(db: Queryable, workspaceId: string, filters: ListRunsFilters) {
+/** Name search on the names lateral join (subjectNamesJoin). */
+function nameSearch(params: unknown[], search: string) {
+  const p = `$${params.push(`%${search}%`)}`;
+  return `(names.contact_name ilike ${p} or names.company_name ilike ${p})`;
+}
+
+export async function listRuns(db: Queryable, workspaceId: string, filters: ListRunsFilters, page?: Page) {
   const clauses: string[] = [`r.workspace_id = $1`];
   const params: unknown[] = [workspaceId];
   let i = 2;
@@ -81,12 +89,14 @@ export async function listRuns(db: Queryable, workspaceId: string, filters: List
     clauses.push(`r.status = $${i++}`);
     params.push(filters.status);
   }
+  if (filters.search) clauses.push(nameSearch(params, filters.search));
   const where = `where ${clauses.join(" and ")}`;
-  const result = await db.query<RunRow & SubjectNames & { version_number: number }>(
-    `${RUN_SELECT} ${where} order by r.started_at desc`,
+  const result = await db.query<RunRow & SubjectNames & { version_number: number; total: number }>(
+    `select q.*, count(*) over()::int as total from (${RUN_SELECT} ${where}) q
+      order by q.started_at desc, q.id ${pageSql(params, page)}`,
     params,
   );
-  return result.rows.map((r) => runToDto(r, r.version_number));
+  return { data: result.rows.map((r) => runToDto(r, r.version_number)), total: result.rows[0]?.total ?? 0 };
 }
 
 interface StepForScheduling {
@@ -472,9 +482,11 @@ export interface ListScheduledActionsFilters {
   dealId?: string;
   workflowRunId?: string;
   status?: string;
+  /** Contact or company name. */
+  search?: string;
 }
 
-export async function listScheduledActions(db: Queryable, workspaceId: string, filters: ListScheduledActionsFilters) {
+export async function listScheduledActions(db: Queryable, workspaceId: string, filters: ListScheduledActionsFilters, page?: Page) {
   const clauses: string[] = [`sa.workspace_id = $1`];
   const params: unknown[] = [workspaceId];
   let i = 2;
@@ -490,12 +502,15 @@ export async function listScheduledActions(db: Queryable, workspaceId: string, f
     clauses.push(`sa.status = $${i++}`);
     params.push(filters.status);
   }
+  if (filters.search) clauses.push(nameSearch(params, filters.search));
   const where = `where ${clauses.join(" and ")}`;
-  const result = await db.query<ScheduledActionRow & SubjectNames>(
-    `select sa.*, names.* from crm.scheduled_actions sa ${subjectNamesJoin("sa.deal_id")} ${where} order by sa.scheduled_for asc`,
+  const result = await db.query<ScheduledActionRow & SubjectNames & { total: number }>(
+    `select sa.*, names.*, count(*) over()::int as total
+       from crm.scheduled_actions sa ${subjectNamesJoin("sa.deal_id")}
+       ${where} order by sa.scheduled_for asc, sa.id ${pageSql(params, page)}`,
     params,
   );
-  return result.rows.map((r) => ({
+  const data = result.rows.map((r) => ({
     id: r.id,
     dealId: r.deal_id,
     ...subjectNamesToDto(r),
@@ -512,4 +527,5 @@ export async function listScheduledActions(db: Queryable, workspaceId: string, f
     cancelledAt: r.cancelled_at?.toISOString(),
     cancelReason: r.cancel_reason ?? undefined,
   }));
+  return { data, total: result.rows[0]?.total ?? 0 };
 }

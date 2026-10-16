@@ -117,6 +117,10 @@ export function useDealDetail(id: string, contactId: string | undefined) {
           : false,
     }),
     runs: useQuery(opts("runs", (s) => backend.deals.runs(id, s))),
+    // Deal-filtered; one deal has a handful of actions, so one page of 500 is all of them.
+    scheduledActions: useQuery(
+      opts("scheduledActions", (s) => backend.scheduledActions.list({ dealId: id, limit: 500 }, s)),
+    ),
     timeline: useQuery(opts("timeline", (s) => backend.deals.timeline(id, { limit: 100 }, s))),
     contact: useQuery(
       opts("contact", (s) => backend.contacts.get(contactId!, s), Boolean(contactId)),

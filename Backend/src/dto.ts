@@ -37,3 +37,16 @@ export interface SubjectNames {
 export function subjectNamesToDto(row: SubjectNames) {
   return { contactName: row.contact_name ?? undefined, companyName: row.company_name ?? undefined };
 }
+
+/** Paging for list services; deal-scoped lists pass none and get every row of that deal. */
+export interface Page {
+  limit: number;
+  offset: number;
+}
+
+export function pageSql(params: unknown[], page?: Page): string {
+  return page ? `limit $${params.push(page.limit)} offset $${params.push(page.offset)}` : "";
+}
+
+/** Start of today in Asia/Kolkata as a timestamptz SQL expression (same day boundary as tasks). */
+export const START_OF_TODAY_IST = `(date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata')`;

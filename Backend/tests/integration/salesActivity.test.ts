@@ -299,6 +299,63 @@ describe("calls, tasks, meetings, proposals (PGlite)", () => {
     expect((await api("get", `/tasks?contactId=${loner}&overdueOnly=true`)).body.total).toBe(0);
   });
 
+  describe("server paging (P7h)", () => {
+    const ids = (rows: { id: string }[]) => rows.map((r) => r.id);
+
+    it("splits meetings into upcoming (soonest first), past (latest first) and today", async () => {
+      const book = async (at: string) => {
+        const { dealId } = await newDeal();
+        return (await api("post", "/meetings", { dealId, title: "M", at })).body.id as string;
+      };
+      const past = await book(new Date(Date.now() - 3 * 86_400_000).toISOString());
+      const now = await book(new Date().toISOString());
+      const soon = await book(later());
+
+      const upcoming = (await api("get", "/meetings?when=upcoming&limit=500")).body;
+      const pastList = (await api("get", "/meetings?when=past&limit=500")).body;
+      const today = (await api("get", "/meetings?when=today&limit=500")).body;
+      expect(ids(upcoming.data)).toEqual(expect.arrayContaining([now, soon]));
+      expect(ids(upcoming.data)).not.toContain(past);
+      expect(ids(pastList.data)).toContain(past);
+      expect(ids(today.data)).toContain(now);
+      expect(ids(today.data)).not.toContain(soon);
+      const ats = (rows: { at: string }[]) => rows.map((r) => r.at);
+      expect(ats(upcoming.data)).toEqual([...ats(upcoming.data)].sort());
+      expect(ats(pastList.data)).toEqual([...ats(pastList.data)].sort().reverse());
+
+      const page = (await api("get", "/meetings?when=upcoming&limit=2&offset=1")).body;
+      expect(page).toMatchObject({ total: upcoming.total, limit: 2, offset: 1 });
+      expect(ids(page.data)).toEqual(ids(upcoming.data).slice(1, 3));
+      expect((await api("get", "/meetings")).body.limit).toBe(50);
+    });
+
+    it("pages proposals, summarises the whole workspace, and keeps the deal route unpaged", async () => {
+      const { dealId } = await newDeal();
+      for (const [title, amount] of [["A", 100], ["B", 250], ["C", 400]] as const) {
+        expect((await api("post", "/proposals", { dealId, title, amount })).status).toBe(201);
+      }
+      const all = (await api("get", "/proposals?limit=500")).body;
+      expect(all.total).toBe(all.data.length);
+      const page = (await api("get", `/proposals?dealId=${dealId}&limit=1&offset=1`)).body;
+      expect(page).toMatchObject({ total: 3, limit: 1, offset: 1 });
+      expect(page.data).toHaveLength(1);
+
+      const dealList = (await api("get", `/deals/${dealId}/proposals`)).body;
+      expect(dealList.data).toHaveLength(3);
+      expect(dealList.total).toBeUndefined();
+
+      type P = { status: string; amount?: number };
+      const rows = all.data as P[];
+      expect((await api("get", "/proposals/summary")).body).toEqual({
+        open: rows.filter((p) => !["accepted", "rejected", "withdrawn", "expired"].includes(p.status)).length,
+        awaitingDecision: rows.filter((p) => p.status === "sent").length,
+        valueInPlay: rows
+          .filter((p) => ["sent", "revision_requested", "revised"].includes(p.status))
+          .reduce((sum, p) => sum + (p.amount ?? 0), 0),
+      });
+    });
+  });
+
   it("isolates workspaces on the new routes: another workspace's ids give 404", async () => {
     const { contactId, dealId } = await newDeal(w2);
     const taskId = (await api("get", `/deals/${dealId}/tasks`, undefined, w2)).body.data[0].id;

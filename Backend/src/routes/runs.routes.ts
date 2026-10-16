@@ -10,17 +10,21 @@ import { autoEnroll, enrollDealInWorkflow } from "../services/runs.service.js";
 
 export const runsRouter = Router();
 
+const page = { limit: z.coerce.number().int().positive().max(500).optional(), offset: z.coerce.number().int().min(0).optional() };
+
 const listQuerySchema = z.object({
   workflowId: z.string().uuid().optional(),
   dealId: z.string().uuid().optional(),
   status: z.enum(WORKFLOW_RUN_STATUSES).optional(),
+  search: z.string().trim().min(1).optional(),
+  ...page,
 });
 
 runsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    const filters = parseQuery(listQuerySchema, req.query);
-    res.json({ data: await runsService.listRuns(pool, req.workspaceId!, filters) });
+    const { limit = 50, offset = 0, ...filters } = parseQuery(listQuerySchema, req.query);
+    res.json({ ...(await runsService.listRuns(pool, req.workspaceId!, filters, { limit, offset })), limit, offset });
   }),
 );
 
@@ -95,12 +99,14 @@ const scheduledQuerySchema = z.object({
   dealId: z.string().uuid().optional(),
   workflowRunId: z.string().uuid().optional(),
   status: z.enum(SCHEDULED_ACTION_STATUSES).optional(),
+  search: z.string().trim().min(1).optional(),
+  ...page,
 });
 
 scheduledActionsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    const filters = parseQuery(scheduledQuerySchema, req.query);
-    res.json({ data: await runsService.listScheduledActions(pool, req.workspaceId!, filters) });
+    const { limit = 50, offset = 0, ...filters } = parseQuery(scheduledQuerySchema, req.query);
+    res.json({ ...(await runsService.listScheduledActions(pool, req.workspaceId!, filters, { limit, offset })), limit, offset });
   }),
 );

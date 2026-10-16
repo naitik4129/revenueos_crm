@@ -92,6 +92,13 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), being reworked. `C
 - One list: `TEMPLATE_VARIABLES` in `Backend/src/domain/templateRenderer.ts` (token, label, group contact/company/deal/meeting/date). The frontend picker reads it from `GET /templates/variables`; there is no frontend copy.
 - `POST /templates/preview` renders unsaved text against a deal or a contact. A contact previews as its open deal; with none, `deal.*` stay unfilled. `meeting.*` use the deal's latest meeting. Unfilled tokens stay as `{{...}}`, highlighted and listed as unknown / needs a deal / needs a meeting.
 
+### P7h server paging (2026-10-16)
+- Meetings, proposals, runs and scheduled-actions lists are paged on the server like tasks: `limit` (default 50, max 500) + `offset`, response `{ data, total, limit, offset }`.
+- Meetings: `when` = `upcoming` (from the start of today, Asia/Kolkata, soonest first) / `past` (before it, latest first) / `today`. The page has Upcoming / Past tabs; the Today card is its own `when=today` query.
+- Proposals: stat cards come from `GET /proposals/summary` (whole workspace: open, awaiting decision, value in play).
+- Runs and scheduled actions: `search` (contact or company name) runs on the server.
+- **Deal page**: uses deal-filtered, unpaged calls (`/deals/:id/meetings|proposals|runs`, `/scheduled-actions?dealId=`); never the paged workspace lists. `useAutomations()` no longer loads runs or scheduled actions.
+
 ### Kept features
 CSV import, calls + routing, nurture workflows + worker, templates + attachments, email (Resend/SMTP), WhatsApp (Baileys), Google Calendar, meetings, proposals, tasks, DNC, merge, delete + audit, notifications, dashboard, workspaces, admin users.
 
