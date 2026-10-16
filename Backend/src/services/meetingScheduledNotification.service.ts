@@ -1,9 +1,9 @@
 import type { Queryable } from "../dto.js";
 import { pool } from "../db.js";
 import { NotFoundError } from "../errors.js";
-import { getDealOr404, type DealRow } from "./deals.service.js";
+import { dealRenderContext, getDealOr404, type DealRow } from "./deals.service.js";
 import { toRenderMeeting, type MeetingRow } from "./meetings.service.js";
-import { renderTemplate, type TemplateRenderLead } from "../domain/templateRenderer.js";
+import { renderTemplate } from "../domain/templateRenderer.js";
 import { htmlToWhatsAppText } from "../domain/htmlToWhatsAppText.js";
 import { sendEmail } from "../providers/email.provider.js";
 import { sendWhatsApp } from "../providers/whatsapp.provider.js";
@@ -54,17 +54,6 @@ async function getDefaultTemplate(channel: "email" | "whatsapp"): Promise<Notifi
   return result.rows[0] ?? null;
 }
 
-function toRenderLead(lead: DealRow): TemplateRenderLead {
-  return {
-    firstName: lead.first_name,
-    lastName: lead.last_name,
-    company: lead.company_name ?? "",
-    industry: lead.industry,
-    email: lead.email,
-    phone: lead.phone,
-    ownerName: lead.owner_name,
-  };
-}
 
 async function sendMeetingEmailNow(meeting: MeetingRow, lead: DealRow): Promise<void> {
   try {
@@ -77,7 +66,7 @@ async function sendMeetingEmailNow(meeting: MeetingRow, lead: DealRow): Promise<
       );
       return;
     }
-    const rendered = renderTemplate(template, toRenderLead(lead), toRenderMeeting(meeting));
+    const rendered = renderTemplate(template, dealRenderContext(lead), toRenderMeeting(meeting));
     const subject = rendered.subject?.trim() || template.name;
     await sendEmail(meeting.workspace_id, { to: lead.email, subject, html: rendered.body });
     await pool.query(
@@ -144,7 +133,7 @@ export async function processQueuedMeetingWhatsappSend(row: MeetingRow): Promise
       );
       return;
     }
-    const rendered = renderTemplate(template, toRenderLead(lead), toRenderMeeting(row));
+    const rendered = renderTemplate(template, dealRenderContext(lead), toRenderMeeting(row));
     const whatsappText = htmlToWhatsAppText(rendered.body);
 
     await sendWhatsApp(row.workspace_id, { source: { type: "meeting", id: row.id }, to: lead.phone_e164, body: whatsappText });

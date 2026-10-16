@@ -3,9 +3,9 @@ import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
 import { DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
-import { getDealOr404, type DealRow } from "./deals.service.js";
+import { dealRenderContext, getDealOr404, type DealRow } from "./deals.service.js";
 import { createProposal, getProposalOr404, getProposalRowOr404, updateProposalStatus, type ProposalRow } from "./proposals.service.js";
-import { renderTemplate, type TemplateRenderLead } from "../domain/templateRenderer.js";
+import { renderTemplate } from "../domain/templateRenderer.js";
 import { htmlToWhatsAppText } from "../domain/htmlToWhatsAppText.js";
 import { sendEmail } from "../providers/email.provider.js";
 import { sendWhatsApp } from "../providers/whatsapp.provider.js";
@@ -47,17 +47,6 @@ async function getActiveTemplateOrThrow(db: Queryable, workspaceId: string, id: 
   return template;
 }
 
-function toRenderLead(lead: DealRow & { owner_name?: string | null }): TemplateRenderLead {
-  return {
-    firstName: lead.first_name,
-    lastName: lead.last_name,
-    company: lead.company_name ?? "",
-    industry: lead.industry,
-    email: lead.email,
-    phone: lead.phone,
-    ownerName: lead.owner_name ?? null,
-  };
-}
 
 /**
  * Advances the proposal's overall status to "sent" once a channel succeeds.
@@ -83,7 +72,7 @@ async function sendProposalEmailNow(
   try {
     if (!lead.email) throw new Error("Email-eligible send has no lead email (invariant violation).");
     if (!proposal.document_storage_path) throw new Error("Proposal has no uploaded document (invariant violation).");
-    const rendered = renderTemplate(template, toRenderLead(lead));
+    const rendered = renderTemplate(template, dealRenderContext(lead));
     const { data, error } = await supabaseAdmin.storage.from(PROPOSAL_DOCUMENTS_BUCKET).download(proposal.document_storage_path);
     if (error || !data) throw new Error(`Failed to download proposal document: ${error?.message ?? "no data"}`);
     const buffer = Buffer.from(await data.arrayBuffer());
@@ -212,7 +201,7 @@ export async function processQueuedProposalWhatsappSend(row: ProposalRow): Promi
       throw new Error("Queued WhatsApp proposal send is missing its template or document (invariant violation).");
     }
     const template = await getActiveTemplateOrThrow(pool, row.workspace_id, row.whatsapp_template_id, "whatsapp");
-    const rendered = renderTemplate(template, toRenderLead(lead));
+    const rendered = renderTemplate(template, dealRenderContext(lead));
     const whatsappText = htmlToWhatsAppText(rendered.body);
 
     await sendWhatsApp(row.workspace_id, {

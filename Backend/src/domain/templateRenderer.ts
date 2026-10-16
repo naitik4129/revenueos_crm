@@ -1,5 +1,5 @@
 /**
- * Renders a message_templates row's subject/body against a lead for a
+ * Renders a message_templates row's subject/body against a contact, its company and deal for a
  * send_email/send_whatsapp step. This is the single source of truth for
  * which `{{...}}` variables exist — src/worker.ts uses it to render outbound
  * messages, and workflows.service.ts's publishVersion uses
@@ -9,7 +9,7 @@
  * from here rather than hardcoding its own copy.)
  *
  * `body` is HTML authored by the template rich-text editor; substituted
- * variable values are HTML-escaped so a lead field containing `<`, `&`, `"`
+ * variable values are HTML-escaped so a contact field containing `<`, `&`, `"`
  * etc. can't break the surrounding markup or inject new tags. The template's
  * own authored HTML is never touched — only the matched `{{...}}` span is
  * replaced.
@@ -19,14 +19,11 @@
  * caller decides what to do.
  */
 
-export interface TemplateRenderLead {
-  firstName: string;
-  lastName: string;
-  company: string;
-  industry: string | null;
-  email: string | null;
-  phone: string | null;
-  ownerName: string | null;
+/** What a template is rendered against: {{contact.*}}, {{company.*}}, {{deal.*}}. */
+export interface TemplateRenderContext {
+  contact: { firstName: string; lastName: string; email: string | null; phone: string | null; jobTitle: string | null };
+  company: { name: string | null; industry: string | null; website: string | null };
+  deal: { stage: string | null; serviceInterest: string | null; ownerName: string | null };
 }
 
 /** Meeting context for a "meeting scheduled" notification — see meetingScheduledNotification.service.ts. Optional on renderTemplate since most templates render without one. */
@@ -59,20 +56,27 @@ function formatMeetingTime(at: string): string {
   return new Intl.DateTimeFormat("en-IN", { timeZone: MEETING_TIME_ZONE, timeStyle: "short" }).format(new Date(at));
 }
 
-function buildVariableMap(lead: TemplateRenderLead, meeting: TemplateRenderMeeting | undefined, now: Date): Map<string, string> {
-  const fullName = [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim();
+const humanize = (value: string | null) => (value ? value.replaceAll("_", " ") : "");
+
+function buildVariableMap(ctx: TemplateRenderContext, meeting: TemplateRenderMeeting | undefined, now: Date): Map<string, string> {
+  const { contact, company, deal } = ctx;
+  const fullName = [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim();
   // A Map (not a plain object) so a token like "constructor" or "toString"
   // can't accidentally resolve via JS's Object.prototype chain instead of
   // being correctly reported as unknown.
   return new Map([
-    ["lead.firstName", lead.firstName],
-    ["lead.lastName", lead.lastName],
-    ["lead.fullName", fullName || lead.firstName],
-    ["lead.company", lead.company],
-    ["lead.industry", lead.industry ?? ""],
-    ["lead.email", lead.email ?? ""],
-    ["lead.phone", lead.phone ?? ""],
-    ["owner.name", lead.ownerName ?? ""],
+    ["contact.firstName", contact.firstName],
+    ["contact.lastName", contact.lastName],
+    ["contact.fullName", fullName || contact.firstName],
+    ["contact.email", contact.email ?? ""],
+    ["contact.phone", contact.phone ?? ""],
+    ["contact.jobTitle", contact.jobTitle ?? ""],
+    ["company.name", company.name ?? ""],
+    ["company.industry", company.industry ?? ""],
+    ["company.website", company.website ?? ""],
+    ["deal.stage", humanize(deal.stage)],
+    ["deal.serviceInterest", deal.serviceInterest ?? ""],
+    ["deal.ownerName", deal.ownerName ?? ""],
     ["current.date", formatMeetingDate(now.toISOString())],
     ["tomorrow.date", formatMeetingDate(new Date(now.getTime() + 86_400_000).toISOString())],
     ["current.time", formatMeetingTime(now.toISOString())],
@@ -100,14 +104,18 @@ function buildVariableMap(lead: TemplateRenderLead, meeting: TemplateRenderMeeti
  * UTC+05:30, no daylight saving), matching the application's calendar.
  */
 export const KNOWN_TEMPLATE_VARIABLES = [
-  "lead.firstName",
-  "lead.lastName",
-  "lead.fullName",
-  "lead.company",
-  "lead.industry",
-  "lead.email",
-  "lead.phone",
-  "owner.name",
+  "contact.firstName",
+  "contact.lastName",
+  "contact.fullName",
+  "contact.email",
+  "contact.phone",
+  "contact.jobTitle",
+  "company.name",
+  "company.industry",
+  "company.website",
+  "deal.stage",
+  "deal.serviceInterest",
+  "deal.ownerName",
   "current.date",
   "tomorrow.date",
   "current.time",
@@ -141,14 +149,14 @@ function renderText(text: string, variables: Map<string, string>, unknownTokens:
   });
 }
 
-export function renderTemplate(template: RenderableTemplate, lead: TemplateRenderLead, meeting?: TemplateRenderMeeting, now = new Date()): RenderedTemplate {
+export function renderTemplate(template: RenderableTemplate, ctx: TemplateRenderContext, meeting?: TemplateRenderMeeting, now = new Date()): RenderedTemplate {
   const meetingTokens = [...`${template.subject ?? ""}\n${template.body}`.matchAll(TOKEN_PATTERN)]
     .map((match) => match[1]!)
     .filter((key) => key.startsWith("meeting.") && KNOWN_TEMPLATE_VARIABLES.includes(key as typeof KNOWN_TEMPLATE_VARIABLES[number]));
   if (meetingTokens.length && !meeting) {
     throw new Error("Meeting variables require a scheduled meeting. Use this template for Meeting Scheduled notifications.");
   }
-  const variables = buildVariableMap(lead, meeting, now);
+  const variables = buildVariableMap(ctx, meeting, now);
   const unknownTokens = new Set<string>();
   // body is HTML (see module doc-comment above) — escape substituted values.
   // subject is a plain-text email header — substitute as-is, never escaped.
@@ -157,7 +165,7 @@ export function renderTemplate(template: RenderableTemplate, lead: TemplateRende
   return { subject, body, unknownTokens: [...unknownTokens] };
 }
 
-/** Publish-time check: which `{{...}}` tokens in this text aren't in KNOWN_TEMPLATE_VARIABLES, without needing a real lead to render against. */
+/** Publish-time check: which `{{...}}` tokens in this text aren't in KNOWN_TEMPLATE_VARIABLES, without needing a real contact to render against. */
 export function findUnknownTemplateTokens(text: string): string[] {
   const unknownTokens = new Set<string>();
   const known = new Set<string>(KNOWN_TEMPLATE_VARIABLES);

@@ -1,47 +1,54 @@
 import { describe, expect, it } from "vitest";
-import { findUnknownTemplateTokens, renderTemplate, type TemplateRenderLead, type TemplateRenderMeeting } from "../../src/domain/templateRenderer.js";
+import { findUnknownTemplateTokens, renderTemplate, type TemplateRenderContext, type TemplateRenderMeeting } from "../../src/domain/templateRenderer.js";
 
-const lead: TemplateRenderLead = {
-  firstName: "Asha",
-  lastName: "Rao",
-  company: "Rao Textiles",
-  industry: "Textiles",
-  email: "asha@raotextiles.example",
-  phone: "+919876543210",
-  ownerName: "Priya Singh",
+const lead: TemplateRenderContext = {
+  contact: { firstName: "Asha", lastName: "Rao", email: "asha@raotextiles.example", phone: "+919876543210", jobTitle: "Founder" },
+  company: { name: "Rao Textiles", industry: "Textiles", website: "https://raotextiles.example" },
+  deal: { stage: "meeting_scheduled", serviceInterest: "Outbound SDR team", ownerName: "Priya Singh" },
 };
 
 describe("renderTemplate", () => {
-  it("substitutes known lead/owner tokens in body and subject", () => {
+  it("substitutes contact, company and deal tokens in body and subject", () => {
     const result = renderTemplate(
-      { subject: "Hi {{lead.firstName}}", body: "Hello {{lead.fullName}} from {{lead.company}}, regards {{owner.name}}." },
+      {
+        subject: "Hi {{contact.firstName}}",
+        body: "Hello {{contact.fullName}} ({{contact.jobTitle}}) at {{company.name}}, {{company.industry}}, {{company.website}}. " +
+          "Re: {{deal.serviceInterest}} - {{deal.stage}}. Regards {{deal.ownerName}}, {{contact.email}} {{contact.phone}}",
+      },
       lead,
     );
     expect(result.subject).toBe("Hi Asha");
-    expect(result.body).toBe("Hello Asha Rao from Rao Textiles, regards Priya Singh.");
+    expect(result.body).toBe(
+      "Hello Asha Rao (Founder) at Rao Textiles, Textiles, https://raotextiles.example. Re: Outbound SDR team - meeting scheduled. Regards Priya Singh, asha@raotextiles.example +919876543210",
+    );
     expect(result.unknownTokens).toEqual([]);
   });
 
-  it("falls back lead.fullName to firstName when lastName is empty", () => {
-    const result = renderTemplate({ subject: null, body: "{{lead.fullName}}" }, { ...lead, lastName: "" });
+  it("falls back contact.fullName to firstName when lastName is empty", () => {
+    const result = renderTemplate({ subject: null, body: "{{contact.fullName}}" }, { ...lead, contact: { ...lead.contact, lastName: "" } });
     expect(result.body).toBe("Asha");
   });
 
-  it("renders missing email/phone as empty string rather than throwing", () => {
-    const result = renderTemplate({ subject: null, body: "{{lead.email}} {{lead.phone}}" }, { ...lead, email: null, phone: null });
-    expect(result.body).toBe(" ");
+  it("renders missing values (no company, no email/phone) as empty strings", () => {
+    const empty: TemplateRenderContext = {
+      contact: { ...lead.contact, email: null, phone: null, jobTitle: null },
+      company: { name: null, industry: null, website: null },
+      deal: { stage: null, serviceInterest: null, ownerName: null },
+    };
+    expect(renderTemplate({ subject: null, body: "[{{contact.email}}|{{company.name}}|{{deal.ownerName}}|{{deal.stage}}]" }, empty).body).toBe("[|||]");
   });
 
-  it("substitutes lead.industry, falling back to empty string when missing", () => {
-    const result = renderTemplate({ subject: null, body: "{{lead.industry}}" }, lead);
-    expect(result.body).toBe("Textiles");
-    expect(renderTemplate({ subject: null, body: "{{lead.industry}}" }, { ...lead, industry: null }).body).toBe("");
+  it("escapes values in the HTML body but not in the plain-text subject", () => {
+    const ctx = { ...lead, company: { ...lead.company, name: "R&D <Labs>" } };
+    const result = renderTemplate({ subject: "{{company.name}}", body: "{{company.name}}" }, ctx);
+    expect(result.subject).toBe("R&D <Labs>");
+    expect(result.body).toBe("R&amp;D &lt;Labs&gt;");
   });
 
-  it("leaves unknown tokens as literal text and reports them", () => {
-    const result = renderTemplate({ subject: null, body: "Hi {{lead.firstName}}, ref {{lead.nickname}}." }, lead);
-    expect(result.body).toBe("Hi Asha, ref {{lead.nickname}}.");
-    expect(result.unknownTokens).toEqual(["lead.nickname"]);
+  it("leaves unknown and retired tokens (e.g. lead.*) as literal text and reports them", () => {
+    const result = renderTemplate({ subject: null, body: "Hi {{contact.firstName}}, {{lead.firstName}} {{owner.name}}." }, lead);
+    expect(result.body).toBe("Hi Asha, {{lead.firstName}} {{owner.name}}.");
+    expect(result.unknownTokens).toEqual(["lead.firstName", "owner.name"]);
   });
 
   const meeting: TemplateRenderMeeting = {
@@ -106,14 +113,14 @@ describe("renderTemplate", () => {
 
 describe("findUnknownTemplateTokens", () => {
   it("returns nothing for text using only known variables", () => {
-    expect(findUnknownTemplateTokens("Hi {{lead.firstName}}, from {{owner.name}}")).toEqual([]);
+    expect(findUnknownTemplateTokens("Hi {{contact.firstName}} at {{company.name}}, from {{deal.ownerName}}")).toEqual([]);
   });
 
-  it("flags unrecognized tokens without needing a lead to render against", () => {
-    expect(findUnknownTemplateTokens("Hi {{lead.firstName}}, {{lead.birthday}}")).toEqual(["lead.birthday"]);
+  it("flags unrecognized and retired tokens without needing a contact to render against", () => {
+    expect(findUnknownTemplateTokens("Hi {{contact.firstName}}, {{contact.birthday}} {{lead.company}}")).toEqual(["contact.birthday", "lead.company"]);
   });
 
   it("de-duplicates repeated unknown tokens", () => {
-    expect(findUnknownTemplateTokens("{{lead.x}} and {{lead.x}} again")).toEqual(["lead.x"]);
+    expect(findUnknownTemplateTokens("{{contact.x}} and {{contact.x}} again")).toEqual(["contact.x"]);
   });
 });

@@ -17,7 +17,6 @@ function createWorkflowDb() {
     status: "paused",
     owner_id: "user-1",
     created_by: "user-1",
-    created_by_name: "Test User",
     created_at: new Date("2030-01-01T00:00:00.000Z"),
     updated_at: new Date("2030-01-01T00:00:00.000Z"),
   };
@@ -26,13 +25,13 @@ function createWorkflowDb() {
     row,
     db: {
       query: async (sql: string, params?: unknown[]) => {
-        if (/^select \* from (public|crm)\.workflows /.test(sql)) {
+        if (sql.startsWith("select * from crm.workflows ")) {
           return { rows: [row] };
         }
-        if (sql.startsWith("update public.workflows set")) {
+        if (sql.startsWith("update crm.workflows set")) {
           row.updated_at = new Date("2030-01-02T00:00:00.000Z");
           const assignments = sql
-            .slice("update public.workflows set ".length)
+            .slice("update crm.workflows set ".length)
             .split(" where ")[0]!;
           const columns = assignments
             .split(", ")
@@ -44,10 +43,10 @@ function createWorkflowDb() {
           });
           return { rows: [] };
         }
-        if (sql.startsWith("select * from public.workflow_versions")) {
+        if (sql.includes("from crm.workflow_versions")) {
           return { rows: [] };
         }
-        if (sql.includes("from public.workflow_runs")) {
+        if (sql.includes("from crm.workflow_runs")) {
           return { rows: [{ count: "0" }] };
         }
         throw new Error(`Unexpected query: ${sql}`);

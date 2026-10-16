@@ -5,7 +5,7 @@ import { z } from "zod";
 import { asyncHandler } from "../asyncHandler.js";
 import { requireAuth } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
-import { parseBody, parseParams, parseQuery } from "../validation/parse.js";
+import { parseBody, parseId, parseParams, parseQuery } from "../validation/parse.js";
 import { WORKFLOW_STATUSES, WORKFLOW_STEP_ACTIONS, WORKFLOW_TRIGGERS, TEMPLATE_CHANNELS } from "../domain/enums.js";
 import * as workflowsService from "../services/workflows.service.js";
 import { ValidationError } from "../errors.js";
@@ -39,7 +39,7 @@ workflowsRouter.post(
 workflowsRouter.get(
   "/:id",
   asyncHandler(async (req, res) => {
-    res.json(await workflowsService.getWorkflow(pool, req.workspaceId!, req.params.id!));
+    res.json(await workflowsService.getWorkflow(pool, req.workspaceId!, parseId(req.params.id, "Workflow")));
   }),
 );
 
@@ -55,7 +55,7 @@ workflowsRouter.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const patch = parseBody(updateSchema, req.body);
-    const workflow = await withTransaction((client) => workflowsService.updateWorkflow(client, req.workspaceId!, req.params.id!, patch));
+    const workflow = await withTransaction((client) => workflowsService.updateWorkflow(client, req.workspaceId!, parseId(req.params.id, "Workflow"), patch));
     res.json(workflow);
   }),
 );
@@ -63,7 +63,7 @@ workflowsRouter.patch(
 workflowsRouter.post(
   "/:id/draft",
   asyncHandler(async (req, res) => {
-    const workflow = await withTransaction((client) => workflowsService.createDraft(client, req.actor!, req.workspaceId!, req.params.id!));
+    const workflow = await withTransaction((client) => workflowsService.createDraft(client, req.actor!, req.workspaceId!, parseId(req.params.id, "Workflow")));
     res.status(201).json(workflow);
   }),
 );
@@ -84,7 +84,7 @@ workflowsRouter.put(
   asyncHandler(async (req, res) => {
     const { steps } = parseBody(stepsSchema, req.body);
     const { version } = parseParams(versionParamSchema, req.params);
-    const workflow = await withTransaction((client) => workflowsService.updateDraftSteps(client, req.workspaceId!, req.params.id!, version, steps));
+    const workflow = await withTransaction((client) => workflowsService.updateDraftSteps(client, req.workspaceId!, parseId(req.params.id, "Workflow"), version, steps));
     res.json(workflow);
   }),
 );
@@ -94,7 +94,7 @@ workflowsRouter.delete(
   asyncHandler(async (req, res) => {
     const { version } = parseParams(versionParamSchema, req.params);
     const workflow = await withTransaction((client) =>
-      workflowsService.deleteWorkflowVersion(client, req.workspaceId!, req.params.id!, version),
+      workflowsService.deleteWorkflowVersion(client, req.workspaceId!, parseId(req.params.id, "Workflow"), version),
     );
     res.json(workflow);
   }),
@@ -108,7 +108,7 @@ workflowsRouter.post(
     const { enrollmentMode } = parseBody(publishSchema, req.body ?? {});
     const { version } = parseParams(versionParamSchema, req.params);
     const workflow = await withTransaction((client) =>
-      workflowsService.publishVersion(client, req.actor!, req.workspaceId!, req.params.id!, version, enrollmentMode),
+      workflowsService.publishVersion(client, req.actor!, req.workspaceId!, parseId(req.params.id, "Workflow"), version, enrollmentMode),
     );
     res.json(workflow);
   }),
@@ -117,7 +117,7 @@ workflowsRouter.post(
 workflowsRouter.post(
   "/:id/duplicate",
   asyncHandler(async (req, res) => {
-    const workflow = await withTransaction((client) => workflowsService.duplicateWorkflow(client, req.actor!, req.workspaceId!, req.params.id!));
+    const workflow = await withTransaction((client) => workflowsService.duplicateWorkflow(client, req.actor!, req.workspaceId!, parseId(req.params.id, "Workflow")));
     res.status(201).json(workflow);
   }),
 );
@@ -128,7 +128,7 @@ workflowsRouter.delete(
   "/:id",
   asyncHandler(async (req, res) => {
     const { force } = parseQuery(deleteWorkflowQuerySchema, req.query);
-    await withTransaction((client) => workflowsService.deleteWorkflow(client, req.workspaceId!, req.params.id!, { force }));
+    await withTransaction((client) => workflowsService.deleteWorkflow(client, req.workspaceId!, parseId(req.params.id, "Workflow"), { force }));
     res.status(204).send();
   }),
 );
@@ -173,7 +173,7 @@ templatesRouter.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const patch = parseBody(updateTemplateSchema, req.body);
-    const template = await withTransaction((client) => workflowsService.updateTemplate(client, req.workspaceId!, req.params.id!, patch));
+    const template = await withTransaction((client) => workflowsService.updateTemplate(client, req.workspaceId!, parseId(req.params.id, "Template"), patch));
     res.json(template);
   }),
 );
@@ -181,7 +181,7 @@ templatesRouter.patch(
 templatesRouter.delete(
   "/:id",
   asyncHandler(async (req, res) => {
-    await withTransaction((client) => workflowsService.deleteTemplate(client, req.workspaceId!, req.params.id!));
+    await withTransaction((client) => workflowsService.deleteTemplate(client, req.workspaceId!, parseId(req.params.id, "Template")));
     res.status(204).send();
   }),
 );
@@ -228,7 +228,7 @@ templatesRouter.post(
   asyncHandler(async (req, res) => {
     if (!req.file) throw new ValidationError("No file uploaded.");
     const attachment = await withTransaction((client) =>
-      workflowsService.createTemplateAttachment(client, req.workspaceId!, req.params.id!, {
+      workflowsService.createTemplateAttachment(client, req.workspaceId!, parseId(req.params.id, "Template"), {
         buffer: req.file!.buffer,
         originalName: req.file!.originalname,
         mimeType: req.file!.mimetype,
@@ -243,7 +243,7 @@ templatesRouter.delete(
   "/:id/attachments/:attachmentId",
   asyncHandler(async (req, res) => {
     await withTransaction((client) =>
-      workflowsService.deleteTemplateAttachment(client, req.workspaceId!, req.params.id!, req.params.attachmentId!),
+      workflowsService.deleteTemplateAttachment(client, req.workspaceId!, parseId(req.params.id, "Template"), parseId(req.params.attachmentId, "Attachment")),
     );
     res.status(204).send();
   }),

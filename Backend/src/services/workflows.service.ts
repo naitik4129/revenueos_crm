@@ -5,8 +5,9 @@ import { ConflictError, InvalidTransitionError, NotFoundError, ValidationError }
 import type { WorkflowStatus, WorkflowStepAction, WorkflowTrigger, WorkflowVersionStatus } from "../domain/enums.js";
 import { findUnknownTemplateTokens } from "../domain/templateRenderer.js";
 import { supabaseAdmin } from "../supabaseAdmin.js";
+import { userNameSql } from "./profiles.service.js";
 
-const TEMPLATE_ATTACHMENTS_BUCKET = "template-attachments";
+export const TEMPLATE_ATTACHMENTS_BUCKET = "crm-template-attachments";
 const EMAIL_ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024;
 const WHATSAPP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const ATTACHMENT_SIGNED_URL_TTL_SECONDS = 300;
@@ -25,7 +26,6 @@ export interface WorkflowRow {
   status: WorkflowStatus;
   owner_id: string | null;
   created_by: string | null;
-  created_by_name: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -40,6 +40,7 @@ export interface WorkflowVersionRow {
   created_at: Date;
   published_at: Date | null;
 }
+// created_by_name is computed (userNameSql) in getVersionsForWorkflow.
 
 export interface WorkflowStepRow {
   id: string;
@@ -66,7 +67,7 @@ function stepToDto(row: WorkflowStepRow) {
 
 async function getStepsForVersion(db: Queryable, versionId: string) {
   const result = await db.query<WorkflowStepRow>(
-    `select * from public.workflow_steps where workflow_version_id = $1 order by step_order asc`,
+    `select * from crm.workflow_steps where workflow_version_id = $1 order by step_order asc`,
     [versionId],
   );
   return result.rows.map(stepToDto);
@@ -74,7 +75,8 @@ async function getStepsForVersion(db: Queryable, versionId: string) {
 
 async function getVersionsForWorkflow(db: Queryable, workflowId: string) {
   const result = await db.query<WorkflowVersionRow>(
-    `select * from public.workflow_versions where workflow_id = $1 order by version_number asc`,
+    `select v.*, ${userNameSql("v.created_by")} as created_by_name
+       from crm.workflow_versions v where v.workflow_id = $1 order by v.version_number asc`,
     [workflowId],
   );
   const versions = [];
@@ -95,12 +97,12 @@ async function workflowToDto(db: Queryable, row: WorkflowRow) {
   const versions = await getVersionsForWorkflow(db, row.id);
   const published = versions.find((v) => v.status === "published");
   const activeLeads = await db.query<{ count: string }>(
-    `select count(*)::text as count from public.workflow_runs
+    `select count(*)::text as count from crm.workflow_runs
       where workflow_id = $1 and status in ('running','waiting','paused')`,
     [row.id],
   );
   const failures = await db.query<{ count: string }>(
-    `select count(*)::text as count from public.workflow_runs where workflow_id = $1 and status = 'failed'`,
+    `select count(*)::text as count from crm.workflow_runs where workflow_id = $1 and status = 'failed'`,
     [row.id],
   );
   return {
@@ -126,7 +128,7 @@ export async function getWorkflowRowOr404(db: Queryable, workspaceId: string, id
 }
 
 export async function listWorkflows(db: Queryable, workspaceId: string) {
-  const result = await db.query<WorkflowRow>(`select * from public.workflows where workspace_id = $1 order by updated_at desc`, [workspaceId]);
+  const result = await db.query<WorkflowRow>(`select * from crm.workflows where workspace_id = $1 order by updated_at desc`, [workspaceId]);
   const out = [];
   for (const row of result.rows) out.push(await workflowToDto(db, row));
   return out;
@@ -159,16 +161,16 @@ export interface CreateWorkflowInput {
 export async function createWorkflow(db: Queryable, actor: Actor, workspaceId: string, input: CreateWorkflowInput) {
   if (!input.name.trim()) throw new ValidationError("Workflow name is required.");
   const result = await db.query<{ id: string }>(
-    `insert into public.workflows (workspace_id, name, description, trigger, status, owner_id, created_by, created_by_name)
-     values ($1,$2,$3,$4,'paused',$5,$6,$7) returning id`,
-    [workspaceId, input.name.trim(), input.description?.trim() ?? null, input.trigger, input.ownerId ?? actor.id, actor.id, actor.fullName],
+    `insert into crm.workflows (workspace_id, name, description, trigger, status, owner_id, created_by)
+     values ($1,$2,$3,$4,'paused',$5,$6) returning id`,
+    [workspaceId, input.name.trim(), input.description?.trim() ?? null, input.trigger, input.ownerId ?? actor.id, actor.id],
   );
   const id = result.rows[0]!.id;
 
   await db.query(
-    `insert into public.workflow_versions (workflow_id, version_number, status, created_by, created_by_name)
-     values ($1, 1, 'draft', $2, $3)`,
-    [id, actor.id, actor.fullName],
+    `insert into crm.workflow_versions (workspace_id, workflow_id, version_number, status, created_by)
+     values ($1, $2, 1, 'draft', $3)`,
+    [workspaceId, id, actor.id],
   );
 
   return getWorkflow(db, workspaceId, id);
@@ -203,7 +205,7 @@ export async function updateWorkflow(db: Queryable, workspaceId: string, id: str
   }
   if (sets.length) {
     params.push(id);
-    await db.query(`update public.workflows set ${sets.join(", ")} where id = $${i}`, params);
+    await db.query(`update crm.workflows set ${sets.join(", ")} where id = $${i}`, params);
   }
   return getWorkflow(db, workspaceId, id);
 }
@@ -212,7 +214,7 @@ export async function updateWorkflow(db: Queryable, workspaceId: string, id: str
 export async function createDraft(db: Queryable, actor: Actor, workspaceId: string, workflowId: string) {
   await getWorkflowRowOr404(db, workspaceId, workflowId);
   const versions = await db.query<WorkflowVersionRow>(
-    `select * from public.workflow_versions where workflow_id = $1 order by version_number desc`,
+    `select * from crm.workflow_versions where workflow_id = $1 order by version_number desc`,
     [workflowId],
   );
   const existingDraft = versions.rows.find((v) => v.status === "draft");
@@ -222,9 +224,9 @@ export async function createDraft(db: Queryable, actor: Actor, workspaceId: stri
   const nextNumber = (versions.rows[0]?.version_number ?? 0) + 1;
 
   const created = await db.query<{ id: string }>(
-    `insert into public.workflow_versions (workflow_id, version_number, status, created_by, created_by_name)
-     values ($1,$2,'draft',$3,$4) returning id`,
-    [workflowId, nextNumber, actor.id, actor.fullName],
+    `insert into crm.workflow_versions (workspace_id, workflow_id, version_number, status, created_by)
+     values ($1,$2,$3,'draft',$4) returning id`,
+    [workspaceId, workflowId, nextNumber, actor.id],
   );
   const newVersionId = created.rows[0]!.id;
 
@@ -232,9 +234,9 @@ export async function createDraft(db: Queryable, actor: Actor, workspaceId: stri
     const steps = await getStepsForVersion(db, published.id);
     for (const s of steps) {
       await db.query(
-        `insert into public.workflow_steps (workflow_version_id, step_order, delay_days, action, template_id, config, is_enabled)
-         values ($1,$2,$3,$4,$5,$6,$7)`,
-        [newVersionId, s.order, s.delayDays, s.action, s.templateId ?? null, s.config ?? null, s.enabled],
+        `insert into crm.workflow_steps (workspace_id, workflow_version_id, step_order, delay_days, action, template_id, config, is_enabled)
+         values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [workspaceId, newVersionId, s.order, s.delayDays, s.action, s.templateId ?? null, s.config ?? null, s.enabled],
       );
     }
   }
@@ -268,7 +270,7 @@ export interface StepInput {
 export async function updateDraftSteps(db: Queryable, workspaceId: string, workflowId: string, version: number, steps: StepInput[]) {
   await getWorkflowRowOr404(db, workspaceId, workflowId);
   const versionRow = await db.query<WorkflowVersionRow>(
-    `select * from public.workflow_versions where workflow_id = $1 and version_number = $2 for update`,
+    `select * from crm.workflow_versions where workflow_id = $1 and version_number = $2 for update`,
     [workflowId, version],
   );
   const v = versionRow.rows[0];
@@ -280,7 +282,7 @@ export async function updateDraftSteps(db: Queryable, workspaceId: string, workf
   const templateIds = [...new Set(steps.flatMap((s) => (s.templateId ? [s.templateId] : [])))];
   if (templateIds.length > 0) {
     const owned = await db.query<{ id: string }>(
-      `select id from public.message_templates where id = any($1::uuid[]) and workspace_id = $2`,
+      `select id from crm.message_templates where id = any($1::uuid[]) and workspace_id = $2`,
       [templateIds, workspaceId],
     );
     if (owned.rows.length !== templateIds.length) {
@@ -288,16 +290,16 @@ export async function updateDraftSteps(db: Queryable, workspaceId: string, workf
     }
   }
 
-  await db.query(`delete from public.workflow_steps where workflow_version_id = $1`, [v.id]);
+  await db.query(`delete from crm.workflow_steps where workflow_version_id = $1`, [v.id]);
   let order = 0;
   for (const s of steps) {
     if (s.action === "send_email" || s.action === "send_whatsapp") {
       if (!s.templateId) throw new ValidationError(`Step ${order + 1} (${s.action}) requires a template.`);
     }
     await db.query(
-      `insert into public.workflow_steps (workflow_version_id, step_order, delay_days, action, template_id, config, is_enabled)
-       values ($1,$2,$3,$4,$5,$6,$7)`,
-      [v.id, order, Math.max(0, s.delayDays), s.action, s.templateId ?? null, s.config ?? null, s.enabled],
+      `insert into crm.workflow_steps (workspace_id, workflow_version_id, step_order, delay_days, action, template_id, config, is_enabled)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [workspaceId, v.id, order, Math.max(0, s.delayDays), s.action, s.templateId ?? null, s.config ?? null, s.enabled],
     );
     order++;
   }
@@ -323,7 +325,7 @@ export async function updateDraftSteps(db: Queryable, workspaceId: string, workf
 export async function deleteWorkflowVersion(db: Queryable, workspaceId: string, workflowId: string, version: number) {
   await getWorkflowRowOr404(db, workspaceId, workflowId);
   const versions = await db.query<WorkflowVersionRow>(
-    `select * from public.workflow_versions where workflow_id = $1 order by version_number asc for update`,
+    `select * from crm.workflow_versions where workflow_id = $1 order by version_number asc for update`,
     [workflowId],
   );
   const target = versions.rows.find((v) => v.version_number === version);
@@ -338,8 +340,8 @@ export async function deleteWorkflowVersion(db: Queryable, workspaceId: string, 
     );
   }
 
-  await db.query(`delete from public.workflow_steps where workflow_version_id = $1`, [target.id]);
-  await db.query(`delete from public.workflow_versions where id = $1`, [target.id]);
+  await db.query(`delete from crm.workflow_steps where workflow_version_id = $1`, [target.id]);
+  await db.query(`delete from crm.workflow_versions where id = $1`, [target.id]);
   return getWorkflow(db, workspaceId, workflowId);
 }
 
@@ -356,8 +358,8 @@ export type EnrollmentMode = "keep_existing" | "migrate_to_new_version" | "resta
 async function assertNoUnknownTemplateVariables(db: Queryable, versionId: string): Promise<void> {
   const result = await db.query<{ step_order: number; template_name: string; subject: string | null; body: string }>(
     `select ws.step_order, mt.name as template_name, mt.subject, mt.body
-       from public.workflow_steps ws
-       join public.message_templates mt on mt.id = ws.template_id
+       from crm.workflow_steps ws
+       join crm.message_templates mt on mt.id = ws.template_id
       where ws.workflow_version_id = $1 and ws.action in ('send_email', 'send_whatsapp')`,
     [versionId],
   );
@@ -392,14 +394,14 @@ export async function publishVersion(db: Queryable, actor: Actor, workspaceId: s
 
   await getWorkflowRowOr404(db, workspaceId, workflowId);
   const versionRow = await db.query<WorkflowVersionRow>(
-    `select * from public.workflow_versions where workflow_id = $1 and version_number = $2`,
+    `select * from crm.workflow_versions where workflow_id = $1 and version_number = $2`,
     [workflowId, version],
   );
   const v = versionRow.rows[0];
   if (!v) throw new NotFoundError("Workflow version");
   if (v.status !== "draft") throw new InvalidTransitionError(`Version ${version} is already "${v.status}".`);
 
-  const stepCount = await db.query<{ count: string }>(`select count(*)::text as count from public.workflow_steps where workflow_version_id = $1`, [v.id]);
+  const stepCount = await db.query<{ count: string }>(`select count(*)::text as count from crm.workflow_steps where workflow_version_id = $1`, [v.id]);
   if (Number(stepCount.rows[0]?.count ?? 0) === 0) {
     throw new ValidationError("Cannot publish a version with no steps.");
   }
@@ -411,11 +413,11 @@ export async function publishVersion(db: Queryable, actor: Actor, workspaceId: s
   // deferrable, so both statements must never coexist with two "published"
   // rows at once.
   await db.query(
-    `update public.workflow_versions set status = 'previous' where workflow_id = $1 and status = 'published'`,
+    `update crm.workflow_versions set status = 'previous' where workflow_id = $1 and status = 'published'`,
     [workflowId],
   );
   await db.query(
-    `update public.workflow_versions set status = 'published', published_at = now() where id = $1`,
+    `update crm.workflow_versions set status = 'published', published_at = now() where id = $1`,
     [v.id],
   );
 
@@ -425,31 +427,31 @@ export async function publishVersion(db: Queryable, actor: Actor, workspaceId: s
 export async function duplicateWorkflow(db: Queryable, actor: Actor, workspaceId: string, workflowId: string) {
   const source = await getWorkflowRowOr404(db, workspaceId, workflowId);
   const versions = await db.query<WorkflowVersionRow>(
-    `select * from public.workflow_versions where workflow_id = $1 order by version_number desc`,
+    `select * from crm.workflow_versions where workflow_id = $1 order by version_number desc`,
     [workflowId],
   );
   const base = versions.rows.find((v) => v.status === "published") ?? versions.rows[0];
 
   const created = await db.query<{ id: string }>(
-    `insert into public.workflows (workspace_id, name, description, trigger, status, owner_id, created_by, created_by_name)
-     values ($1,$2,$3,$4,'paused',$5,$6,$7) returning id`,
-    [workspaceId, `${source.name} (copy)`, source.description, source.trigger, source.owner_id, actor.id, actor.fullName],
+    `insert into crm.workflows (workspace_id, name, description, trigger, status, owner_id, created_by)
+     values ($1,$2,$3,$4,'paused',$5,$6) returning id`,
+    [workspaceId, `${source.name} (copy)`, source.description, source.trigger, source.owner_id, actor.id],
   );
   const newId = created.rows[0]!.id;
 
   const newVersion = await db.query<{ id: string }>(
-    `insert into public.workflow_versions (workflow_id, version_number, status, created_by, created_by_name)
-     values ($1, 1, 'draft', $2, $3) returning id`,
-    [newId, actor.id, actor.fullName],
+    `insert into crm.workflow_versions (workspace_id, workflow_id, version_number, status, created_by)
+     values ($1, $2, 1, 'draft', $3) returning id`,
+    [workspaceId, newId, actor.id],
   );
 
   if (base) {
     const steps = await getStepsForVersion(db, base.id);
     for (const s of steps) {
       await db.query(
-        `insert into public.workflow_steps (workflow_version_id, step_order, delay_days, action, template_id, config, is_enabled)
-         values ($1,$2,$3,$4,$5,$6,$7)`,
-        [newVersion.rows[0]!.id, s.order, s.delayDays, s.action, s.templateId ?? null, s.config ?? null, s.enabled],
+        `insert into crm.workflow_steps (workspace_id, workflow_version_id, step_order, delay_days, action, template_id, config, is_enabled)
+         values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [workspaceId, newVersion.rows[0]!.id, s.order, s.delayDays, s.action, s.templateId ?? null, s.config ?? null, s.enabled],
       );
     }
   }
@@ -486,7 +488,7 @@ export async function duplicateWorkflow(db: Queryable, actor: Actor, workspaceId
  */
 export async function deleteWorkflow(db: Queryable, workspaceId: string, id: string, options: { force?: boolean } = {}) {
   await getWorkflowRowOr404(db, workspaceId, id);
-  const runs = await db.query<{ count: string }>(`select count(*)::text as count from public.workflow_runs where workflow_id = $1`, [id]);
+  const runs = await db.query<{ count: string }>(`select count(*)::text as count from crm.workflow_runs where workflow_id = $1`, [id]);
   const runCount = Number(runs.rows[0]?.count ?? 0);
   if (runCount > 0 && !options.force) {
     throw new ConflictError(
@@ -495,22 +497,22 @@ export async function deleteWorkflow(db: Queryable, workspaceId: string, id: str
     );
   }
   if (runCount > 0) {
-    await db.query(`delete from public.workflow_runs where workflow_id = $1`, [id]);
+    await db.query(`delete from crm.workflow_runs where workflow_id = $1`, [id]);
   }
 
   const versions = await db.query<{ id: string; status: WorkflowVersionStatus }>(
-    `select id, status from public.workflow_versions where workflow_id = $1 order by (status = 'draft') desc`,
+    `select id, status from crm.workflow_versions where workflow_id = $1 order by (status = 'draft') desc`,
     [id],
   );
   for (const version of versions.rows) {
     if (version.status !== "draft") {
-      await db.query(`update public.workflow_versions set status = 'draft', published_at = null where id = $1`, [version.id]);
+      await db.query(`update crm.workflow_versions set status = 'draft', published_at = null where id = $1`, [version.id]);
     }
-    await db.query(`delete from public.workflow_steps where workflow_version_id = $1`, [version.id]);
-    await db.query(`delete from public.workflow_versions where id = $1`, [version.id]);
+    await db.query(`delete from crm.workflow_steps where workflow_version_id = $1`, [version.id]);
+    await db.query(`delete from crm.workflow_versions where id = $1`, [version.id]);
   }
 
-  await db.query(`delete from public.workflows where id = $1`, [id]);
+  await db.query(`delete from crm.workflows where id = $1`, [id]);
 }
 
 // ---------------------------------------------------------------------------
@@ -525,8 +527,8 @@ export interface TemplateRow {
   subject: string | null;
   body: string;
   is_active: boolean;
-  is_default_meeting_scheduled_email: boolean;
-  is_default_meeting_scheduled_whatsapp: boolean;
+  /** Computed: this template is its workspace's default meeting-scheduled template for its channel. */
+  is_default_meeting_scheduled: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -549,12 +551,17 @@ function templateToDto(row: TemplateRow) {
     subject: row.subject ?? "",
     body: row.body,
     active: row.is_active,
-    isDefaultMeetingScheduled: row.channel === "email" ? row.is_default_meeting_scheduled_email : row.is_default_meeting_scheduled_whatsapp,
+    isDefaultMeetingScheduled: row.is_default_meeting_scheduled,
   };
 }
 
+/** Default meeting-scheduled templates are per-workspace columns on crm.workspaces. */
+const TEMPLATE_SELECT = `
+  select t.*, (t.id in (w.default_meeting_email_template_id, w.default_meeting_whatsapp_template_id)) is true as is_default_meeting_scheduled
+    from crm.message_templates t join crm.workspaces w on w.id = t.workspace_id`;
+
 export async function listTemplates(db: Queryable, workspaceId: string) {
-  const result = await db.query<TemplateRow>(`select * from public.message_templates where workspace_id = $1 order by name asc`, [workspaceId]);
+  const result = await db.query<TemplateRow>(`${TEMPLATE_SELECT} where t.workspace_id = $1 order by t.name asc`, [workspaceId]);
   return result.rows.map(templateToDto);
 }
 
@@ -564,7 +571,7 @@ export async function listTemplatesWithAttachments(db: Queryable, workspaceId: s
   if (templates.length === 0) return templates.map((t) => ({ ...t, attachments: [] as ReturnType<typeof attachmentToDto>[] }));
 
   const attachmentsResult = await db.query<TemplateAttachmentRow>(
-    `select * from public.template_attachments where template_id = any($1) order by created_at asc`,
+    `select * from crm.template_attachments where template_id = any($1) order by created_at asc`,
     [templates.map((t) => t.id)],
   );
   const byTemplateId = new Map<string, TemplateAttachmentRow[]>();
@@ -584,7 +591,7 @@ export async function listTemplatesWithAttachments(db: Queryable, workspaceId: s
 }
 
 async function getTemplateRowOr404(db: Queryable, workspaceId: string, id: string): Promise<TemplateRow> {
-  const result = await db.query<TemplateRow>(`select * from public.message_templates where id = $1 and workspace_id = $2`, [id, workspaceId]);
+  const result = await db.query<TemplateRow>(`${TEMPLATE_SELECT} where t.id = $1 and t.workspace_id = $2`, [id, workspaceId]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Template");
   return row;
@@ -596,12 +603,14 @@ export async function createTemplate(db: Queryable, actor: Actor, workspaceId: s
   if (input.channel === "whatsapp" && input.subject) {
     throw new ValidationError("WhatsApp templates cannot have a subject.");
   }
-  const result = await db.query<TemplateRow>(
-    `insert into public.message_templates (workspace_id, name, channel, subject, body, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6,$7) returning *`,
-    [workspaceId, input.name.trim(), input.channel, input.channel === "email" ? input.subject?.trim() || null : null, input.body, actor.id, actor.fullName],
-  );
-  return templateToDto(result.rows[0]!);
+  const id = (
+    await db.query<{ id: string }>(
+      `insert into crm.message_templates (workspace_id, name, channel, subject, body, created_by)
+       values ($1,$2,$3,$4,$5,$6) returning id`,
+      [workspaceId, input.name.trim(), input.channel, input.channel === "email" ? input.subject?.trim() || null : null, input.body, actor.id],
+    )
+  ).rows[0]!.id;
+  return templateToDto(await getTemplateRowOr404(db, workspaceId, id));
 }
 
 export async function updateTemplate(
@@ -632,27 +641,18 @@ export async function updateTemplate(
     params.push(patch.active);
   }
   if (patch.isDefaultMeetingScheduled !== undefined) {
-    // Only one template per channel (within this workspace) may hold this
-    // flag — clear the previous default (if any) before setting this one,
-    // matching the partial unique index in
-    // 006_google_calendar_meeting_sync.sql (that index is global, not
-    // workspace-scoped, so "default meeting-scheduled template" is
-    // currently a single cross-workspace flag — acceptable for now since
-    // only one workspace, MOTM, uses it today; a future workspace enabling
-    // this feature would need that index revisited to be workspace-scoped).
-    const column = current.channel === "email" ? "is_default_meeting_scheduled_email" : "is_default_meeting_scheduled_whatsapp";
-    if (patch.isDefaultMeetingScheduled) {
-      await db.query(`update public.message_templates set ${column} = false where ${column} = true and id != $1`, [id]);
-    }
-    sets.push(`${column} = $${i++}`);
-    params.push(patch.isDefaultMeetingScheduled);
+    // One default per channel per workspace, stored on the workspace (a composite FK keeps it in-workspace).
+    const column = current.channel === "email" ? "default_meeting_email_template_id" : "default_meeting_whatsapp_template_id";
+    await db.query(
+      `update crm.workspaces set ${column} = case when $2 then $3::uuid when ${column} = $3::uuid then null else ${column} end where id = $1`,
+      [workspaceId, patch.isDefaultMeetingScheduled, id],
+    );
   }
   if (sets.length) {
     params.push(id);
-    await db.query(`update public.message_templates set ${sets.join(", ")} where id = $${i}`, params);
+    await db.query(`update crm.message_templates set ${sets.join(", ")} where id = $${i}`, params);
   }
-  const updated = await db.query<TemplateRow>(`select * from public.message_templates where id = $1`, [id]);
-  return templateToDto(updated.rows[0]!);
+  return templateToDto(await getTemplateRowOr404(db, workspaceId, id));
 }
 
 async function attachmentToDto(row: TemplateAttachmentRow) {
@@ -671,7 +671,7 @@ async function attachmentToDto(row: TemplateAttachmentRow) {
 export async function listTemplateAttachments(db: Queryable, workspaceId: string, templateId: string) {
   await getTemplateRowOr404(db, workspaceId, templateId);
   const result = await db.query<TemplateAttachmentRow>(
-    `select * from public.template_attachments where template_id = $1 order by created_at asc`,
+    `select * from crm.template_attachments where template_id = $1 order by created_at asc`,
     [templateId],
   );
   return Promise.all(result.rows.map((row) => attachmentToDto(row)));
@@ -687,7 +687,7 @@ export async function createTemplateAttachment(
 
   if (template.channel === "whatsapp") {
     const existing = await db.query<{ count: string }>(
-      `select count(*)::text as count from public.template_attachments where template_id = $1`,
+      `select count(*)::text as count from crm.template_attachments where template_id = $1`,
       [templateId],
     );
     if (Number(existing.rows[0]?.count ?? 0) >= 1) {
@@ -707,7 +707,7 @@ export async function createTemplateAttachment(
   if (uploadError) throw new Error(`Failed to upload attachment: ${uploadError.message}`);
 
   const inserted = await db.query<TemplateAttachmentRow>(
-    `insert into public.template_attachments (template_id, file_name, storage_path, mime_type, size_bytes)
+    `insert into crm.template_attachments (template_id, file_name, storage_path, mime_type, size_bytes)
      values ($1,$2,$3,$4,$5) returning *`,
     [templateId, file.originalName, storagePath, file.mimeType, file.size],
   );
@@ -717,7 +717,7 @@ export async function createTemplateAttachment(
 export async function deleteTemplateAttachment(db: Queryable, workspaceId: string, templateId: string, attachmentId: string) {
   await getTemplateRowOr404(db, workspaceId, templateId);
   const existing = await db.query<TemplateAttachmentRow>(
-    `select * from public.template_attachments where id = $1 and template_id = $2`,
+    `select * from crm.template_attachments where id = $1 and template_id = $2`,
     [attachmentId, templateId],
   );
   const row = existing.rows[0];
@@ -726,7 +726,7 @@ export async function deleteTemplateAttachment(db: Queryable, workspaceId: strin
   const { error } = await supabaseAdmin.storage.from(TEMPLATE_ATTACHMENTS_BUCKET).remove([row.storage_path]);
   if (error) throw new Error(`Failed to remove attachment from storage: ${error.message}`);
 
-  await db.query(`delete from public.template_attachments where id = $1`, [attachmentId]);
+  await db.query(`delete from crm.template_attachments where id = $1`, [attachmentId]);
 }
 
 /**
@@ -743,8 +743,8 @@ export async function deleteTemplate(db: Queryable, workspaceId: string, id: str
 
   const liveUsage = await db.query<{ count: string }>(
     `select count(*)::text as count
-       from public.workflow_steps ws
-       join public.workflow_versions wv on wv.id = ws.workflow_version_id
+       from crm.workflow_steps ws
+       join crm.workflow_versions wv on wv.id = ws.workflow_version_id
       where ws.template_id = $1 and wv.status = 'published'`,
     [id],
   );
@@ -752,5 +752,5 @@ export async function deleteTemplate(db: Queryable, workspaceId: string, id: str
     throw new ConflictError("Cannot delete a template used by a published workflow step - remove it from that step first.");
   }
 
-  await db.query(`delete from public.message_templates where id = $1`, [id]);
+  await db.query(`delete from crm.message_templates where id = $1`, [id]);
 }

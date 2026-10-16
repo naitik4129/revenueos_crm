@@ -13,13 +13,14 @@ import type {
   TaskOrigin,
   TaskType,
 } from "../domain/enums.js";
+import type { TemplateRenderContext } from "../domain/templateRenderer.js";
 import { assertPipelineStageEditable, assertValidPipelineStage, canRunAutomation } from "../domain/pipeline.js";
 import { userNameSql } from "./profiles.service.js";
 import { actorEvent, addTimelineEvent, toEventActor, type EventActor } from "./timeline.service.js";
 import { writeDeletedAudit } from "./companies.service.js";
 import { advanceLifecycle } from "./contacts.service.js";
 import { createTask } from "./tasks.service.js";
-import { applyAutomationModeToRuns } from "./runs.service.js";
+import { applyAutomationModeToRuns, autoEnroll } from "./runs.service.js";
 
 /** A deal with the contact/company fields every deal screen and sender needs. */
 export interface DealRow {
@@ -47,6 +48,7 @@ export interface DealRow {
   // contact
   first_name: string;
   last_name: string;
+  job_title: string | null;
   email: string | null;
   phone: string | null;
   phone_e164: string | null;
@@ -55,6 +57,7 @@ export interface DealRow {
   // company
   company_name: string | null;
   industry: string | null;
+  website: string | null;
   // next action (earliest open task on the deal)
   next_task_id: string | null;
   next_task_type: TaskType | null;
@@ -67,8 +70,8 @@ export interface DealRow {
 /** Replaces the old lead_next_actions view: one lateral lookup of the earliest open task. */
 const DEAL_SELECT = `
   select d.*, ${userNameSql("d.owner_id")} as owner_name,
-         c.first_name, c.last_name, c.email, c.phone, c.phone_e164, c.status as contact_status, c.lifecycle_stage,
-         co.name as company_name, co.industry,
+         c.first_name, c.last_name, c.job_title, c.email, c.phone, c.phone_e164, c.status as contact_status, c.lifecycle_stage,
+         co.name as company_name, co.industry, co.website,
          na.id as next_task_id, na.task_type as next_task_type, na.title as next_task_title,
          na.due_at as next_task_due_at, na.owner_id as next_task_owner_id, na.origin as next_task_origin
     from crm.deals d
@@ -121,6 +124,15 @@ export function dealToDto(row: DealRow) {
     lastActivityAt: row.last_activity_at.toISOString(),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+/** {{contact.*}} / {{company.*}} / {{deal.*}} values for a deal's messages. */
+export function dealRenderContext(row: DealRow): TemplateRenderContext {
+  return {
+    contact: { firstName: row.first_name, lastName: row.last_name, email: row.email, phone: row.phone, jobTitle: row.job_title },
+    company: { name: row.company_name, industry: row.industry, website: row.website },
+    deal: { stage: row.stage, serviceInterest: row.service_interest, ownerName: row.owner_name },
   };
 }
 
@@ -177,10 +189,12 @@ export async function createDeal(db: Queryable, actor: Actor | EventActor | null
 
   await addTimelineEvent(db, { dealId: id, kind: "system", title: "Deal Created", ...eventActor(actor) });
   await advanceLifecycle(db, input.contactId, "qualified", actor);
-  // Every new deal starts with a next action. P4: also auto-enroll the deal_created workflow.
+  // Every new deal starts with a next action and the deal_created workflow (if one is published).
+  // Contacts alone (prospects) never enroll: enrollment needs a deal.
   if (input.firstCallTask !== false) {
     await createTask(db, actor, workspaceId, { dealId: id, ownerId, type: "call", title: "First call", dueAt: new Date().toISOString() });
   }
+  await autoEnroll(db, workspaceId, id, "deal_created", "New deal");
   return getDealOr404(db, workspaceId, id);
 }
 
