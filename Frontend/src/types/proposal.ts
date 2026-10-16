@@ -36,6 +36,9 @@ export type WhatsappSendStatus = (typeof PROPOSAL_WHATSAPP_SEND_STATUSES)[number
 export interface Proposal {
   id: string;
   dealId: string;
+  /** From the list endpoints: the deal's (or the task's own) contact and company. */
+  contactName?: string;
+  companyName?: string;
   ownerId?: string;
   ownerName?: string;
   title: string;

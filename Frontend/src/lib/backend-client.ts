@@ -108,6 +108,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+export type TaskListParams = Partial<
+  Record<"ownerId" | "dealId" | "contactId" | "status" | "type", string | undefined> &
+    Record<"overdueOnly" | "dueTodayOnly" | "upcomingOnly", boolean | undefined> &
+    Record<"limit" | "offset", number | undefined>
+>;
+
 function query(path: string, params?: Record<string, string | number | boolean | undefined>) {
   if (!params) return path;
   const search = new URLSearchParams();
@@ -543,8 +549,8 @@ export const backend = {
       get<{ data: CrmTimelineEvent[] }>(query(`/deals/${id}/timeline`, { ...params }), signal),
   },
   tasks: {
-    list: (params?: Record<string, string | boolean | undefined>, signal?: AbortSignal) =>
-      get<{ data: Task[] }>(query("/tasks", params), signal),
+    list: (params?: TaskListParams, signal?: AbortSignal) =>
+      get<Paged<Task>>(query("/tasks", params), signal),
     create: (input: CreateTaskInput) => send<Task>("POST", "/tasks", input),
     update: (id: string, input: UpdateTaskInput) => send<Task>("PATCH", `/tasks/${id}`, input),
     complete: (id: string) => send<Task>("POST", `/tasks/${id}/complete`),

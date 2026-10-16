@@ -156,7 +156,7 @@ export async function claimQueuedProposalWhatsappSends(db: Queryable, limit: num
          limit $1
          for update skip locked
       )
-      returning *, null as owner_name`,
+      returning *, null as owner_name, null as contact_name, null as company_name`,
     [limit],
   );
   return claimed.rows;

@@ -1,4 +1,4 @@
-import type { Queryable } from "../dto.js";
+import { subjectNamesJoin, subjectNamesToDto, type Queryable, type SubjectNames } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import type { MeetingOutcome, MeetingStatus } from "../domain/enums.js";
@@ -12,7 +12,7 @@ import { cancelOpenTasksForDeal, createTask } from "./tasks.service.js";
 import { getDealOr404, markWon, moveToNurture, updateDeal } from "./deals.service.js";
 import { autoEnroll, cancelRunsForDeal } from "./runs.service.js";
 
-export interface MeetingRow {
+export interface MeetingRow extends SubjectNames {
   id: string;
   workspace_id: string;
   deal_id: string;
@@ -42,12 +42,13 @@ export interface MeetingRow {
   updated_at: Date;
 }
 
-const MEETING_SELECT = `select m.*, ${userNameSql("m.owner_id")} as owner_name from crm.meetings m`;
+const MEETING_SELECT = `select m.*, ${userNameSql("m.owner_id")} as owner_name, names.* from crm.meetings m ${subjectNamesJoin("m.deal_id")}`;
 
 function meetingToDto(row: MeetingRow) {
   return {
     id: row.id,
     dealId: row.deal_id,
+    ...subjectNamesToDto(row),
     ownerId: row.owner_id ?? undefined,
     ownerName: row.owner_name ?? undefined,
     title: row.title,

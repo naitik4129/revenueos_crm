@@ -22,7 +22,6 @@ vi.mock("@/store", () => {
       isLoading: false,
       error: null,
     }),
-    useDealIndex: () => new Map(),
     useContacts: () => ({
       data: { data: [], total: 0, limit: 50, offset: 0 },
       isLoading: false,
@@ -43,8 +42,10 @@ vi.mock("@/store", () => {
       error: null,
       isFetching: false,
     }),
+    useTaskTotals: () => [],
     useTasks: () => ({
       tasks: [],
+      total: 0,
       isLoading: false,
       error: null,
       isPending: false,

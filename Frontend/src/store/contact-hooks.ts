@@ -127,23 +127,6 @@ export function useDealDetail(id: string, contactId: string | undefined) {
   };
 }
 
-/**
- * id -> deal, for lists that only carry a dealId (tasks, meetings, proposals, runs). One cached
- * request shared by every row.
- * shortcut: the 500 most recently active deals; older ones show as "Deal", add names to those
- * list endpoints if that becomes common.
- */
-export function useDealIndex() {
-  const { currentWorkspaceId } = useWorkspace();
-  const query = useQuery({
-    queryKey: keys.deals(currentWorkspaceId, { index: true }),
-    queryFn: ({ signal }) => backend.deals.list({ limit: 500 }, signal),
-    enabled: Boolean(currentWorkspaceId),
-    staleTime: 60_000,
-  });
-  return new Map((query.data?.data ?? []).map((deal) => [deal.id, deal]));
-}
-
 export function useDeal(id: string) {
   const { currentWorkspaceId } = useWorkspace();
   return useQuery({

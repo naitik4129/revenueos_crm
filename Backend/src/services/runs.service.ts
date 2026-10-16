@@ -1,4 +1,4 @@
-import type { Queryable } from "../dto.js";
+import { subjectNamesJoin, subjectNamesToDto, type Queryable, type SubjectNames } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, NotFoundError } from "../errors.js";
 import type { AutomationMode, ContactStatus, DealOutcome, WorkflowRunStatus, WorkflowStepAction, WorkflowTrigger } from "../domain/enums.js";
@@ -25,13 +25,15 @@ export interface RunRow {
   updated_at: Date;
 }
 
-export function runToDto(row: RunRow, versionNumber: number) {
+export function runToDto(row: RunRow & Partial<SubjectNames>, versionNumber: number) {
   return {
     id: row.id,
     workflowId: row.workflow_id,
     version: versionNumber,
     dealId: row.deal_id,
     contactId: row.contact_id,
+    contactName: row.contact_name ?? undefined,
+    companyName: row.company_name ?? undefined,
     currentStep: row.current_step_id ?? undefined,
     status: row.status,
     startedAt: row.started_at.toISOString(),
@@ -44,13 +46,14 @@ export function runToDto(row: RunRow, versionNumber: number) {
 }
 
 const RUN_SELECT = `
-  select r.*, wv.version_number
+  select r.*, wv.version_number, names.*
     from crm.workflow_runs r
     join crm.workflow_versions wv on wv.id = r.workflow_version_id
+    ${subjectNamesJoin("r.deal_id", "r.contact_id")}
 `;
 
 export async function getRunRowOr404(db: Queryable, workspaceId: string, id: string) {
-  const result = await db.query<RunRow & { version_number: number }>(`${RUN_SELECT} where r.id = $1 and r.workspace_id = $2`, [id, workspaceId]);
+  const result = await db.query<RunRow & SubjectNames & { version_number: number }>(`${RUN_SELECT} where r.id = $1 and r.workspace_id = $2`, [id, workspaceId]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Workflow run");
   return row;
@@ -79,7 +82,7 @@ export async function listRuns(db: Queryable, workspaceId: string, filters: List
     params.push(filters.status);
   }
   const where = `where ${clauses.join(" and ")}`;
-  const result = await db.query<RunRow & { version_number: number }>(
+  const result = await db.query<RunRow & SubjectNames & { version_number: number }>(
     `${RUN_SELECT} ${where} order by r.started_at desc`,
     params,
   );
@@ -472,29 +475,30 @@ export interface ListScheduledActionsFilters {
 }
 
 export async function listScheduledActions(db: Queryable, workspaceId: string, filters: ListScheduledActionsFilters) {
-  const clauses: string[] = [`workspace_id = $1`];
+  const clauses: string[] = [`sa.workspace_id = $1`];
   const params: unknown[] = [workspaceId];
   let i = 2;
   if (filters.dealId) {
-    clauses.push(`deal_id = $${i++}`);
+    clauses.push(`sa.deal_id = $${i++}`);
     params.push(filters.dealId);
   }
   if (filters.workflowRunId) {
-    clauses.push(`workflow_run_id = $${i++}`);
+    clauses.push(`sa.workflow_run_id = $${i++}`);
     params.push(filters.workflowRunId);
   }
   if (filters.status) {
-    clauses.push(`status = $${i++}`);
+    clauses.push(`sa.status = $${i++}`);
     params.push(filters.status);
   }
   const where = `where ${clauses.join(" and ")}`;
-  const result = await db.query<ScheduledActionRow>(
-    `select * from crm.scheduled_actions ${where} order by scheduled_for asc`,
+  const result = await db.query<ScheduledActionRow & SubjectNames>(
+    `select sa.*, names.* from crm.scheduled_actions sa ${subjectNamesJoin("sa.deal_id")} ${where} order by sa.scheduled_for asc`,
     params,
   );
   return result.rows.map((r) => ({
     id: r.id,
     dealId: r.deal_id,
+    ...subjectNamesToDto(r),
     workflowRunId: r.workflow_run_id,
     workflowStepId: r.workflow_step_id,
     actionType: r.action_type,

@@ -275,6 +275,30 @@ describe("calls, tasks, meetings, proposals (PGlite)", () => {
     });
   });
 
+  it("lists carry the contact and company names, and task tabs filter on the server", async () => {
+    const companyId = (await api("post", "/companies", { name: "Acme Ltd" })).body.id as string;
+    const contactId = (await api("post", "/contacts", { firstName: "Ada", lastName: "Lane", email: `ada${++n}@x.com`, companyId })).body.id as string;
+    const dealId = (await api("post", "/deals", { contactId })).body.id as string;
+    await api("post", "/meetings", { dealId, title: "Intro", at: later() });
+    await api("post", "/proposals", { dealId, title: "Quote" });
+    const loner = (await api("post", "/contacts", { firstName: "Solo", email: `solo${++n}@x.com` })).body.id as string;
+    await api("post", "/tasks", { contactId: loner, type: "follow_up", title: "Callback", dueAt: later() });
+
+    const names = { contactName: "Ada Lane", companyName: "Acme Ltd" };
+    const mine = (rows: { dealId?: string }[]) => rows.filter((r) => r.dealId === dealId);
+    expect(mine((await api("get", "/tasks?limit=1000")).body.data)[0]).toMatchObject(names);
+    expect(mine((await api("get", "/meetings")).body.data)[0]).toMatchObject(names);
+    expect(mine((await api("get", "/proposals")).body.data)[0]).toMatchObject(names);
+    const [solo] = (await api("get", `/tasks?contactId=${loner}`)).body.data;
+    expect(solo).toMatchObject({ contactName: "Solo" });
+    expect(solo).not.toHaveProperty("companyName");
+
+    const upcoming = (await api("get", `/tasks?contactId=${loner}&upcomingOnly=true`)).body;
+    expect(upcoming.total).toBe(1);
+    expect((await api("get", `/tasks?contactId=${loner}&dueTodayOnly=true`)).body.total).toBe(0);
+    expect((await api("get", `/tasks?contactId=${loner}&overdueOnly=true`)).body.total).toBe(0);
+  });
+
   it("isolates workspaces on the new routes: another workspace's ids give 404", async () => {
     const { contactId, dealId } = await newDeal(w2);
     const taskId = (await api("get", `/deals/${dealId}/tasks`, undefined, w2)).body.data[0].id;

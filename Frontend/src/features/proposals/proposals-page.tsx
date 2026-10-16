@@ -122,7 +122,11 @@ export function ProposalsPage() {
                           )}
                         </td>
                         <td className="px-3 py-2 text-xs">
-                          <DealLink dealId={proposal.dealId} />
+                          <DealLink
+                            dealId={proposal.dealId}
+                            contactName={proposal.contactName}
+                            companyName={proposal.companyName}
+                          />
                         </td>
                         <td className="px-3 py-2 text-xs">
                           {proposal.ownerName ?? userName(proposal.ownerId)}

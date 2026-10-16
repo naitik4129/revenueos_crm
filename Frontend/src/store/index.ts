@@ -2,6 +2,7 @@ export { StoreProvider } from "./store-provider";
 export {
   useSession,
   useTasks,
+  useTaskTotals,
   useMeetings,
   useProposals,
   useAutomations,
@@ -19,7 +20,6 @@ export {
   useDeals,
   useDeal,
   useDealDetail,
-  useDealIndex,
   useCrmMutation,
 } from "./contact-hooks";
 export type {

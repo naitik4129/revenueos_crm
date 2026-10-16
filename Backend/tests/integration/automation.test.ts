@@ -116,6 +116,9 @@ describe("automation and worker (PGlite)", () => {
     ]);
     const { dealId } = await newDeal();
     expect((await api("post", "/runs", { dealId, workflowId: id })).status).toBe(201);
+    const names = { contactName: "Asha Rao", companyName: expect.stringMatching(/^Acme \d+$/) };
+    expect((await api("get", `/runs?dealId=${dealId}`)).body.data[0]).toMatchObject(names);
+    expect((await api("get", `/scheduled-actions?dealId=${dealId}`)).body.data[0]).toMatchObject(names);
 
     logs.length = 0;
     for (let i = 0; i < 5 && (await runner.runAutomationTick(opts)); i++);

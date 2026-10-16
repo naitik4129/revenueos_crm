@@ -1,4 +1,4 @@
-import type { Queryable } from "../dto.js";
+import { subjectNamesJoin, subjectNamesToDto, type Queryable, type SubjectNames } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import type { EmailSendStatus, LeadLossReason, ProposalStatus, WhatsappSendStatus } from "../domain/enums.js";
@@ -10,7 +10,7 @@ import { cancelOpenTasksForDeal, createTask } from "./tasks.service.js";
 import { getDealOr404, markWon, moveToNurture, updateDeal } from "./deals.service.js";
 import { autoEnroll } from "./runs.service.js";
 
-export interface ProposalRow {
+export interface ProposalRow extends SubjectNames {
   id: string;
   workspace_id: string;
   deal_id: string;
@@ -45,12 +45,13 @@ export interface ProposalRow {
   updated_at: Date;
 }
 
-const PROPOSAL_SELECT = `select p.*, ${userNameSql("p.owner_id")} as owner_name from crm.proposals p`;
+const PROPOSAL_SELECT = `select p.*, ${userNameSql("p.owner_id")} as owner_name, names.* from crm.proposals p ${subjectNamesJoin("p.deal_id")}`;
 
 function proposalToDto(row: ProposalRow) {
   return {
     id: row.id,
     dealId: row.deal_id,
+    ...subjectNamesToDto(row),
     ownerId: row.owner_id ?? undefined,
     ownerName: row.owner_name ?? undefined,
     title: row.title,

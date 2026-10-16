@@ -24,12 +24,13 @@ tasksRouter.get(
         type: z.enum(TASK_TYPES).optional(),
         overdueOnly: flag.optional(),
         dueTodayOnly: flag.optional(),
+        upcomingOnly: flag.optional(),
         limit: z.coerce.number().int().positive().max(1000).optional(),
         offset: z.coerce.number().int().min(0).optional(),
       }),
       req.query,
     );
-    res.json(await listTasks(pool, req.workspaceId!, { ...q, overdueOnly: q.overdueOnly === "true", dueTodayOnly: q.dueTodayOnly === "true" }));
+    res.json(await listTasks(pool, req.workspaceId!, { ...q, overdueOnly: q.overdueOnly === "true", dueTodayOnly: q.dueTodayOnly === "true", upcomingOnly: q.upcomingOnly === "true" }));
   }),
 );
 

@@ -22,6 +22,9 @@ export interface Task {
   id: string;
   dealId?: string;
   contactId?: string;
+  /** From the list endpoints: the deal's (or the task's own) contact and company. */
+  contactName?: string;
+  companyName?: string;
   ownerId?: string;
   ownerName?: string;
   type: TaskType;

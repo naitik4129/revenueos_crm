@@ -80,6 +80,9 @@ export interface Run {
   version: number;
   dealId: string;
   contactId: string;
+  /** From the list endpoints: the deal's (or the task's own) contact and company. */
+  contactName?: string;
+  companyName?: string;
   currentStep?: string;
   status: RunStatus;
   startedAt: string;
@@ -121,6 +124,9 @@ export type ScheduledActionStatus = (typeof SCHEDULED_ACTION_STATUSES)[number];
 export interface ScheduledAction {
   id: string;
   dealId: string;
+  /** From the list endpoints: the deal's (or the task's own) contact and company. */
+  contactName?: string;
+  companyName?: string;
   workflowRunId: string;
   workflowStepId: string;
   actionType: StepAction;

@@ -13,37 +13,41 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
-import { isOverdue, isToday, relDay } from "@/lib/format";
-import { useSession, useTasks } from "@/store";
+import { Pager } from "@/components/common/list-controls";
+import { isOverdue, relDay } from "@/lib/format";
+import type { TaskListParams } from "@/lib/backend-client";
+import { useSession, useTasks, useTaskTotals } from "@/store";
 import { messageFromError } from "@/store";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { DealLink } from "@/features/deals/deal-link";
 
-type View = "today" | "overdue" | "upcoming" | "done";
+const PAGE_SIZE = 50;
+
+// The tabs are server filters (Asia/Kolkata days), so they agree with the dashboard.
+const VIEWS = {
+  today: { dueTodayOnly: true },
+  overdue: { overdueOnly: true },
+  upcoming: { upcomingOnly: true },
+  done: { status: "completed" },
+} satisfies Record<string, TaskListParams>;
+type View = keyof typeof VIEWS;
+const VIEW_NAMES = Object.keys(VIEWS) as View[];
 
 export function TasksPage() {
-  const { tasks, completeTask, isLoading, error, isPending } = useTasks();
   const { users, userName } = useSession();
   const navigate = useNavigate();
   const [view, setView] = useState<View>("today");
   const [owner, setOwner] = useState("all");
-
-  const filtered = tasks.filter((t) => {
-    if (owner !== "all" && t.ownerId !== owner) return false;
-    if (view === "done") return t.status === "completed";
-    if (t.status !== "open") return false;
-    if (view === "today") return isToday(t.dueAt);
-    if (view === "overdue") return isOverdue(t.dueAt);
-    return !isOverdue(t.dueAt) && !isToday(t.dueAt);
+  const [offset, setOffset] = useState(0);
+  const ownerId = owner === "all" ? undefined : owner;
+  const { tasks, total, completeTask, isLoading, error, isPending } = useTasks({
+    ...VIEWS[view],
+    ownerId,
+    limit: PAGE_SIZE,
+    offset,
   });
-
-  const counts = {
-    today: tasks.filter((t) => t.status === "open" && isToday(t.dueAt)).length,
-    overdue: tasks.filter((t) => t.status === "open" && isOverdue(t.dueAt)).length,
-    upcoming: tasks.filter((t) => t.status === "open" && !isOverdue(t.dueAt) && !isToday(t.dueAt))
-      .length,
-    done: tasks.filter((t) => t.status === "completed").length,
-  };
+  const totals = useTaskTotals(VIEW_NAMES.map((name) => ({ ...VIEWS[name], ownerId })));
+  const count = (name: View) => totals[VIEW_NAMES.indexOf(name)] ?? "�";
 
   return (
     <div className="pb-10">
@@ -51,17 +55,29 @@ export function TasksPage() {
         title="Tasks"
         description="Manual and automation-created actions. Call and meeting tasks open their deal, where you log the call or schedule the meeting."
         tabs={
-          <Tabs value={view} onValueChange={(v) => setView(v as View)}>
+          <Tabs
+            value={view}
+            onValueChange={(v) => {
+              setView(v as View);
+              setOffset(0);
+            }}
+          >
             <TabsList>
-              <TabsTrigger value="today">Today ({counts.today})</TabsTrigger>
-              <TabsTrigger value="overdue">Overdue ({counts.overdue})</TabsTrigger>
-              <TabsTrigger value="upcoming">Upcoming ({counts.upcoming})</TabsTrigger>
-              <TabsTrigger value="done">Completed ({counts.done})</TabsTrigger>
+              <TabsTrigger value="today">Today ({count("today")})</TabsTrigger>
+              <TabsTrigger value="overdue">Overdue ({count("overdue")})</TabsTrigger>
+              <TabsTrigger value="upcoming">Upcoming ({count("upcoming")})</TabsTrigger>
+              <TabsTrigger value="done">Completed ({count("done")})</TabsTrigger>
             </TabsList>
           </Tabs>
         }
         actions={
-          <Select value={owner} onValueChange={setOwner}>
+          <Select
+            value={owner}
+            onValueChange={(value) => {
+              setOwner(value);
+              setOffset(0);
+            }}
+          >
             <SelectTrigger className="w-44">
               <SelectValue />
             </SelectTrigger>
@@ -77,7 +93,7 @@ export function TasksPage() {
         }
       />
 
-      <div className="p-6">
+      <div className="space-y-3 p-6">
         {isLoading ? (
           <LoadingBlock label="Loading tasks…" />
         ) : error ? (
@@ -88,15 +104,17 @@ export function TasksPage() {
               <table className="w-full min-w-[820px] text-sm">
                 <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
                   <tr>
-                    {["", "Task", "Deal", "Type", "Due", "Owner", "Origin"].map((h, i) => (
-                      <th key={i} className="px-3 py-2 font-medium">
-                        {h}
-                      </th>
-                    ))}
+                    {["", "Task", "Deal / contact", "Type", "Due", "Owner", "Origin"].map(
+                      (h, i) => (
+                        <th key={i} className="px-3 py-2 font-medium">
+                          {h}
+                        </th>
+                      ),
+                    )}
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((t) => {
+                  {tasks.map((t) => {
                     return (
                       <tr key={t.id} className="border-t hover:bg-accent/40">
                         <td className="px-3 py-2">
@@ -126,7 +144,12 @@ export function TasksPage() {
                           {t.title}
                         </td>
                         <td className="px-3 py-2 text-xs">
-                          <DealLink dealId={t.dealId} />
+                          <DealLink
+                            dealId={t.dealId}
+                            contactId={t.contactId}
+                            contactName={t.contactName}
+                            companyName={t.companyName}
+                          />
                         </td>
                         <td className="px-3 py-2">
                           <StatusBadge value={t.type} tone="neutral" />
@@ -150,7 +173,7 @@ export function TasksPage() {
                       </tr>
                     );
                   })}
-                  {filtered.length === 0 && (
+                  {tasks.length === 0 && (
                     <tr>
                       <td
                         colSpan={7}
@@ -165,6 +188,7 @@ export function TasksPage() {
             </div>
           </Card>
         )}
+        <Pager offset={offset} pageSize={PAGE_SIZE} total={total} onOffset={setOffset} />
       </div>
     </div>
   );

@@ -1,11 +1,11 @@
-import type { Queryable } from "../dto.js";
+import { subjectNamesJoin, subjectNamesToDto, type Queryable, type SubjectNames } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, NotFoundError, ValidationError } from "../errors.js";
 import type { TaskType } from "../domain/enums.js";
 import { userNameSql } from "./profiles.service.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR, toEventActor, type EventActor } from "./timeline.service.js";
 
-export interface TaskRow {
+export interface TaskRow extends SubjectNames {
   id: string;
   workspace_id: string;
   deal_id: string | null;
@@ -27,13 +27,14 @@ export interface TaskRow {
   updated_at: Date;
 }
 
-const TASK_SELECT = `select t.*, ${userNameSql("t.owner_id")} as owner_name from crm.tasks t`;
+const TASK_SELECT = `select t.*, ${userNameSql("t.owner_id")} as owner_name, names.* from crm.tasks t ${subjectNamesJoin("t.deal_id", "t.contact_id")}`;
 
 export function taskToDto(row: TaskRow) {
   return {
     id: row.id,
     dealId: row.deal_id ?? undefined,
     contactId: row.contact_id ?? undefined,
+    ...subjectNamesToDto(row),
     ownerId: row.owner_id ?? undefined,
     ownerName: row.owner_name ?? undefined,
     type: row.task_type,
@@ -202,6 +203,8 @@ export interface ListTasksFilters {
   type?: TaskType;
   overdueOnly?: boolean;
   dueTodayOnly?: boolean;
+  /** Open and due from tomorrow on: the complement of overdue + due today. */
+  upcomingOnly?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -222,11 +225,14 @@ export async function listTasks(db: Queryable, workspaceId: string, f: ListTasks
       and t.due_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
       and t.due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`);
   }
+  if (f.upcomingOnly) {
+    where.push(`t.status = 'open' and t.due_at >= (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`);
+  }
   const limit = Math.min(f.limit ?? 200, 1000);
   const offset = f.offset ?? 0;
   const result = await db.query<TaskRow & { total: number }>(
-    `select t.*, ${userNameSql("t.owner_id")} as owner_name, count(*) over()::int as total
-       from crm.tasks t
+    `select t.*, ${userNameSql("t.owner_id")} as owner_name, names.*, count(*) over()::int as total
+       from crm.tasks t ${subjectNamesJoin("t.deal_id", "t.contact_id")}
       where ${where.join(" and ")}
       order by t.due_at asc
       limit $${params.push(limit)} offset $${params.push(offset)}`,

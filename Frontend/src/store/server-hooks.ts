@@ -1,4 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   backend,
   type CreateMeetingInput,
@@ -6,6 +12,7 @@ import {
   type CreateTaskInput,
   type CreateTemplateInput,
   type CreateWorkflowInput,
+  type TaskListParams,
   type UpdateMeetingInput,
   type UpdateProposalInput,
   type UpdateTaskInput,
@@ -59,13 +66,15 @@ export function useSession() {
 }
 export type SessionSlice = ReturnType<typeof useSession>;
 
-export function useTasks() {
+/** One page of tasks, filtered on the server. */
+export function useTasks(params: TaskListParams = {}) {
   const client = useQueryClient();
   const { currentWorkspaceId } = useWorkspace();
   const query = useQuery({
-    queryKey: keys.tasks(currentWorkspaceId),
-    queryFn: ({ signal }) => backend.tasks.list(undefined, signal),
+    queryKey: [...keys.tasks(currentWorkspaceId), params],
+    queryFn: ({ signal }) => backend.tasks.list(params, signal),
     enabled: Boolean(currentWorkspaceId),
+    placeholderData: keepPreviousData,
   });
   const refresh = () => refreshCrm(client, currentWorkspaceId);
   const create = useMutation({
@@ -88,6 +97,7 @@ export function useTasks() {
   });
   return {
     tasks: query.data?.data ?? [],
+    total: query.data?.total ?? 0,
     isLoading: query.isLoading,
     error: query.error,
     isPending: create.isPending || update.isPending || complete.isPending || cancel.isPending,
@@ -98,6 +108,19 @@ export function useTasks() {
   };
 }
 export type TasksSlice = ReturnType<typeof useTasks>;
+
+/** Matching-task counts for several filter sets (e.g. tab badges); fetches one row each. */
+export function useTaskTotals(paramsList: TaskListParams[]) {
+  const { currentWorkspaceId } = useWorkspace();
+  return useQueries({
+    queries: paramsList.map((params) => ({
+      queryKey: [...keys.tasks(currentWorkspaceId), { ...params, limit: 1 }],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        backend.tasks.list({ ...params, limit: 1 }, signal),
+      enabled: Boolean(currentWorkspaceId),
+    })),
+  }).map((q) => q.data?.total);
+}
 
 export function useMeetings() {
   const client = useQueryClient();
@@ -390,6 +413,8 @@ export function useNotifications() {
     queryKey: keys.notifications(currentWorkspaceId),
     queryFn: ({ signal }) => backend.notifications.list(signal),
     enabled: Boolean(currentWorkspaceId),
+    // New handovers and WhatsApp replies arrive without any action in this tab.
+    refetchInterval: 60_000,
   });
   const readAll = useMutation({
     mutationFn: () => backend.notifications.markAllRead(),

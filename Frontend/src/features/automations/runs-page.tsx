@@ -11,7 +11,7 @@ import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { findCurrentStep } from "@/lib/workflow-timeline";
-import { messageFromError, useAutomations, useDealIndex } from "@/store";
+import { messageFromError, useAutomations } from "@/store";
 import { DealLink } from "@/features/deals/deal-link";
 
 const RUNS_PAGE_SIZE = 10;
@@ -30,23 +30,20 @@ export function RunsPage() {
     error,
     isPending,
   } = useAutomations();
-  const deals = useDealIndex();
   // Search matches the deal's contact and company names.
-  const dealText = (dealId: string) => {
-    const deal = deals.get(dealId);
-    return deal ? `${deal.contactName} ${deal.companyName ?? ""}` : dealId;
-  };
+  const dealText = (row: { contactName?: string; companyName?: string }) =>
+    `${row.contactName ?? ""} ${row.companyName ?? ""}`;
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [actionsPage, setActionsPage] = useState(1);
 
   const query = q.trim().toLowerCase();
   const filteredRuns = query
-    ? runs.filter((run) => dealText(run.dealId).toLowerCase().includes(query))
+    ? runs.filter((run) => dealText(run).toLowerCase().includes(query))
     : runs;
 
   const filteredScheduledActions = query
-    ? scheduledActions.filter((action) => dealText(action.dealId).toLowerCase().includes(query))
+    ? scheduledActions.filter((action) => dealText(action).toLowerCase().includes(query))
     : scheduledActions;
 
   const totalPages = Math.max(1, Math.ceil(filteredRuns.length / RUNS_PAGE_SIZE));
@@ -136,7 +133,11 @@ export function RunsPage() {
                       return (
                         <tr key={run.id} className="border-t hover:bg-accent/40">
                           <td className="px-3 py-2 text-xs">
-                            <DealLink dealId={run.dealId} />
+                            <DealLink
+                              dealId={run.dealId}
+                              contactName={run.contactName}
+                              companyName={run.companyName}
+                            />
                           </td>
                           <td className="px-3 py-2 text-xs">
                             {workflow?.name ?? run.workflowId} V{run.version}
@@ -257,7 +258,11 @@ export function RunsPage() {
                         return (
                           <tr key={action.id} className="border-t">
                             <td className="px-3 py-2 text-xs">
-                              <DealLink dealId={action.dealId} />
+                              <DealLink
+                                dealId={action.dealId}
+                                contactName={action.contactName}
+                                companyName={action.companyName}
+                              />
                             </td>
                             <td className="px-3 py-2">{label(action.actionType)}</td>
                             <td className="px-3 py-2 text-xs text-muted-foreground">

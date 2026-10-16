@@ -78,6 +78,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const client = useQueryClient();
   const { notifications, markNotificationsRead } = useNotifications();
+  const [bellOpen, setBellOpen] = useState(false);
   const { currentUser } = useSession();
   const {
     workspaces,
@@ -371,8 +372,10 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Button>
 
               <Popover
+                open={bellOpen}
                 onOpenChange={(o) => {
-                  if (o) {
+                  setBellOpen(o);
+                  if (o && unread > 0) {
                     markNotificationsRead().catch((error: unknown) => {
                       toast.error(messageFromError(error));
                     });
@@ -396,12 +399,18 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </PopoverTrigger>
                 <PopoverContent align="end" className="w-96 p-0">
                   <div className="border-b px-3 py-2 text-sm font-medium">Notifications</div>
-                  <ScrollArea className="h-96">
+                  {notifications.length === 0 && (
+                    <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      No notifications.
+                    </div>
+                  )}
+                  <ScrollArea className={notifications.length > 0 ? "h-96" : "hidden"}>
                     {notifications.map((n) => (
                       <button
                         key={n.id}
                         className="flex w-full gap-2 border-b px-3 py-2.5 text-left last:border-0 hover:bg-accent"
                         onClick={() => {
+                          setBellOpen(false);
                           if (n.dealId)
                             void navigate({ to: "/deals/$dealId", params: { dealId: n.dealId } });
                           else if (n.contactId)
@@ -409,10 +418,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                               to: "/contacts/$contactId",
                               params: { contactId: n.contactId },
                             });
-                          else if (n.href === "/automations/runs")
-                            void navigate({ to: "/automations/runs" });
-                          else if (n.href === "/automations") void navigate({ to: "/automations" });
-                          else if (n.href === "/meetings") void navigate({ to: "/meetings" });
                         }}
                       >
                         <span
