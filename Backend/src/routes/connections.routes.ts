@@ -3,7 +3,6 @@ import { z } from "zod";
 import { asyncHandler } from "../asyncHandler.js";
 import { parseBody } from "../validation/parse.js";
 import * as connections from "../services/connections.service.js";
-import * as websiteLeadSettings from "../services/websiteLeadSettings.service.js";
 import { sendEmail } from "../providers/email.provider.js";
 import { withTransaction } from "../db.js";
 import { recordAdminAudit } from "../services/admin-audit.service.js";
@@ -58,19 +57,6 @@ connectionsRouter.post(
       throw error;
     }
   }),
-);
-
-// Who owns leads that arrive from the public website form (Settings -> Website leads).
-connectionsRouter.get(
-  "/website-leads",
-  asyncHandler(async (req, res) => res.json(await websiteLeadSettings.getWebsiteLeadSettings(req.workspaceId!))),
-);
-const websiteLeadsSchema = z.object({ defaultOwnerId: z.string().uuid().nullable() });
-connectionsRouter.put(
-  "/website-leads",
-  asyncHandler(async (req, res) =>
-    res.json(await websiteLeadSettings.updateWebsiteLeadSettings(req.actor!, req.workspaceId!, parseBody(websiteLeadsSchema, req.body))),
-  ),
 );
 
 connectionsRouter.get(

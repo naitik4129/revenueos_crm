@@ -333,13 +333,6 @@ export interface Workspace {
   updatedAt: string;
 }
 
-export interface WebsiteLeadSettings {
-  defaultOwnerId: string | null;
-  defaultOwnerName: string | null;
-  /** False when the saved owner is no longer an active salesperson (new website leads then stay unassigned). */
-  ownerAvailable: boolean;
-}
-
 export interface EmailConnection {
   provider: "resend" | "smtp" | null;
   enabled: boolean;
@@ -444,11 +437,6 @@ export const backend = {
         send<{ ok: boolean; providerMessageId: string }>("POST", "/connections/email/test", {
           to,
         }),
-    },
-    websiteLeads: {
-      get: (signal?: AbortSignal) => get<WebsiteLeadSettings>("/connections/website-leads", signal),
-      update: (input: { defaultOwnerId: string | null }) =>
-        send<WebsiteLeadSettings>("PUT", "/connections/website-leads", input),
     },
     whatsapp: {
       get: (signal?: AbortSignal) =>

@@ -90,12 +90,6 @@ describe("backend client", () => {
       "/api/v1/connections/whatsapp/connect",
     ],
     [
-      "website lead owner update",
-      () => backend.connections.websiteLeads.update({ defaultOwnerId: null }),
-      "PUT",
-      "/api/v1/connections/website-leads",
-    ],
-    [
       "workspace create",
       () => backend.workspaces.create("Second Brand"),
       "POST",

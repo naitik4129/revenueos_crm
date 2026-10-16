@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as MeetingsRouteImport } from './routes/meetings'
-import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as TasksRouteImport } from './routes/tasks'
 import { Route as AutomationsIndexRouteImport } from './routes/automations.index'
@@ -36,11 +35,6 @@ const AdminRoute = AdminRouteImport.update({
 const MeetingsRoute = MeetingsRouteImport.update({
   id: '/meetings',
   path: '/meetings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PrivacyRoute = PrivacyRouteImport.update({
-  id: '/privacy',
-  path: '/privacy',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsRoute = SettingsRouteImport.update({
@@ -94,7 +88,6 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/meetings': typeof MeetingsRoute
-  '/privacy': typeof PrivacyRoute
   '/settings': typeof SettingsRoute
   '/tasks': typeof TasksRoute
   '/automations/runs': typeof AutomationsRunsRoute
@@ -109,7 +102,6 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/meetings': typeof MeetingsRoute
-  '/privacy': typeof PrivacyRoute
   '/settings': typeof SettingsRoute
   '/tasks': typeof TasksRoute
   '/automations/runs': typeof AutomationsRunsRoute
@@ -125,7 +117,6 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/meetings': typeof MeetingsRoute
-  '/privacy': typeof PrivacyRoute
   '/settings': typeof SettingsRoute
   '/tasks': typeof TasksRoute
   '/automations/runs': typeof AutomationsRunsRoute
@@ -142,7 +133,6 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/meetings'
-    | '/privacy'
     | '/settings'
     | '/tasks'
     | '/automations/runs'
@@ -157,7 +147,6 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/meetings'
-    | '/privacy'
     | '/settings'
     | '/tasks'
     | '/automations/runs'
@@ -172,7 +161,6 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/meetings'
-    | '/privacy'
     | '/settings'
     | '/tasks'
     | '/automations/runs'
@@ -188,7 +176,6 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
   MeetingsRoute: typeof MeetingsRoute
-  PrivacyRoute: typeof PrivacyRoute
   SettingsRoute: typeof SettingsRoute
   TasksRoute: typeof TasksRoute
   AutomationsRunsRoute: typeof AutomationsRunsRoute
@@ -221,13 +208,6 @@ declare module '@tanstack/react-router' {
       path: '/meetings'
       fullPath: '/meetings'
       preLoaderRoute: typeof MeetingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/privacy': {
-      id: '/privacy'
-      path: '/privacy'
-      fullPath: '/privacy'
-      preLoaderRoute: typeof PrivacyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings': {
@@ -300,7 +280,6 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
   MeetingsRoute: MeetingsRoute,
-  PrivacyRoute: PrivacyRoute,
   SettingsRoute: SettingsRoute,
   TasksRoute: TasksRoute,
   AutomationsRunsRoute: AutomationsRunsRoute,

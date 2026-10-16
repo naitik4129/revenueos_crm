@@ -12,8 +12,6 @@ import { adminRouter } from "./admin.routes.js";
 import { workspacesRouter } from "./workspaces.routes.js";
 import { connectionsRouter } from "./connections.routes.js";
 import { googleCalendarOAuthRouter } from "./googleCalendarOAuth.routes.js";
-import { createPublicLeadsRouter } from "./publicLeads.routes.js";
-import { env } from "../env.js";
 import { requireAuth, requireSalesperson, requireWorkspace } from "../authMiddleware.js";
 
 export const apiRouter = Router();
@@ -28,14 +26,6 @@ apiRouter.use("/me", meRouter);
 // which workspace's connection row has the matching pending_oauth_state —
 // see connections.service.ts's completeGoogleCalendarOAuth.
 apiRouter.use("/connections/google-calendar", googleCalendarOAuthRouter);
-
-// Public website-form lead intake. Must be mounted before profilesAccessRouter
-// and crmRouter below: both attach requireAuth at the router root, so anything
-// reaching them unauthenticated would be rejected. Authenticates with its own
-// shared-secret header instead, and only exists when explicitly configured.
-if (env.INGEST_API_KEY && env.INGEST_WORKSPACE_ID) {
-  apiRouter.use("/public", createPublicLeadsRouter({ apiKey: env.INGEST_API_KEY, workspaceId: env.INGEST_WORKSPACE_ID }));
-}
 
 apiRouter.use("/admin", adminRouter);
 
