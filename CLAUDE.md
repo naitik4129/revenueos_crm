@@ -16,7 +16,7 @@
 A HubSpot-style CRM for MOTM's team, serving many clients. **One workspace = one client project.**
 The RevenueOS brain does cold outreach; this CRM holds **all** of a client's data — every prospect company/person the brain finds, its AI calls and email campaign activity — and nurtures the qualified leads (email + WhatsApp via Baileys), through calls, meetings, proposals and won/lost.
 
-This repo is a copy of the old CRM (`Lead-Managment-System`), being reworked. `CONTEXT.md` still describes the OLD system until it is refreshed.
+This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT.md` describes the v2 system as it is (refreshed 2026-10-16); this file holds the rules and decisions.
 
 ## Decisions (2026-10-16)
 
@@ -181,7 +181,6 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
 - **`brain_customer_key` check**: confirm `revenueos_projects.brain_customer_key` matches the brain's `customer` text (QuickICP tables) before building brain pushes.
 - **Retention period** for email reply text, call transcripts and recordings: management decision (no auto-delete in V1).
 - **Email Tool results endpoint**: needed before email events beyond `sent` can be pushed.
-- **Refresh `CONTEXT.md`** once the `crm` schema and code are in place (it still describes the old system).
 
 ## Demo mode (2026-10-16)
 `cd Backend && npm run demo` -> http://127.0.0.1:8080, users admin@/sam@/priya@demo.local (password `demo`). Local PGlite + seed + fake Supabase Auth/Storage + API + dry-run worker + Vite, all in one process. Code lives in `Backend/demo/` (never built or shipped); guards and tests are described in `Backend/README.md`. No demo code in `Backend/src`.
