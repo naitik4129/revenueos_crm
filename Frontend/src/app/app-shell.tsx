@@ -4,16 +4,19 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
   Bot,
+  Building2,
   CalendarDays,
   Check,
   ChevronsUpDown,
   FileText,
   Gauge,
+  Handshake,
   ListChecks,
   LogOut,
   Plus,
   Search,
   Settings as SettingsIcon,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -52,13 +55,16 @@ import { supabase } from "@/lib/supabase-client";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: Gauge },
-  { to: "/leads", label: "Leads", icon: Users },
+  { to: "/contacts", label: "Contacts", icon: Users },
+  { to: "/companies", label: "Companies", icon: Building2 },
+  { to: "/deals", label: "Deals", icon: Handshake },
   { to: "/tasks", label: "Tasks", icon: ListChecks },
   { to: "/meetings", label: "Meetings", icon: CalendarDays },
   { to: "/proposals", label: "Proposals", icon: FileText },
   { to: "/automations", label: "Automations", icon: Bot },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ] as const;
+const ADMIN_NAV = { to: "/admin", label: "Admin", icon: ShieldCheck } as const;
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [addOpen, setAddOpen] = useState(false);
@@ -83,6 +89,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     isLoading: workspacesLoading,
   } = useWorkspace();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const isAdmin = currentUser?.role === "Admin";
+  const nav = isAdmin ? [...NAV, ADMIN_NAV] : NAV;
+  const noWorkspace = !workspacesLoading && workspaces.length === 0;
 
   const createWorkspace = useMutation({
     mutationFn: (name: string) => backend.workspaces.create(name),
@@ -170,7 +179,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <ScrollArea className="flex-1 px-2">
             <nav className="space-y-0.5 pb-4">
-              {NAV.map((item) => {
+              {nav.map((item) => {
                 const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
                 return (
                   <Link
@@ -211,7 +220,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <div className="max-h-64 overflow-y-auto">
                   {workspaces.length === 0 && (
                     <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                      {workspacesLoading ? "Loading workspaces…" : "No workspaces yet."}
+                      {workspacesLoading ? "Loading workspaces…" : "You are not in any workspace."}
                     </div>
                   )}
                   {workspaces.map((workspace) => (
@@ -234,18 +243,21 @@ export function AppShell({ children }: { children: ReactNode }) {
                     </button>
                   ))}
                 </div>
-                <div className="mt-1 border-t pt-1">
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-primary hover:bg-accent"
-                    onClick={() => {
-                      setSwitcherOpen(false);
-                      setCreateWorkspaceOpen(true);
-                    }}
-                  >
-                    <Plus className="size-3.5" /> Create workspace
-                  </button>
-                </div>
+                {/* Only admins create workspaces. */}
+                {isAdmin && (
+                  <div className="mt-1 border-t pt-1">
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-primary hover:bg-accent"
+                      onClick={() => {
+                        setSwitcherOpen(false);
+                        setCreateWorkspaceOpen(true);
+                      }}
+                    >
+                      <Plus className="size-3.5" /> Create workspace
+                    </button>
+                  </div>
+                )}
               </PopoverContent>
             </Popover>
             <div className="mt-1 flex items-center gap-2 rounded-md px-2 py-2">
@@ -434,7 +446,14 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           </header>
 
-          <main className="min-w-0 flex-1">{children}</main>
+          <main className="min-w-0 flex-1">
+            {/* Every CRM page needs a workspace; admin pages do not. */}
+            {noWorkspace && !pathname.startsWith("/admin") ? (
+              <NoWorkspace isAdmin={isAdmin} onCreate={() => setCreateWorkspaceOpen(true)} />
+            ) : (
+              children
+            )}
+          </main>
         </div>
       </div>
 
@@ -445,8 +464,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <DialogHeader>
             <DialogTitle>Create workspace</DialogTitle>
             <DialogDescription>
-              Gives this brand or entity its own leads, workflows, templates, and Email/WhatsApp/
-              Calendar connections.
+              One workspace per client project: its own contacts, companies, deals, workflows,
+              templates and Email/WhatsApp/Calendar connections.
             </DialogDescription>
           </DialogHeader>
           <div>
@@ -535,6 +554,24 @@ export function AppShell({ children }: { children: ReactNode }) {
         </CommandList>
       </CommandDialog>
     </AddLeadContext.Provider>
+  );
+}
+
+function NoWorkspace({ isAdmin, onCreate }: { isAdmin: boolean; onCreate: () => void }) {
+  return (
+    <div className="mx-auto max-w-md px-6 py-20 text-center">
+      <h1 className="text-lg font-semibold">No workspace yet</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
+        {isAdmin
+          ? "Create a workspace for a client project to get started."
+          : "You are not a member of any workspace. Ask an admin to add you to one."}
+      </p>
+      {isAdmin && (
+        <Button className="mt-5" onClick={onCreate}>
+          <Plus className="size-4" /> Create workspace
+        </Button>
+      )}
+    </div>
   );
 }
 

@@ -3,6 +3,15 @@ import type {
   AppNotification,
   AutomationMode,
   Call,
+  Company,
+  Contact,
+  ContactCall,
+  ContactStatus,
+  CrmTimelineEvent,
+  DashboardSummary,
+  Deal,
+  DealOutcome,
+  EmailActivity,
   CallConnectedOutcome,
   CallNotConnectedReason,
   Contactability,
@@ -10,10 +19,12 @@ import type {
   LeadLossReason,
   LeadNote,
   LeadSource,
+  LifecycleStage,
   LifecycleState,
   Meeting,
   MeetingOutcome,
   MeetingStatus,
+  Paged,
   PipelineStage,
   Proposal,
   ProposalStatus,
@@ -296,23 +307,30 @@ export interface UpdateTemplateInput {
   isDefaultMeetingScheduled?: boolean | undefined;
 }
 
-export interface DashboardSummary {
-  activeLeads: number;
-  tasksDueToday: number;
-  overdueActions: number;
-  meetingsToday: number;
-  proposalFollowUps: number;
-  leadsWithNoNextAction: number;
-  automationFailures: number;
-  pipelineFunnel: { label: string; value: number }[];
-  todaysQueue: {
-    id: string;
-    leadId: string;
-    title: string;
-    type: TaskType;
-    dueAt: string;
-    ownerId?: string;
-  }[];
+export interface Page {
+  limit?: number;
+  offset?: number;
+}
+export interface ContactFilters extends Page {
+  search?: string;
+  lifecycleStage?: LifecycleStage;
+  status?: ContactStatus;
+  ownerId?: string;
+  companyId?: string;
+}
+export interface CompanyFilters extends Page {
+  search?: string;
+  ownerId?: string;
+}
+export interface DealFilters extends Page {
+  outcome?: DealOutcome;
+  stage?: PipelineStage;
+  ownerId?: string;
+  automationMode?: AutomationMode;
+  contactId?: string;
+  companyId?: string;
+  missingNextAction?: boolean;
+  search?: string;
 }
 
 export interface AdminUser {
@@ -329,6 +347,7 @@ export interface Workspace {
   name: string;
   slug: string;
   isActive: boolean;
+  platformProjectId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -459,6 +478,37 @@ export const backend = {
       disconnect: () =>
         send<GoogleCalendarConnection>("POST", "/connections/google-calendar/disconnect"),
     },
+  },
+  companies: {
+    list: (params?: CompanyFilters, signal?: AbortSignal) =>
+      get<Paged<Company>>(query("/companies", { ...params }), signal),
+    get: (id: string, signal?: AbortSignal) => get<Company>(`/companies/${id}`, signal),
+    contacts: (id: string, params?: Page, signal?: AbortSignal) =>
+      get<Paged<Contact>>(query(`/companies/${id}/contacts`, { ...params }), signal),
+    deals: (id: string, params?: Page, signal?: AbortSignal) =>
+      get<Paged<Deal>>(query(`/companies/${id}/deals`, { ...params }), signal),
+    timeline: (id: string, params?: Page, signal?: AbortSignal) =>
+      get<{ data: CrmTimelineEvent[] }>(query(`/companies/${id}/timeline`, { ...params }), signal),
+  },
+  contacts: {
+    list: (params?: ContactFilters, signal?: AbortSignal) =>
+      get<Paged<Contact>>(query("/contacts", { ...params }), signal),
+    get: (id: string, signal?: AbortSignal) => get<Contact>(`/contacts/${id}`, signal),
+    deals: (id: string, params?: Page, signal?: AbortSignal) =>
+      get<Paged<Deal>>(query(`/contacts/${id}/deals`, { ...params }), signal),
+    calls: (id: string, signal?: AbortSignal) =>
+      get<{ data: ContactCall[] }>(`/contacts/${id}/calls`, signal),
+    emailActivities: (id: string, signal?: AbortSignal) =>
+      get<{ data: EmailActivity[] }>(`/contacts/${id}/email-activities`, signal),
+    timeline: (id: string, params?: Page, signal?: AbortSignal) =>
+      get<{ data: CrmTimelineEvent[] }>(query(`/contacts/${id}/timeline`, { ...params }), signal),
+  },
+  deals: {
+    list: (params?: DealFilters, signal?: AbortSignal) =>
+      get<Paged<Deal>>(query("/deals", { ...params }), signal),
+    get: (id: string, signal?: AbortSignal) => get<Deal>(`/deals/${id}`, signal),
+    timeline: (id: string, params?: Page, signal?: AbortSignal) =>
+      get<{ data: CrmTimelineEvent[] }>(query(`/deals/${id}/timeline`, { ...params }), signal),
   },
   leads: {
     list: (params?: LeadFilters, signal?: AbortSignal) =>

@@ -103,9 +103,9 @@ export function LeadDetailPage({ leadId }: { leadId: string }) {
   // Set when Meeting Agreed opens the schedule dialog — enrolling into this
   // trigger's workflow is deferred until the meeting is actually saved (see
   // ScheduleMeetingDialog's onSave below).
-  const [pendingWorkflowTrigger, setPendingWorkflowTrigger] = useState<
-    WorkflowTrigger | undefined
-  >(undefined);
+  const [pendingWorkflowTrigger, setPendingWorkflowTrigger] = useState<WorkflowTrigger | undefined>(
+    undefined,
+  );
   const [note, setNote] = useState("");
   const openEnroll = (trigger?: WorkflowTrigger) => {
     setEnrollTriggerFilter(trigger);

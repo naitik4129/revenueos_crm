@@ -1,17 +1,16 @@
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, CalendarDays, FileText, ListChecks, Users } from "lucide-react";
+import { AlertTriangle, CalendarDays, FileText, ListChecks, Target } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
-import { isOverdue, relDay } from "@/lib/format";
-import { useDashboard, useLeads, useSession } from "@/store";
+import { relDay } from "@/lib/format";
+import { label } from "@/lib/labels";
+import { useDashboard } from "@/store";
+import type { StageCount } from "@/types";
 
 export function DashboardPage() {
   const { summary, isLoading, error } = useDashboard();
-  const { leads } = useLeads();
-  const { userName } = useSession();
   if (isLoading)
     return (
       <div className="p-6">
@@ -24,44 +23,31 @@ export function DashboardPage() {
         <ErrorBlock error={error ?? new Error("Dashboard data is unavailable.")} />
       </div>
     );
-  const max = Math.max(...summary.pipelineFunnel.map((item) => item.value), 1);
   const cards = [
-    { label: "Active leads", value: summary.activeLeads, icon: Users, to: "/leads" as const },
+    { label: "Tasks due today", value: summary.tasks.dueToday, icon: ListChecks, to: "/tasks" },
+    { label: "Overdue tasks", value: summary.tasks.overdue, icon: AlertTriangle, to: "/tasks" },
+    { label: "Meetings today", value: summary.meetingsToday, icon: CalendarDays, to: "/meetings" },
     {
-      label: "Tasks / calls due today",
-      value: summary.tasksDueToday,
-      icon: ListChecks,
-      to: "/tasks" as const,
-    },
-    {
-      label: "Meetings today",
-      value: summary.meetingsToday,
-      icon: CalendarDays,
-      to: "/meetings" as const,
-    },
-    {
-      label: "Proposal follow-ups",
-      value: summary.proposalFollowUps,
+      label: "Proposals awaiting decision",
+      value: summary.proposalsAwaitingDecision,
       icon: FileText,
-      to: "/proposals" as const,
+      to: "/proposals",
     },
     {
-      label: "Overdue actions",
-      value: summary.overdueActions,
-      icon: AlertTriangle,
-      to: "/tasks" as const,
+      label: "Open deals with no next action",
+      value: summary.openDealsMissingNextAction,
+      icon: Target,
+      to: "/deals",
     },
-  ];
+  ] as const;
+  const openStages = summary.openDealsByStage.filter((item) => item.count > 0);
+  const week = summary.activityThisWeek;
+
   return (
     <div className="pb-10">
       <PageHeader
         title="Dashboard"
-        description="Everything due today, plus anything that needs a decision."
-        actions={
-          <Button asChild size="sm" variant="outline">
-            <Link to="/leads">Open leads</Link>
-          </Button>
-        }
+        description="This workspace today, this week and this month (India time)."
       />
       <div className="space-y-4 p-6">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -81,72 +67,63 @@ export function DashboardPage() {
             </Link>
           ))}
         </div>
+
         <div className="grid gap-4 lg:grid-cols-3">
-          <Card className="lg:col-span-2">
+          <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Pipeline funnel</CardTitle>
+              <CardTitle className="text-sm">Contacts by lifecycle stage</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2.5">
-              {summary.pipelineFunnel.map((item) => (
-                <div key={item.label} className="flex items-center gap-3">
-                  <div className="w-24 shrink-0 text-xs text-muted-foreground">{item.label}</div>
-                  <div className="h-6 flex-1 overflow-hidden rounded bg-muted">
-                    <div
-                      className="h-full rounded bg-primary/80"
-                      style={{ width: `${Math.max((item.value / max) * 100, 4)}%` }}
-                    />
-                  </div>
-                  <div className="num w-8 text-right text-sm font-medium">{item.value}</div>
-                </div>
-              ))}
+            <CardContent>
+              <Bars items={summary.lifecycleFunnel} />
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Needs attention</CardTitle>
+              <CardTitle className="text-sm">Open deals by stage</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2">
-              <Attention
-                label="Overdue actions"
-                count={summary.overdueActions}
-                detail="Tasks past their due date"
-                to="/tasks"
-                tone="danger"
+            <CardContent>
+              {openStages.length > 0 ? (
+                <Bars items={openStages} />
+              ) : (
+                <p className="py-6 text-center text-sm text-muted-foreground">No open deals.</p>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Activity</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Stats
+                heading="This week"
+                items={[
+                  ["AI calls", week.aiCalls],
+                  ["Human calls", week.humanCalls],
+                  ["Emails sent", week.emailsSent],
+                  ["Email replies", week.emailsReplied],
+                ]}
               />
-              <Attention
-                label="Leads without a next action"
-                count={summary.leadsWithNoNextAction}
-                detail="Every active lead must have one"
-                to="/leads"
-                tone="warning"
-              />
-              <Attention
-                label="Proposal follow-ups"
-                count={summary.proposalFollowUps}
-                detail="Follow up before they go cold"
-                to="/proposals"
-                tone="warning"
-              />
-              <Attention
-                label="Automation failures"
-                count={summary.automationFailures}
-                detail="Runs that need a retry"
-                to="/automations"
-                tone="info"
+              <Stats
+                heading="This month"
+                items={[
+                  ["Deals won", summary.dealsThisMonth.won],
+                  ["Deals lost", summary.dealsThisMonth.lost],
+                ]}
               />
             </CardContent>
           </Card>
         </div>
+
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Today&apos;s queue</CardTitle>
+            <CardTitle className="text-sm">My queue today</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-sm">
+              <table className="w-full min-w-[600px] text-sm">
                 <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
                   <tr>
-                    {["Lead", "Action", "Type", "Due", "Owner"].map((heading) => (
+                    {["Contact", "Action", "Type", "Due"].map((heading) => (
                       <th key={heading} className="px-4 py-2 font-medium">
                         {heading}
                       </th>
@@ -154,40 +131,22 @@ export function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {summary.todaysQueue.map((task) => {
-                    const lead = leads.find((item) => item.id === task.leadId);
-                    return (
-                      <tr key={task.id} className="border-t hover:bg-accent/40">
-                        <td className="px-4 py-2">
-                          {lead && (
-                            <Link
-                              to="/leads/$leadId"
-                              params={{ leadId: lead.id }}
-                              className="hover:underline"
-                            >
-                              {lead.firstName} {lead.lastName} · {lead.company}
-                            </Link>
-                          )}
-                        </td>
-                        <td className="px-4 py-2">{task.title}</td>
-                        <td className="px-4 py-2">
-                          <StatusBadge value={task.type} tone="neutral" />
-                        </td>
-                        <td
-                          className={`px-4 py-2 text-xs ${isOverdue(task.dueAt) ? "text-destructive" : "text-muted-foreground"}`}
-                        >
-                          {relDay(task.dueAt)}
-                        </td>
-                        <td className="px-4 py-2 text-xs text-muted-foreground">
-                          {userName(task.ownerId)}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {summary.todaysQueue.map((task) => (
+                    <tr key={task.id} className="border-t">
+                      <td className="px-4 py-2">{task.contactName ?? "-"}</td>
+                      <td className="px-4 py-2">{task.title}</td>
+                      <td className="px-4 py-2">
+                        <StatusBadge value={task.type} tone="neutral" />
+                      </td>
+                      <td className="px-4 py-2 text-xs text-muted-foreground">
+                        {relDay(task.dueAt)}
+                      </td>
+                    </tr>
+                  ))}
                   {summary.todaysQueue.length === 0 && (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={4}
                         className="px-4 py-8 text-center text-sm text-muted-foreground"
                       >
                         Nothing due today.
@@ -204,29 +163,40 @@ export function DashboardPage() {
   );
 }
 
-function Attention({
-  label,
-  count,
-  detail,
-  tone,
-  to,
-}: {
-  label: string;
-  count: number;
-  detail: string;
-  tone: "danger" | "warning" | "info";
-  to: "/tasks" | "/leads" | "/proposals" | "/automations";
-}) {
+function Bars({ items }: { items: StageCount<string>[] }) {
+  const max = Math.max(...items.map((item) => item.count), 1);
   return (
-    <Link
-      to={to}
-      className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 hover:bg-accent/40"
-    >
-      <div>
-        <div className="text-sm font-medium">{label}</div>
-        <div className="text-xs text-muted-foreground">{detail}</div>
+    <div className="space-y-2">
+      {items.map((item) => (
+        <div key={item.stage} className="flex items-center gap-3">
+          <div className="w-32 shrink-0 truncate text-xs text-muted-foreground">
+            {label(item.stage)}
+          </div>
+          <div className="h-5 flex-1 overflow-hidden rounded bg-muted">
+            <div
+              className="h-full rounded bg-primary/80"
+              style={{ width: `${item.count === 0 ? 0 : Math.max((item.count / max) * 100, 4)}%` }}
+            />
+          </div>
+          <div className="num w-8 text-right text-sm font-medium">{item.count}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Stats({ heading, items }: { heading: string; items: [string, number][] }) {
+  return (
+    <div>
+      <div className="pb-1.5 text-xs font-medium text-muted-foreground">{heading}</div>
+      <div className="grid grid-cols-2 gap-2">
+        {items.map(([name, value]) => (
+          <div key={name} className="rounded-md border px-3 py-2">
+            <div className="num text-lg font-semibold leading-none">{value}</div>
+            <div className="pt-1 text-xs text-muted-foreground">{name}</div>
+          </div>
+        ))}
       </div>
-      <StatusBadge value={String(count)} tone={count === 0 ? "muted" : tone} />
-    </Link>
+    </div>
   );
 }

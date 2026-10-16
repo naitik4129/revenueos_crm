@@ -30,9 +30,7 @@ export function TasksPage() {
   const [view, setView] = useState<View>("today");
   const [owner, setOwner] = useState("all");
   const [callTask, setCallTask] = useState<{ leadId: string; taskId: string } | null>(null);
-  const [scheduleMeetingTask, setScheduleMeetingTask] = useState<{ leadId: string } | null>(
-    null,
-  );
+  const [scheduleMeetingTask, setScheduleMeetingTask] = useState<{ leadId: string } | null>(null);
   const [schedulingMeeting, setSchedulingMeeting] = useState(false);
 
   const filtered = tasks.filter((t) => {

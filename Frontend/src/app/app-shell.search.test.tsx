@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Lead } from "@/types/lead";
 
 const noop = vi.fn(async () => undefined);
+const workspaceState = vi.hoisted(() => ({ list: [{ id: "w1", name: "One" }] }));
 
 const leads: Lead[] = [
   {
@@ -90,9 +91,9 @@ vi.mock("@/store", () => ({
 
 vi.mock("@/store/workspace-context", () => ({
   useWorkspace: () => ({
-    workspaces: [],
-    currentWorkspaceId: null,
-    currentWorkspace: null,
+    workspaces: workspaceState.list,
+    currentWorkspaceId: workspaceState.list[0]?.id ?? null,
+    currentWorkspace: workspaceState.list[0] ?? null,
     setCurrentWorkspaceId: noop,
     isLoading: false,
   }),
@@ -101,7 +102,10 @@ vi.mock("@/store/workspace-context", () => ({
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppShell } from "@/app/app-shell";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  workspaceState.list = [{ id: "w1", name: "One" }];
+});
 
 async function renderShell() {
   const queryClient = new QueryClient();
@@ -203,5 +207,15 @@ describe("AppShell top search bar", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(await screen.findByText("lead detail")).toBeInTheDocument();
     expect(input).toHaveValue("");
+  });
+});
+
+describe("AppShell with no workspace", () => {
+  it("tells a salesperson to ask an admin instead of rendering the page", async () => {
+    workspaceState.list = [];
+    await renderShell();
+    expect(screen.getByText(/not a member of any workspace/)).toBeInTheDocument();
+    expect(screen.queryByText("home")).not.toBeInTheDocument();
+    expect(screen.queryByText("Admin")).not.toBeInTheDocument();
   });
 });

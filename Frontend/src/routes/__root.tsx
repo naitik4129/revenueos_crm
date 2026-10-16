@@ -15,7 +15,7 @@ import { reportError } from "@/lib/telemetry";
 import { AppShell } from "@/app/app-shell";
 import { StoreProvider } from "@/store";
 import { Toaster } from "@/components/ui/sonner";
-import { configurationError } from "@/lib/supabase-client";
+import { configurationError, supabase } from "@/lib/supabase-client";
 import { useSupabaseSession } from "@/lib/use-supabase-session";
 import { LoginPage } from "@/features/auth/login-page";
 import { backend, BackendError } from "@/lib/backend-client";
@@ -185,23 +185,36 @@ function AuthGate({ children, queryClient }: { children: ReactNode; queryClient:
   if (me.isError && me.error instanceof BackendError && me.error.status === 401) {
     return <LoginPage adminMode={adminPath} />;
   }
-  if (me.isError || !me.data) throw me.error;
-  if (me.data.role === "admin") {
-    if (!adminPath) return <Navigate to="/admin" replace />;
-    return <>{children}</>;
+  // A valid shared account with no (or a deactivated) crm.profiles row.
+  if (me.isError && me.error instanceof BackendError && me.error.status === 403) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
+        <BrandLogo variant="mark" className="size-14" />
+        <h1 className="text-lg font-semibold">No CRM access</h1>
+        <p className="max-w-sm text-sm text-muted-foreground">
+          {me.error.message} Ask an admin to give you access.
+        </p>
+        <button
+          onClick={() => void supabase?.auth.signOut()}
+          className="text-sm font-medium text-primary hover:underline"
+        >
+          Sign out
+        </button>
+      </div>
+    );
   }
+  if (me.isError || !me.data) throw me.error;
   if (adminPath) {
     // The Google Calendar OAuth callback (Backend/src/routes/googleCalendarOAuth.routes.ts)
-    // always redirects the browser back to /admin?calendar=connected|error,
-    // since that's this app's one fixed frontend base URL — it doesn't know
-    // which page started the flow. Connections now live at /settings for
-    // salespeople (Admin is user-management only), so forward the landing
+    // always redirects the browser back to /admin?calendar=connected|error, since that's this
+    // app's one fixed frontend base URL. Connections live at /settings, so forward the landing
     // query string there instead of dropping it on the floor.
     if (typeof window !== "undefined" && window.location.search.includes("calendar=")) {
       window.location.replace(`/settings${window.location.search}`);
       return null;
     }
-    return <Navigate to="/" replace />;
+    // Admin pages are for admins only; admins also use every other page.
+    if (me.data.role !== "admin") return <Navigate to="/" replace />;
   }
   return (
     <StoreProvider>

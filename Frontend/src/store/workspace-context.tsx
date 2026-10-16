@@ -6,6 +6,7 @@ import {
   type Workspace,
 } from "@/lib/backend-client";
 import { keys } from "./query";
+import { pickWorkspaceId } from "./workspace-selection";
 
 const STORAGE_KEY = "motmflow.workspaceId";
 
@@ -19,9 +20,10 @@ function readStoredWorkspaceId(): string | null {
     return null;
   }
 }
-function writeStoredWorkspaceId(id: string) {
+function writeStoredWorkspaceId(id: string | null) {
   try {
-    window.localStorage.setItem(STORAGE_KEY, id);
+    if (id) window.localStorage.setItem(STORAGE_KEY, id);
+    else window.localStorage.removeItem(STORAGE_KEY);
   } catch {
     // Selection just won't survive a refresh — not worth surfacing.
   }
@@ -48,7 +50,7 @@ export function useWorkspace() {
 }
 
 /**
- * Loads the salesperson's available workspaces and tracks which one is
+ * Loads the workspaces this user may use (admins: all; salespeople: their memberships) and tracks which one is
  * selected. Every CRM request needs the selected workspace's id as the
  * X-Workspace-Id header (see backend-client.ts), so this provider is the
  * single place that owns the selection and keeps the backend client's
@@ -64,14 +66,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const [storedId, setStoredId] = useState<string | null>(() => readStoredWorkspaceId());
 
-  // Once the list resolves, fall back to the first workspace when the
-  // stored id was never set, or names a workspace that's been deleted or
-  // deactivated since — covers a stale localStorage value without crashing.
-  const currentWorkspaceId = useMemo(() => {
-    if (workspaces.length === 0) return null;
-    if (storedId && workspaces.some((workspace) => workspace.id === storedId)) return storedId;
-    return workspaces[0]!.id;
-  }, [workspaces, storedId]);
+  const currentWorkspaceId = useMemo(
+    () => pickWorkspaceId(workspaces, storedId),
+    [workspaces, storedId],
+  );
 
   const currentWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === currentWorkspaceId) ?? null,
@@ -81,6 +79,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     syncBackendWorkspaceId(currentWorkspaceId);
   }, [currentWorkspaceId]);
+
+  // A saved id the user may no longer use (membership removed, workspace deactivated) is
+  // replaced once the list has loaded, so it does not come back on the next visit.
+  useEffect(() => {
+    if (query.isSuccess && currentWorkspaceId !== storedId) {
+      setStoredId(currentWorkspaceId);
+      writeStoredWorkspaceId(currentWorkspaceId);
+    }
+  }, [query.isSuccess, currentWorkspaceId, storedId]);
 
   const setCurrentWorkspaceId = (id: string) => {
     setStoredId(id);
