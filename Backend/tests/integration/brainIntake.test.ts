@@ -210,9 +210,34 @@ describe("brain intake API (PGlite)", () => {
     expect(later.length).toBe(list.length - 1);
   });
 
-  it("rejects a batch over 500 items and reports invalid items without failing the rest", async () => {
+  it("with since, also returns lifted suppressions so the brain can unblock", async () => {
+    const before = new Date().toISOString();
+    await new Promise((r) => setTimeout(r, 10));
+    const annId = await contactIdOf("p-1");
+    const rajId = (await one(`select id from crm.contacts where phone_e164 = '+919811111111'`)).id;
+    await user("post", `/contacts/${annId}/contactability`, sam, { channel: "email", status: "valid", reason: "Re-subscribed" });
+    await user("post", `/contacts/${rajId}/dnc/reactivate`, sam, { reason: "Asked to be called again" });
+
+    const changes = (await brain(`/suppressions?since=${encodeURIComponent(before)}`)).body.data;
+    expect(changes.find((s: { contactId: string }) => s.contactId === annId)).toMatchObject({ status: "lifted", reasons: [], email: "ann@acme.com" });
+    const raj = changes.find((s: { contactId: string }) => s.contactId === rajId);
+    expect(raj).toMatchObject({ status: "lifted", phone: "+919811111111" });
+    expect(Date.parse(raj.liftedAt)).toBeGreaterThan(Date.parse(before));
+
+    const full = (await brain("/suppressions")).body.data.map((s: { contactId: string }) => s.contactId);
+    expect(full).not.toContain(annId);
+    expect(full).not.toContain(rajId);
+  });
+
+  it("rejects a batch over 500 items and reports item errors as code + short message only", async () => {
     expect((await brain("/contacts", Array(501).fill(ann))).status).toBe(400);
-    const res = await brain("/contacts", [{ source: "quickicp", externalId: "p-20" }, { ...ann, externalId: "p-1" }]);
-    expect(res.body.results.map((r: { status: string }) => r.status)).toEqual(["error", "updated"]);
+    const res = await brain("/contacts", [{ source: "quickicp", externalId: "p-20" }, { ...ann, externalId: "p-1" }, { source: "quickicp" }]);
+    expect(res.body.results.map((r: { status: string }) => r.status)).toEqual(["error", "updated", "error"]);
+    expect(res.body.results[0].error).toEqual({ code: "not_found", message: expect.stringMatching(/^Contact/) });
+    expect(res.body.results[2].error).toEqual({ code: "invalid_input", message: "Invalid: externalId" });
+
+    // A database error (integer out of range) must not leak SQL to the brain.
+    const internal = await brain("/companies", [{ source: "quickicp", externalId: "co-big", name: "Huge", headcount: 3_000_000_000 }]);
+    expect(internal.body.results[0].error).toEqual({ code: "internal_error", message: "Item failed." });
   });
 });

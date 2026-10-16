@@ -11,7 +11,8 @@ export interface RunRow {
   workspace_id: string;
   workflow_id: string;
   workflow_version_id: string;
-  lead_id: string;
+  deal_id: string;
+  contact_id: string;
   current_step_id: string | null;
   status: WorkflowRunStatus;
   started_at: Date;
@@ -29,7 +30,8 @@ export function runToDto(row: RunRow, versionNumber: number) {
     id: row.id,
     workflowId: row.workflow_id,
     version: versionNumber,
-    leadId: row.lead_id,
+    dealId: row.deal_id,
+    contactId: row.contact_id,
     currentStep: row.current_step_id ?? undefined,
     status: row.status,
     startedAt: row.started_at.toISOString(),
@@ -43,8 +45,8 @@ export function runToDto(row: RunRow, versionNumber: number) {
 
 const RUN_SELECT = `
   select r.*, wv.version_number
-    from public.workflow_runs r
-    join public.workflow_versions wv on wv.id = r.workflow_version_id
+    from crm.workflow_runs r
+    join crm.workflow_versions wv on wv.id = r.workflow_version_id
 `;
 
 export async function getRunRowOr404(db: Queryable, workspaceId: string, id: string) {
@@ -56,7 +58,7 @@ export async function getRunRowOr404(db: Queryable, workspaceId: string, id: str
 
 export interface ListRunsFilters {
   workflowId?: string;
-  leadId?: string;
+  dealId?: string;
   status?: WorkflowRunStatus;
 }
 
@@ -68,9 +70,9 @@ export async function listRuns(db: Queryable, workspaceId: string, filters: List
     clauses.push(`r.workflow_id = $${i++}`);
     params.push(filters.workflowId);
   }
-  if (filters.leadId) {
-    clauses.push(`r.lead_id = $${i++}`);
-    params.push(filters.leadId);
+  if (filters.dealId) {
+    clauses.push(`r.deal_id = $${i++}`);
+    params.push(filters.dealId);
   }
   if (filters.status) {
     clauses.push(`r.status = $${i++}`);
@@ -103,7 +105,7 @@ interface StepForScheduling {
 async function nextEnabledStep(db: Queryable, versionId: string, afterOrder = -1): Promise<StepForScheduling | undefined> {
   const result = await db.query<StepForScheduling>(
     `select id, step_order, delay_days, action, template_id, config
-       from public.workflow_steps
+       from crm.workflow_steps
       where workflow_version_id = $1 and is_enabled = true and step_order > $2
       order by step_order asc
       limit 1`,
@@ -112,17 +114,17 @@ async function nextEnabledStep(db: Queryable, versionId: string, afterOrder = -1
   return result.rows[0];
 }
 
-async function insertScheduledAction(db: Queryable, workspaceId: string, runId: string, leadId: string, step: StepForScheduling) {
+async function insertScheduledAction(db: Queryable, workspaceId: string, runId: string, dealId: string, step: StepForScheduling) {
   const scheduledFor = new Date();
   scheduledFor.setUTCDate(scheduledFor.getUTCDate() + step.delay_days);
 
   await db.query(
-    `insert into public.scheduled_actions
-      (workspace_id, lead_id, workflow_run_id, workflow_step_id, action_type, scheduled_for, payload)
+    `insert into crm.scheduled_actions
+      (workspace_id, deal_id, workflow_run_id, workflow_step_id, action_type, scheduled_for, payload)
      values ($1,$2,$3,$4,$5,$6,$7)`,
     [
       workspaceId,
-      leadId,
+      dealId,
       runId,
       step.id,
       step.action,
@@ -134,7 +136,7 @@ async function insertScheduledAction(db: Queryable, workspaceId: string, runId: 
   return scheduledFor;
 }
 
-async function scheduleFirstStep(db: Queryable, workspaceId: string, runId: string, leadId: string, versionId: string) {
+async function scheduleFirstStep(db: Queryable, workspaceId: string, runId: string, dealId: string, versionId: string) {
   const step = await nextEnabledStep(db, versionId);
   if (!step) {
     // No enabled steps to run — nothing to schedule; the run stays
@@ -142,7 +144,7 @@ async function scheduleFirstStep(db: Queryable, workspaceId: string, runId: stri
     return { currentStepId: null as string | null, status: "running" as WorkflowRunStatus, nextRunAt: null as Date | null };
   }
 
-  const scheduledFor = await insertScheduledAction(db, workspaceId, runId, leadId, step);
+  const scheduledFor = await insertScheduledAction(db, workspaceId, runId, dealId, step);
   const status: WorkflowRunStatus = step.delay_days > 0 ? "waiting" : "running";
   return { currentStepId: step.id, status, nextRunAt: scheduledFor };
 }
@@ -158,13 +160,13 @@ async function scheduleFirstStep(db: Queryable, workspaceId: string, runId: stri
  * workspaceId (not re-derived here) since automation.service already has it
  * on hand from the scheduled_action row it's advancing.
  */
-export async function scheduleStepAfter(db: Queryable, workspaceId: string, runId: string, leadId: string, versionId: string, afterOrder: number) {
+export async function scheduleStepAfter(db: Queryable, workspaceId: string, runId: string, dealId: string, versionId: string, afterOrder: number) {
   const step = await nextEnabledStep(db, versionId, afterOrder);
   if (!step) {
     return { currentStepId: null as string | null, status: "completed" as WorkflowRunStatus, nextRunAt: null as Date | null, stepFound: false as const };
   }
 
-  const scheduledFor = await insertScheduledAction(db, workspaceId, runId, leadId, step);
+  const scheduledFor = await insertScheduledAction(db, workspaceId, runId, dealId, step);
   const status: WorkflowRunStatus = step.delay_days > 0 ? "waiting" : "running";
   return { currentStepId: step.id, status, nextRunAt: scheduledFor, stepFound: true as const };
 }
@@ -172,66 +174,68 @@ export async function scheduleStepAfter(db: Queryable, workspaceId: string, runI
 /**
  * Enrolling a lead in a workflow means nothing fires unless the lead's
  * automation is actually on — so enrollment always turns it on. Deliberately
- * does NOT import setAutomationMode from leads.service.ts: that module
+ * does NOT import setAutomationMode from deals.service.ts: that module
  * already imports applyAutomationModeToRuns from this one, and importing
  * back would create a circular dependency between the two files. Mirrors
  * setAutomationMode's own update + timeline event + cascade inline instead,
  * using the same guard (canRunAutomation) so a closed deal or a DNC/merged
  * contact's automation is never resurrected by an enrollment call.
  */
-async function activateAutomationForEnrollment(db: Queryable, leadId: string, reason: string) {
+async function activateAutomationForEnrollment(db: Queryable, dealId: string, reason: string) {
   const result = await db.query<{ automation_mode: AutomationMode; outcome: DealOutcome; contact_status: ContactStatus }>(
     `select d.automation_mode, d.outcome, c.status as contact_status
        from crm.deals d join crm.contacts c on c.id = d.contact_id
       where d.id = $1`,
-    [leadId],
+    [dealId],
   );
   const deal = result.rows[0];
   if (!deal || deal.automation_mode === "active" || !canRunAutomation(deal.outcome, deal.contact_status)) return;
 
-  await db.query(`update crm.deals set automation_mode = 'active', last_activity_at = now() where id = $1`, [leadId]);
-  await addTimelineEvent(db, { dealId: leadId, kind: "automation", title: "Automation Resumed", detail: reason, ...AUTOMATION_ACTOR });
-  await applyAutomationModeToRuns(db, leadId, "active", reason);
+  await db.query(`update crm.deals set automation_mode = 'active', last_activity_at = now() where id = $1`, [dealId]);
+  await addTimelineEvent(db, { dealId: dealId, kind: "automation", title: "Automation Resumed", detail: reason, ...AUTOMATION_ACTOR });
+  await applyAutomationModeToRuns(db, dealId, "active", reason);
 }
 
 /**
  * Enrolls a lead in one specific workflow version: creates the run and
  * schedules its first step, or returns null if the lead already has a
  * non-terminal run against this workflow (no duplicate enrollment). Shared
- * by autoEnroll (per trigger-matched candidate) and enrollLeadInWorkflow
+ * by autoEnroll (per trigger-matched candidate) and enrollDealInWorkflow
  * (a salesperson picking an exact workflow by id, regardless of its
  * trigger). Returns the same DTO shape (camelCase, ISO dates) as every other
  * runs endpoint (pause/resume/cancel/retry), not a raw DB row.
  */
-async function enrollLeadInVersion(
+async function enrollDealInVersion(
   db: Queryable,
   workspaceId: string,
-  leadId: string,
+  dealId: string,
   workflowId: string,
   versionId: string,
   reason: string,
 ): Promise<ReturnType<typeof runToDto> | null> {
   const existing = await db.query<{ id: string }>(
-    `select id from public.workflow_runs
-      where lead_id = $1 and workflow_id = $2 and status in ('running','waiting','paused')`,
-    [leadId, workflowId],
+    `select id from crm.workflow_runs
+      where deal_id = $1 and workflow_id = $2 and status in ('running','waiting','paused')`,
+    [dealId, workflowId],
   );
   if (existing.rows[0]) return null;
 
   const runResult = await db.query<RunRow>(
-    `insert into public.workflow_runs (workspace_id, workflow_id, workflow_version_id, lead_id, status)
-     values ($1,$2,$3,$4,'running') returning *`,
-    [workspaceId, workflowId, versionId, leadId],
+    `insert into crm.workflow_runs (workspace_id, workflow_id, workflow_version_id, deal_id, contact_id, status)
+     select $1, $2, $3, d.id, d.contact_id, 'running' from crm.deals d where d.id = $4 and d.workspace_id = $1
+     returning *`,
+    [workspaceId, workflowId, versionId, dealId],
   );
-  const run = runResult.rows[0]!;
-  const scheduled = await scheduleFirstStep(db, workspaceId, run.id, leadId, versionId);
+  const run = runResult.rows[0];
+  if (!run) throw new NotFoundError("Deal");
+  const scheduled = await scheduleFirstStep(db, workspaceId, run.id, dealId, versionId);
   await db.query(
-    `update public.workflow_runs set current_step_id = $2, status = $3, next_run_at = $4 where id = $1`,
+    `update crm.workflow_runs set current_step_id = $2, status = $3, next_run_at = $4 where id = $1`,
     [run.id, scheduled.currentStepId, scheduled.status, scheduled.nextRunAt],
   );
 
   await addTimelineEvent(db, {
-    dealId: leadId,
+    dealId: dealId,
     kind: "automation",
     title: "Workflow Enrolled",
     detail: reason,
@@ -239,7 +243,7 @@ async function enrollLeadInVersion(
     relatedWorkflowRunId: run.id,
   });
 
-  await activateAutomationForEnrollment(db, leadId, `Automation activated by workflow enrollment: ${reason}`);
+  await activateAutomationForEnrollment(db, dealId, `Automation activated by workflow enrollment: ${reason}`);
 
   const full = await getRunRowOr404(db, workspaceId, run.id);
   return runToDto(full, full.version_number);
@@ -259,7 +263,7 @@ async function enrollLeadInVersion(
 export async function autoEnroll(
   db: Queryable,
   workspaceId: string,
-  leadId: string,
+  dealId: string,
   trigger: WorkflowTrigger,
   reason: string,
 ) {
@@ -267,7 +271,7 @@ export async function autoEnroll(
   const created: ReturnType<typeof runToDto>[] = [];
 
   for (const candidate of candidates) {
-    const run = await enrollLeadInVersion(db, workspaceId, leadId, candidate.workflow_id, candidate.version_id, reason);
+    const run = await enrollDealInVersion(db, workspaceId, dealId, candidate.workflow_id, candidate.version_id, reason);
     if (run) created.push(run);
   }
 
@@ -282,10 +286,10 @@ export async function autoEnroll(
  * scoping workflowId to workspaceId is what stops a lead from being enrolled
  * in another workspace's workflow.
  */
-export async function enrollLeadInWorkflow(
+export async function enrollDealInWorkflow(
   db: Queryable,
   workspaceId: string,
-  leadId: string,
+  dealId: string,
   workflowId: string,
   reason: string,
 ): Promise<ReturnType<typeof runToDto> | null> {
@@ -295,7 +299,7 @@ export async function enrollLeadInWorkflow(
   }
 
   const versionResult = await db.query<{ id: string }>(
-    `select id from public.workflow_versions where workflow_id = $1 and status = 'published'`,
+    `select id from crm.workflow_versions where workflow_id = $1 and status = 'published'`,
     [workflowId],
   );
   const versionId = versionResult.rows[0]?.id;
@@ -303,7 +307,7 @@ export async function enrollLeadInWorkflow(
     throw new ConflictError(`Workflow "${workflow.name}" has no published version to enroll into.`);
   }
 
-  return enrollLeadInVersion(db, workspaceId, leadId, workflowId, versionId, reason);
+  return enrollDealInVersion(db, workspaceId, dealId, workflowId, versionId, reason);
 }
 
 async function setRunStatus(
@@ -316,7 +320,7 @@ async function setRunStatus(
   extraSql?: string,
 ) {
   await db.query(
-    `update public.workflow_runs
+    `update crm.workflow_runs
         set status = $2
             ${status === "cancelled" ? ", cancelled_at = now(), cancel_reason = $3" : ""}
             ${status === "completed" ? ", completed_at = now()" : ""}
@@ -328,7 +332,7 @@ async function setRunStatus(
   const scheduledActionStatus = status === "paused" ? "paused" : status === "cancelled" ? "cancelled" : "pending";
   if (status === "paused" || status === "cancelled") {
     await db.query(
-      `update public.scheduled_actions
+      `update crm.scheduled_actions
           set status = $2 ${status === "cancelled" ? ", cancelled_at = now(), cancel_reason = $3" : ""}
         where workflow_run_id = $1 and status in ('pending','due','paused')`,
       status === "cancelled" ? [run.id, scheduledActionStatus, reason ?? null] : [run.id, scheduledActionStatus],
@@ -339,14 +343,14 @@ async function setRunStatus(
     // executor in this phase, and a future one re-checks eligibility right
     // before it acts (Rule 14), so nothing is "blasted" here (Rule 10).
     await db.query(
-      `update public.scheduled_actions set status = 'pending' where workflow_run_id = $1 and status = 'paused'`,
+      `update crm.scheduled_actions set status = 'pending' where workflow_run_id = $1 and status = 'paused'`,
       [run.id],
     );
   }
 
   const who = actor ? actorEvent(actor) : AUTOMATION_ACTOR;
   await addTimelineEvent(db, {
-    dealId: run.lead_id,
+    dealId: run.deal_id,
     kind: "automation",
     title: timelineTitle,
     detail: reason,
@@ -390,9 +394,9 @@ export async function retryRun(db: Queryable, actor: Actor, workspaceId: string,
   const run = await getRunRowOr404(db, workspaceId, id);
   if (run.status !== "failed") throw new ConflictError(`Cannot retry a run with status "${run.status}".`);
 
-  await db.query(`update public.workflow_runs set status = 'waiting', last_error = null where id = $1`, [id]);
+  await db.query(`update crm.workflow_runs set status = 'waiting', last_error = null where id = $1`, [id]);
   await db.query(
-    `update public.scheduled_actions
+    `update crm.scheduled_actions
         set status = 'pending', attempt_count = 0, last_error = null
       where workflow_run_id = $1 and status = 'failed'`,
     [id],
@@ -400,7 +404,7 @@ export async function retryRun(db: Queryable, actor: Actor, workspaceId: string,
   // A salesperson clicking "Retry" means "try again now" — the failed
   // action's scheduled_for is already in the past, so the worker's next
   // poll picks it up.
-  await addTimelineEvent(db, { dealId: run.lead_id, kind: "automation", title: "Workflow Retried", ...actorEvent(actor), relatedWorkflowRunId: run.id });
+  await addTimelineEvent(db, { dealId: run.deal_id, kind: "automation", title: "Workflow Retried", ...actorEvent(actor), relatedWorkflowRunId: run.id });
   const updated = await getRunRowOr404(db, workspaceId, id);
   return runToDto(updated, updated.version_number);
 }
@@ -410,14 +414,14 @@ export async function retryRun(db: Queryable, actor: Actor, workspaceId: string,
  * mode='paused' pauses in-flight runs; mode='active' resumes paused ones;
  * mode='manual'|'stopped' cancels everything non-terminal — manual means
  * the salesperson takes over, so automated customer-facing runs must stop.
- * Takes leadId only (no workspaceId): every caller already has a
+ * Takes dealId only (no workspaceId): every caller already has a
  * workspace-validated lead in hand (see leads.service.ts's
  * getLeadRowOr404-first pattern).
  */
-export async function applyAutomationModeToRuns(db: Queryable, leadId: string, mode: AutomationMode, reason: string) {
+export async function applyAutomationModeToRuns(db: Queryable, dealId: string, mode: AutomationMode, reason: string) {
   const runs = await db.query<RunRow & { version_number: number }>(
-    `${RUN_SELECT} where r.lead_id = $1 and r.status in ('running','waiting','paused')`,
-    [leadId],
+    `${RUN_SELECT} where r.deal_id = $1 and r.status in ('running','waiting','paused')`,
+    [dealId],
   );
 
   for (const run of runs.rows) {
@@ -432,11 +436,11 @@ export async function applyAutomationModeToRuns(db: Queryable, leadId: string, m
   }
 }
 
-/** Takes leadId only, for the same reason as applyAutomationModeToRuns above. */
-export async function cancelRunsForLead(db: Queryable, leadId: string, reason: string) {
+/** Takes dealId only, for the same reason as applyAutomationModeToRuns above. */
+export async function cancelRunsForDeal(db: Queryable, dealId: string, reason: string) {
   const runs = await db.query<RunRow & { version_number: number }>(
-    `${RUN_SELECT} where r.lead_id = $1 and r.status not in ('completed','cancelled')`,
-    [leadId],
+    `${RUN_SELECT} where r.deal_id = $1 and r.status not in ('completed','cancelled')`,
+    [dealId],
   );
   for (const run of runs.rows) {
     await setRunStatus(db, null, run, "cancelled", "Workflow Cancelled", reason);
@@ -446,7 +450,7 @@ export async function cancelRunsForLead(db: Queryable, leadId: string, reason: s
 export interface ScheduledActionRow {
   id: string;
   workspace_id: string;
-  lead_id: string;
+  deal_id: string;
   workflow_run_id: string;
   workflow_step_id: string;
   action_type: WorkflowStepAction;
@@ -462,7 +466,7 @@ export interface ScheduledActionRow {
 }
 
 export interface ListScheduledActionsFilters {
-  leadId?: string;
+  dealId?: string;
   workflowRunId?: string;
   status?: string;
 }
@@ -471,9 +475,9 @@ export async function listScheduledActions(db: Queryable, workspaceId: string, f
   const clauses: string[] = [`workspace_id = $1`];
   const params: unknown[] = [workspaceId];
   let i = 2;
-  if (filters.leadId) {
-    clauses.push(`lead_id = $${i++}`);
-    params.push(filters.leadId);
+  if (filters.dealId) {
+    clauses.push(`deal_id = $${i++}`);
+    params.push(filters.dealId);
   }
   if (filters.workflowRunId) {
     clauses.push(`workflow_run_id = $${i++}`);
@@ -485,12 +489,12 @@ export async function listScheduledActions(db: Queryable, workspaceId: string, f
   }
   const where = `where ${clauses.join(" and ")}`;
   const result = await db.query<ScheduledActionRow>(
-    `select * from public.scheduled_actions ${where} order by scheduled_for asc`,
+    `select * from crm.scheduled_actions ${where} order by scheduled_for asc`,
     params,
   );
   return result.rows.map((r) => ({
     id: r.id,
-    leadId: r.lead_id,
+    dealId: r.deal_id,
     workflowRunId: r.workflow_run_id,
     workflowStepId: r.workflow_step_id,
     actionType: r.action_type,

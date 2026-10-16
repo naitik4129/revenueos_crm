@@ -301,3 +301,7 @@ export type WhatsappSendStatus = (typeof PROPOSAL_WHATSAPP_SEND_STATUSES)[number
 
 export const NOTIFICATION_KINDS = ["info", "warning", "success", "danger"] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
+
+/** Campaign email status (crm.email_status); declared order = precedence, later wins. */
+export const EMAIL_STATUSES = ["sent", "delivered", "opened", "replied", "bounced", "unsubscribed"] as const;
+export type EmailStatus = (typeof EMAIL_STATUSES)[number];

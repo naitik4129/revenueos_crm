@@ -10,7 +10,9 @@ import { z } from "zod";
 import type { Queryable } from "../dto.js";
 import { withTransaction } from "../db.js";
 import { AppError, NotFoundError, ValidationError } from "../errors.js";
+import { env } from "../env.js";
 import { normalizeEmail } from "../domain/email.js";
+import { EMAIL_STATUSES } from "../domain/enums.js";
 import { normalizePhoneE164 } from "../domain/phone.js";
 import { normalizeDomain } from "./companies.service.js";
 import { advanceLifecycle, markDnc } from "./contacts.service.js";
@@ -18,7 +20,7 @@ import { createDeal } from "./deals.service.js";
 import { addTimelineEvent, BRAIN_ACTOR } from "./timeline.service.js";
 
 export const BRAIN_SOURCES = ["quickicp", "quickhowl", "email_tool"] as const;
-export const EMAIL_EVENTS = ["sent", "delivered", "opened", "replied", "bounced", "unsubscribed"] as const;
+export const EMAIL_EVENTS = EMAIL_STATUSES;
 export const MAX_BATCH = 500;
 
 // --- Payloads ---------------------------------------------------------------------------
@@ -114,7 +116,12 @@ export interface ItemResult {
   externalId?: string;
   status: Status | "error";
   id?: string | null;
-  error?: { code: string; message: string; details?: unknown };
+  error?: { code: string; message: string };
+}
+
+/** Details stay in the server log; the brain gets a code and a short message only. */
+function logItemError(workspaceId: string, index: number, ref: string | undefined, err: unknown) {
+  if (env.NODE_ENV !== "test") console.error(`[brain] workspace ${workspaceId} item ${index} (${ref ?? "no id"}) failed:`, err);
 }
 
 /** Each item is validated and written in its own transaction; one bad item never fails the batch. */
@@ -130,16 +137,16 @@ export async function runBatch<T>(
     const ref = typeof r?.externalId === "string" ? r.externalId : typeof r?.messageId === "string" ? r.messageId : undefined;
     const parsed = schema.safeParse(raw);
     if (!parsed.success) {
-      results.push({ index, externalId: ref, status: "error", error: { code: "invalid_input", message: "Item failed validation.", details: parsed.error.flatten() } });
+      const fields = [...new Set(parsed.error.issues.map((i) => i.path.join(".") || "item"))].slice(0, 5);
+      logItemError(workspaceId, index, ref, parsed.error.flatten());
+      results.push({ index, externalId: ref, status: "error", error: { code: "invalid_input", message: `Invalid: ${fields.join(", ")}` } });
       continue;
     }
     try {
       results.push({ index, externalId: ref, ...(await withTransaction((db) => handle(db, workspaceId, parsed.data))) });
     } catch (err) {
-      const error =
-        err instanceof AppError
-          ? { code: err.code, message: err.message, details: err.details }
-          : { code: "internal_error", message: err instanceof Error ? err.message : "Item failed." };
+      logItemError(workspaceId, index, ref, err);
+      const error = err instanceof AppError ? { code: err.code, message: err.message } : { code: "internal_error", message: "Item failed." };
       results.push({ index, externalId: ref, status: "error", error });
     }
   }
@@ -497,10 +504,16 @@ export async function applyHandover(db: Queryable, workspaceId: string, item: z.
 
 // --- Suppressions --------------------------------------------------------------------------------
 
+const BLOCKED_CHANNEL = `((ch.channel = 'email' and ch.status in ('unsubscribed', 'permanent_bounce'))
+   or (ch.channel = 'phone' and ch.status = 'do_not_contact')
+   or (ch.channel = 'whatsapp' and ch.status in ('do_not_contact', 'opted_out')))`;
+
 /**
- * Everyone the brain must not contact: DNC contacts, unsubscribed/bounced emails, and phone /
- * WhatsApp opt-outs. Without `since` this is the full current list; with it, only entries that
- * changed after it (a lifted DNC simply disappears from the full list).
+ * Who the brain must not contact. Without `since`: the full current list. With `since`: every
+ * contact whose suppression changed after it, including lifts (status "lifted"), so the brain
+ * can unblock. A DNC lift comes from dnc_events; a channel set back to an allowed status after
+ * `since` counts as a lift (channels keep no history). A contact still blocked for another
+ * reason is reported as "suppressed" with its current reasons.
  */
 export async function listSuppressions(db: Queryable, workspaceId: string, q: { since?: string; limit?: number }) {
   const limit = Math.min(q.limit ?? 1000, 5000);
@@ -508,7 +521,7 @@ export async function listSuppressions(db: Queryable, workspaceId: string, q: { 
     contact_id: string;
     email: string | null;
     phone_e164: string | null;
-    reasons: string[];
+    reasons: string[] | null;
     external_ids: { source: string; externalId: string }[] | null;
     changed_at: Date;
   }>(
@@ -519,33 +532,39 @@ export async function listSuppressions(db: Queryable, workspaceId: string, q: { 
                    when ch.channel = 'phone' then 'phone_do_not_contact'
                    else 'whatsapp_' || ch.status end as reason,
               ch.updated_at as changed_at
-         from crm.contact_channels ch
-        where (ch.channel = 'email' and ch.status in ('unsubscribed', 'permanent_bounce'))
-           or (ch.channel = 'phone' and ch.status = 'do_not_contact')
-           or (ch.channel = 'whatsapp' and ch.status in ('do_not_contact', 'opted_out'))
+         from crm.contact_channels ch where ${BLOCKED_CHANNEL}
        union all
        select id, 'do_not_contact', dnc_at from crm.contacts where status = 'do_not_contact'
+     ),
+     lifted as (
+       select contact_id, created_at as changed_at from crm.dnc_events where action = 'reactivated'
+       union all
+       select ch.contact_id, ch.updated_at from crm.contact_channels ch where not ${BLOCKED_CHANNEL}
+     ),
+     changes as (
+       select contact_id, reason, changed_at from blocked
+       union all
+       select contact_id, null, changed_at from lifted where $2::timestamptz is not null
      )
      select c.id as contact_id, c.email, c.phone_e164,
-            array_agg(distinct b.reason order by b.reason) as reasons,
-            max(b.changed_at) as changed_at,
+            array_agg(distinct x.reason order by x.reason) filter (where x.reason is not null) as reasons,
+            max(x.changed_at) as changed_at,
             (select json_agg(json_build_object('source', r.source, 'externalId', r.external_id) order by r.source)
                from crm.external_refs r where r.contact_id = c.id) as external_ids
-       from blocked b
-       join crm.contacts c on c.id = b.contact_id and c.workspace_id = $1 and c.status <> 'merged'
+       from changes x
+       join crm.contacts c on c.id = x.contact_id and c.workspace_id = $1 and c.status <> 'merged'
       group by c.id
-     having $2::timestamptz is null or max(b.changed_at) > $2::timestamptz
+     having $2::timestamptz is null or max(x.changed_at) > $2::timestamptz
       order by changed_at, c.id
       limit $3`,
     [workspaceId, q.since ?? null, limit],
   );
-  const data = result.rows.map((r) => ({
-    contactId: r.contact_id,
-    email: r.email,
-    phone: r.phone_e164,
-    externalIds: r.external_ids ?? [],
-    reasons: r.reasons,
-    changedAt: r.changed_at.toISOString(),
-  }));
+  const data = result.rows.map((r) => {
+    const changedAt = r.changed_at.toISOString();
+    const base = { contactId: r.contact_id, email: r.email, phone: r.phone_e164, externalIds: r.external_ids ?? [] };
+    return r.reasons?.length
+      ? { ...base, status: "suppressed" as const, reasons: r.reasons, changedAt }
+      : { ...base, status: "lifted" as const, reasons: [], changedAt, liftedAt: changedAt };
+  });
   return { data, nextSince: data.at(-1)?.changedAt ?? q.since ?? null };
 }

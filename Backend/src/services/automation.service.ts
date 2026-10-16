@@ -7,7 +7,7 @@ import { getRunRowOr404, scheduleStepAfter, type RunRow } from "./runs.service.j
 import { getDealOr404, type DealRow } from "./deals.service.js";
 import { canRunAutomation } from "../domain/pipeline.js";
 import { createTask } from "./tasks.service.js";
-import { getLatestMeetingForLead, toRenderMeeting } from "./meetings.service.js";
+import { getLatestMeetingForDeal, toRenderMeeting } from "./meetings.service.js";
 import type { TemplateRenderMeeting } from "../domain/templateRenderer.js";
 
 /**
@@ -192,7 +192,7 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
     );
     contactStatus = contactResult.rows[0]?.status;
 
-    const meetingRow = await getLatestMeetingForLead(db, lead.id);
+    const meetingRow = await getLatestMeetingForDeal(db, lead.id);
     meeting = meetingRow ? toRenderMeeting(meetingRow) : null;
   }
 
@@ -333,20 +333,20 @@ async function advanceRun(db: Queryable, run: RunRow) {
     afterOrder = stepResult.rows[0]?.step_order ?? -1;
   }
 
-  const result = await scheduleStepAfter(db, run.workspace_id, run.id, run.lead_id, run.workflow_version_id, afterOrder);
+  const result = await scheduleStepAfter(db, run.workspace_id, run.id, run.deal_id, run.workflow_version_id, afterOrder);
 
   if (result.stepFound) {
     await db.query(
       `update public.workflow_runs set current_step_id = $2, status = $3, next_run_at = $4 where id = $1`,
       [run.id, result.currentStepId, result.status, result.nextRunAt],
     );
-    await addTimelineEvent(db, { dealId: run.lead_id, kind: "automation", title: "Workflow Advanced", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
+    await addTimelineEvent(db, { dealId: run.deal_id, kind: "automation", title: "Workflow Advanced", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
   } else {
     await db.query(
       `update public.workflow_runs set current_step_id = null, status = 'completed', completed_at = now(), next_run_at = null where id = $1`,
       [run.id],
     );
-    await addTimelineEvent(db, { dealId: run.lead_id, kind: "automation", title: "Workflow Completed", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
+    await addTimelineEvent(db, { dealId: run.deal_id, kind: "automation", title: "Workflow Completed", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
   }
 
   return getRunRowOr404(db, run.workspace_id, run.id);
@@ -384,9 +384,8 @@ export async function executeInternalAction(db: Queryable, actionId: string) {
   if (action.action_type === "create_call_task" || action.action_type === "create_follow_up_task") {
     const taskType: TaskType = action.action_type === "create_call_task" ? "call" : "follow_up";
     await createTask(db, null, action.workspace_id, {
-      leadId: lead.id,
+      dealId: lead.id,
       ownerId: lead.owner_id,
-      ownerName: lead.owner_name,
       type: taskType,
       title: config ?? (taskType === "call" ? "Follow-up call" : "Follow-up task"),
       dueAt: new Date().toISOString(),

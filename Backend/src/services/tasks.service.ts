@@ -1,12 +1,15 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, NotFoundError, ValidationError } from "../errors.js";
-import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import type { TaskType } from "../domain/enums.js";
+import { userNameSql } from "./profiles.service.js";
+import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR, toEventActor, type EventActor } from "./timeline.service.js";
 
 export interface TaskRow {
   id: string;
-  lead_id: string;
+  workspace_id: string;
+  deal_id: string | null;
+  contact_id: string | null;
   owner_id: string | null;
   owner_name: string | null;
   task_type: TaskType;
@@ -15,7 +18,6 @@ export interface TaskRow {
   status: "open" | "completed" | "cancelled";
   origin: "manual" | "automation";
   created_by: string | null;
-  created_by_name: string | null;
   source_workflow_run_id: string | null;
   source_workflow_step_id: string | null;
   completed_at: Date | null;
@@ -25,10 +27,13 @@ export interface TaskRow {
   updated_at: Date;
 }
 
+const TASK_SELECT = `select t.*, ${userNameSql("t.owner_id")} as owner_name from crm.tasks t`;
+
 export function taskToDto(row: TaskRow) {
   return {
     id: row.id,
-    leadId: row.lead_id,
+    dealId: row.deal_id ?? undefined,
+    contactId: row.contact_id ?? undefined,
     ownerId: row.owner_id ?? undefined,
     ownerName: row.owner_name ?? undefined,
     type: row.task_type,
@@ -47,9 +52,11 @@ export function taskToDto(row: TaskRow) {
 }
 
 export interface CreateTaskInput {
-  leadId: string;
+  /** A deal task (its contact is taken from the deal) ... */
+  dealId?: string | null;
+  /** ... or a contact-only task (e.g. a prospect's callback). */
+  contactId?: string | null;
   ownerId?: string | null;
-  ownerName?: string | null;
   type: TaskType;
   title: string;
   dueAt: string;
@@ -59,78 +66,74 @@ export interface CreateTaskInput {
 }
 
 /**
- * Creates a task (manual or automation) and logs it to the timeline. This IS
- * the next-action mechanism (see migration SECTION 8) — there is no
- * separate "next action" write; callers that also want to log a
- * lead-level activity note for a stage/automation change do so themselves.
- *
- * Verifies input.leadId belongs to workspaceId before inserting (tasks has
- * no direct FK enforcement of that relationship) — this is the one place a
- * task's workspace is decided, so every task always carries its parent
- * lead's workspace_id.
+ * Creates a task and logs it on the timeline. Tasks are the next-action mechanism. The deal or
+ * contact is checked against workspaceId here, so a task always lives in its parent's workspace.
  */
-export async function createTask(
-  db: Queryable,
-  actor: Actor | null,
-  workspaceId: string,
-  input: CreateTaskInput,
-): Promise<TaskRow> {
+export async function createTask(db: Queryable, actor: Actor | EventActor | null, workspaceId: string, input: CreateTaskInput): Promise<TaskRow> {
   if (!input.title.trim()) throw new ValidationError("Task title is required.");
   const origin = input.origin ?? "manual";
   if (origin === "automation" && !input.sourceWorkflowRunId) {
     throw new ValidationError("Automation-originated tasks require sourceWorkflowRunId.");
   }
 
-  const lead = await db.query<{ id: string }>(`select id from public.leads where id = $1 and workspace_id = $2`, [input.leadId, workspaceId]);
-  if (!lead.rows[0]) throw new NotFoundError("Lead");
+  let contactId = input.contactId ?? null;
+  if (input.dealId) {
+    const deal = await db.query<{ contact_id: string }>(`select contact_id from crm.deals where id = $1 and workspace_id = $2`, [input.dealId, workspaceId]);
+    if (!deal.rows[0]) throw new NotFoundError("Deal");
+    contactId = deal.rows[0].contact_id;
+  } else if (contactId) {
+    const contact = await db.query(`select 1 from crm.contacts where id = $1 and workspace_id = $2`, [contactId, workspaceId]);
+    if (!contact.rows[0]) throw new NotFoundError("Contact");
+  } else {
+    throw new ValidationError("A task needs a deal or a contact.");
+  }
 
-  const result = await db.query<TaskRow>(
-    `insert into public.tasks
-      (workspace_id, lead_id, owner_id, owner_name, task_type, title, due_at, origin,
-       source_workflow_run_id, source_workflow_step_id, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-     returning *`,
-    [
-      workspaceId,
-      input.leadId,
-      input.ownerId ?? null,
-      input.ownerName ?? null,
-      input.type,
-      input.title.trim(),
-      input.dueAt,
-      origin,
-      input.sourceWorkflowRunId ?? null,
-      input.sourceWorkflowStepId ?? null,
-      actor?.id ?? null,
-      actor?.fullName ?? (origin === "automation" ? "Automation" : null),
-    ],
-  );
-  const task = result.rows[0]!;
+  const user = actor && "fullName" in actor ? actor : null;
+  const id = (
+    await db.query<{ id: string }>(
+      `insert into crm.tasks
+        (workspace_id, deal_id, contact_id, owner_id, task_type, title, due_at, origin,
+         source_workflow_run_id, source_workflow_step_id, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
+      [
+        workspaceId,
+        input.dealId ?? null,
+        contactId,
+        input.ownerId ?? null,
+        input.type,
+        input.title.trim(),
+        input.dueAt,
+        origin,
+        input.sourceWorkflowRunId ?? null,
+        input.sourceWorkflowStepId ?? null,
+        user?.id ?? null,
+      ],
+    )
+  ).rows[0]!.id;
 
-  const who = origin === "automation" ? AUTOMATION_ACTOR : actor ? actorEvent(actor) : AUTOMATION_ACTOR;
   await addTimelineEvent(db, {
-    dealId: input.leadId,
+    dealId: input.dealId ?? null,
+    contactId,
     kind: "task",
     title: "Task Created",
-    detail: task.title,
-    actorId: who.actorId,
-    actorName: who.actorName,
-    actorSource: who.actorSource,
-    relatedTaskId: task.id,
+    detail: input.title.trim(),
+    ...(origin === "automation" ? AUTOMATION_ACTOR : toEventActor(actor)),
+    relatedTaskId: id,
   });
-
-  return task;
+  return getTaskOr404(db, workspaceId, id);
 }
 
-async function getTaskOr404(db: Queryable, workspaceId: string, id: string): Promise<TaskRow> {
-  const result = await db.query<TaskRow>(`select * from public.tasks where id = $1 and workspace_id = $2`, [id, workspaceId]);
+export async function getTaskOr404(db: Queryable, workspaceId: string, id: string): Promise<TaskRow> {
+  const result = await db.query<TaskRow>(`${TASK_SELECT} where t.id = $1 and t.workspace_id = $2`, [id, workspaceId]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Task");
   return row;
 }
 
+const subject = (t: TaskRow) => ({ dealId: t.deal_id, contactId: t.contact_id });
+
 export interface UpdateTaskInput {
-  ownerId?: string;
+  ownerId?: string | null;
   type?: TaskType;
   title?: string;
   dueAt?: string;
@@ -143,185 +146,90 @@ export async function updateTask(db: Queryable, actor: Actor, workspaceId: strin
 
   const sets: string[] = [];
   const params: unknown[] = [];
-  let i = 1;
-  const push = (column: string, value: unknown) => { sets.push(`${column} = $${i++}`); params.push(value); };
-  if (patch.ownerId !== undefined) push("owner_id", patch.ownerId);
-  if (patch.type !== undefined) push("task_type", patch.type);
-  if (patch.title !== undefined) push("title", patch.title.trim());
-  if (patch.dueAt !== undefined) push("due_at", patch.dueAt);
-  if (sets.length === 0) return taskToDto(current);
+  const set = (col: string, value: unknown) => sets.push(`${col} = $${params.push(value)}`);
+  if (patch.ownerId !== undefined) set("owner_id", patch.ownerId);
+  if (patch.type !== undefined) set("task_type", patch.type);
+  if (patch.title !== undefined) set("title", patch.title.trim());
+  if (patch.dueAt !== undefined) set("due_at", patch.dueAt);
+  if (sets.length === 0) return current;
 
-  params.push(id);
-  const result = await db.query<TaskRow>(`update public.tasks set ${sets.join(", ")} where id = $${i} returning *`, params);
-  const task = result.rows[0]!;
-  await addTimelineEvent(db, { dealId: task.lead_id, kind: "task", title: "Task Updated", detail: task.title, ...actorEvent(actor), relatedTaskId: task.id });
-  return taskToDto(task);
+  await db.query(`update crm.tasks set ${sets.join(", ")} where id = $${params.push(id)}`, params);
+  const task = await getTaskOr404(db, workspaceId, id);
+  await addTimelineEvent(db, { ...subject(task), kind: "task", title: "Task Updated", detail: task.title, ...actorEvent(actor), relatedTaskId: id });
+  return task;
 }
 
 export async function completeTask(db: Queryable, actor: Actor, workspaceId: string, id: string): Promise<TaskRow> {
   const existing = await getTaskOr404(db, workspaceId, id);
   if (existing.status !== "open") return existing;
-
-  const result = await db.query<TaskRow>(
-    `update public.tasks set status = 'completed', completed_at = now() where id = $1 returning *`,
-    [id],
-  );
-  const task = result.rows[0]!;
-  await addTimelineEvent(db, {
-    dealId: task.lead_id,
-    kind: "task",
-    title: "Task Completed",
-    detail: task.title,
-    ...actorEvent(actor),
-    relatedTaskId: task.id,
-  });
-  return task;
+  await db.query(`update crm.tasks set status = 'completed', completed_at = now() where id = $1`, [id]);
+  await addTimelineEvent(db, { ...subject(existing), kind: "task", title: "Task Completed", detail: existing.title, ...actorEvent(actor), relatedTaskId: id });
+  return getTaskOr404(db, workspaceId, id);
 }
 
-export async function cancelTask(
-  db: Queryable,
-  actor: Actor | null,
-  workspaceId: string,
-  id: string,
-  reason?: string,
-): Promise<TaskRow> {
+export async function cancelTask(db: Queryable, actor: Actor | null, workspaceId: string, id: string, reason?: string): Promise<TaskRow> {
   const existing = await getTaskOr404(db, workspaceId, id);
   if (existing.status !== "open") return existing;
-
-  const result = await db.query<TaskRow>(
-    `update public.tasks
-       set status = 'cancelled', cancelled_at = now(), cancel_reason = $2
-     where id = $1
-     returning *`,
-    [id, reason ?? null],
-  );
-  const task = result.rows[0]!;
-  const who = actor ? actorEvent(actor) : AUTOMATION_ACTOR;
-  await addTimelineEvent(db, {
-    dealId: task.lead_id,
-    kind: "task",
-    title: "Task Cancelled",
-    detail: reason ?? task.title,
-    actorId: who.actorId,
-    actorName: who.actorName,
-    actorSource: who.actorSource,
-    relatedTaskId: task.id,
-  });
-  return task;
+  await db.query(`update crm.tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = $2 where id = $1`, [id, reason ?? null]);
+  await addTimelineEvent(db, { ...subject(existing), kind: "task", title: "Task Cancelled", detail: reason ?? existing.title, ...toEventActor(actor), relatedTaskId: id });
+  return getTaskOr404(db, workspaceId, id);
 }
 
 /**
- * Cancels every currently-open task for a lead — used on terminal lifecycle
- * transitions. Takes leadId only (no workspaceId): every caller already
- * validated the lead's workspace via getLeadRowOr404 (or equivalent)
- * immediately before calling this, and `lead_id` is a UUID never reused
- * across workspaces, so no additional check is needed here.
+ * Cancels a deal's open tasks (optionally only some types). Callers have already checked the
+ * deal's workspace.
  */
-export async function cancelOpenTasksForLead(
-  db: Queryable,
-  actor: Actor | null,
-  leadId: string,
-  reason: string,
-  taskTypeFilter?: TaskType[],
-): Promise<number> {
-  const filterClause = taskTypeFilter?.length ? `and task_type = any($3::public.task_type[])` : "";
-  const params: unknown[] = [leadId, reason];
-  if (taskTypeFilter?.length) params.push(taskTypeFilter);
-  const result = await db.query<TaskRow>(
-    `update public.tasks
-       set status = 'cancelled', cancelled_at = now(), cancel_reason = $2
-     where lead_id = $1 and status = 'open' ${filterClause}
-     returning *`,
+export async function cancelOpenTasksForDeal(db: Queryable, actor: Actor | null, dealId: string, reason: string, types?: TaskType[]): Promise<number> {
+  const params: unknown[] = [dealId, reason];
+  const typeFilter = types?.length ? `and task_type = any($${params.push(types)}::crm.task_type[])` : "";
+  const result = await db.query<{ id: string; title: string }>(
+    `update crm.tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = $2
+      where deal_id = $1 and status = 'open' ${typeFilter}
+      returning id, title`,
     params,
   );
-  const who = actor ? actorEvent(actor) : AUTOMATION_ACTOR;
   for (const task of result.rows) {
-    await addTimelineEvent(db, {
-      dealId: leadId,
-      kind: "task",
-      title: "Task Cancelled",
-      detail: `${task.title} - ${reason}`,
-      actorId: who.actorId,
-      actorName: who.actorName,
-      actorSource: who.actorSource,
-      relatedTaskId: task.id,
-    });
+    await addTimelineEvent(db, { dealId, kind: "task", title: "Task Cancelled", detail: `${task.title} - ${reason}`, ...toEventActor(actor), relatedTaskId: task.id });
   }
   return result.rowCount ?? 0;
 }
 
 export interface ListTasksFilters {
   ownerId?: string;
-  leadId?: string;
+  dealId?: string;
+  contactId?: string;
   status?: "open" | "completed" | "cancelled";
   type?: TaskType;
-  dueBefore?: string;
   overdueOnly?: boolean;
   dueTodayOnly?: boolean;
+  limit?: number;
+  offset?: number;
 }
 
-export async function listTasks(db: Queryable, workspaceId: string, filters: ListTasksFilters) {
-  const clauses: string[] = [`workspace_id = $1`];
+/** A contact's list includes its deals' tasks (tasks carry the contact). */
+export async function listTasks(db: Queryable, workspaceId: string, f: ListTasksFilters) {
   const params: unknown[] = [workspaceId];
-  let i = 2;
-
-  if (filters.ownerId) {
-    clauses.push(`owner_id = $${i++}`);
-    params.push(filters.ownerId);
+  const where = [`t.workspace_id = $1`];
+  if (f.ownerId) where.push(`t.owner_id = $${params.push(f.ownerId)}`);
+  if (f.dealId) where.push(`t.deal_id = $${params.push(f.dealId)}`);
+  if (f.contactId) where.push(`t.contact_id = $${params.push(f.contactId)}`);
+  if (f.status) where.push(`t.status = $${params.push(f.status)}`);
+  if (f.type) where.push(`t.task_type = $${params.push(f.type)}`);
+  if (f.overdueOnly) where.push(`t.status = 'open' and t.due_at < now()`);
+  if (f.dueTodayOnly) {
+    where.push(`t.status = 'open'
+      and t.due_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
+      and t.due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`);
   }
-  if (filters.leadId) {
-    clauses.push(`lead_id = $${i++}`);
-    params.push(filters.leadId);
-  }
-  if (filters.status) {
-    clauses.push(`status = $${i++}`);
-    params.push(filters.status);
-  }
-  if (filters.type) {
-    clauses.push(`task_type = $${i++}`);
-    params.push(filters.type);
-  }
-  if (filters.overdueOnly) {
-    clauses.push(`status = 'open' and due_at < now()`);
-  }
-  if (filters.dueTodayOnly) {
-    clauses.push(`status = 'open'
-      and due_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
-      and due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`);
-  }
-
-  const where = `where ${clauses.join(" and ")}`;
-  const result = await db.query<TaskRow>(
-    `select * from public.tasks ${where} order by due_at asc`,
+  const limit = Math.min(f.limit ?? 200, 1000);
+  const offset = f.offset ?? 0;
+  const result = await db.query<TaskRow & { total: number }>(
+    `select t.*, ${userNameSql("t.owner_id")} as owner_name, count(*) over()::int as total
+       from crm.tasks t
+      where ${where.join(" and ")}
+      order by t.due_at asc
+      limit $${params.push(limit)} offset $${params.push(offset)}`,
     params,
   );
-  return result.rows.map(taskToDto);
-}
-
-/**
- * Takes leadId only (no workspaceId) for the same reason as
- * cancelOpenTasksForLead above: every caller already has a workspace-
- * validated lead in hand before asking for its next action.
- */
-export async function getLeadNextAction(db: Queryable, leadId: string) {
-  const result = await db.query<{
-    task_id: string;
-    task_type: TaskType;
-    title: string;
-    due_at: Date;
-    owner_id: string | null;
-    owner_name: string | null;
-    origin: "manual" | "automation";
-  }>(`select * from public.lead_next_actions where lead_id = $1`, [leadId]);
-  const row = result.rows[0];
-  if (!row) return null;
-  return {
-    taskId: row.task_id,
-    type: row.task_type,
-    title: row.title,
-    dueAt: row.due_at.toISOString(),
-    ownerId: row.owner_id ?? undefined,
-    ownerName: row.owner_name ?? undefined,
-    origin: row.origin,
-  };
+  return { data: result.rows.map(taskToDto), total: result.rows[0]?.total ?? 0, limit, offset };
 }

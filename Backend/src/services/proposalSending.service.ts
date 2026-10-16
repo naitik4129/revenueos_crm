@@ -151,7 +151,7 @@ export async function createAndSendProposal(actor: Actor, workspaceId: string, i
 
   const created = await withTransaction((client) =>
     createProposal(client, actor, workspaceId, {
-      leadId: input.leadId,
+      dealId: input.leadId,
       title: input.title,
       amount: input.amount,
       notes: input.notes,
@@ -200,7 +200,7 @@ export async function claimQueuedProposalWhatsappSends(db: Queryable, limit: num
 
 export async function processQueuedProposalWhatsappSend(row: ProposalRow): Promise<void> {
   try {
-    const lead = (await getDealOr404(pool, row.workspace_id, row.lead_id)) as DealRow & { owner_name: string | null };
+    const lead = (await getDealOr404(pool, row.workspace_id, row.deal_id)) as DealRow & { owner_name: string | null };
     if (lead.contact_status === "do_not_contact" || !lead.phone_e164) {
       await pool.query(`update public.proposals set whatsapp_send_status = 'failed', whatsapp_send_error = $2 where id = $1`, [
         row.id,

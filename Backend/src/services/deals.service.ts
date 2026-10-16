@@ -18,6 +18,8 @@ import { userNameSql } from "./profiles.service.js";
 import { actorEvent, addTimelineEvent, toEventActor, type EventActor } from "./timeline.service.js";
 import { writeDeletedAudit } from "./companies.service.js";
 import { advanceLifecycle } from "./contacts.service.js";
+import { createTask } from "./tasks.service.js";
+import { applyAutomationModeToRuns } from "./runs.service.js";
 
 /** A deal with the contact/company fields every deal screen and sender needs. */
 export interface DealRow {
@@ -34,7 +36,7 @@ export interface DealRow {
   response_state: ResponseState;
   objection_type: ObjectionType | null;
   interested_later_reason: string | null;
-  interested_later_restart_at: Date | null;
+  interested_later_restart_at: string | null;
   interested_later_next_action: string | null;
   interested_later_decision_owner: string | null;
   loss_reason: LeadLossReason | null;
@@ -101,7 +103,7 @@ export function dealToDto(row: DealRow) {
     responseState: row.response_state,
     objectionType: row.objection_type ?? undefined,
     interestedLaterReason: row.interested_later_reason ?? undefined,
-    interestedLaterRestartAt: row.interested_later_restart_at?.toISOString().slice(0, 10),
+    interestedLaterRestartAt: row.interested_later_restart_at ?? undefined,
     interestedLaterNextAction: row.interested_later_next_action ?? undefined,
     interestedLaterDecisionOwner: row.interested_later_decision_owner ?? undefined,
     lossReason: row.loss_reason ?? undefined,
@@ -145,6 +147,8 @@ export interface CreateDealInput {
   ownerId?: string | null;
   stage?: PipelineStage;
   serviceInterest?: string;
+  /** Default true. logCall passes false: the call it is logging is the first call. */
+  firstCallTask?: boolean;
 }
 
 /**
@@ -173,7 +177,10 @@ export async function createDeal(db: Queryable, actor: Actor | EventActor | null
 
   await addTimelineEvent(db, { dealId: id, kind: "system", title: "Deal Created", ...eventActor(actor) });
   await advanceLifecycle(db, input.contactId, "qualified", actor);
-  // P3: "First call" task; P4: auto-enroll the deal_created workflow.
+  // Every new deal starts with a next action. P4: also auto-enroll the deal_created workflow.
+  if (input.firstCallTask !== false) {
+    await createTask(db, actor, workspaceId, { dealId: id, ownerId, type: "call", title: "First call", dueAt: new Date().toISOString() });
+  }
   return getDealOr404(db, workspaceId, id);
 }
 
@@ -276,10 +283,9 @@ export async function deleteDeal(db: Queryable, actor: Actor, workspaceId: strin
 // --- Automation ---------------------------------------------------------------------------
 
 /**
- * Deal automation switch. Only open/nurture deals of an active contact can change it (the 009
- * guard would force 'stopped' anyway).
- * shortcut: pausing/resuming the deal's in-flight runs (old applyAutomationModeToRuns) moves
- * to runs.service in P4; until then only the deal's mode changes here.
+ * Deal automation switch, cascaded to the deal's in-flight runs (paused / resumed / cancelled).
+ * Only open/nurture deals of an active contact can change it (the 009 guard would force
+ * 'stopped' anyway).
  */
 export async function setAutomationMode(db: Queryable, actor: Actor, workspaceId: string, id: string, mode: AutomationMode, reason?: string) {
   const current = await getDealOr404(db, workspaceId, id);
@@ -289,6 +295,7 @@ export async function setAutomationMode(db: Queryable, actor: Actor, workspaceId
   await db.query(`update crm.deals set automation_mode = $2, last_activity_at = now() where id = $1`, [id, mode]);
   const title = mode === "active" ? "Automation Resumed" : mode === "paused" ? "Automation Paused" : mode === "stopped" ? "Automation Stopped" : "Switched to Manual";
   await addTimelineEvent(db, { dealId: id, kind: "automation", title, detail: reason, ...actorEvent(actor) });
+  await applyAutomationModeToRuns(db, id, mode, reason ?? `Deal automation set to ${mode}`);
   return getDealOr404(db, workspaceId, id);
 }
 

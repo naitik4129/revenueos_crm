@@ -1,20 +1,21 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
-import { DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
+import { ConflictError, DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
 import type { MeetingOutcome, MeetingStatus } from "../domain/enums.js";
 import type { TemplateRenderMeeting } from "../domain/templateRenderer.js";
 import { routeMeetingOutcome } from "../domain/meetingRouting.js";
-import { addTimelineEvent, actorEvent } from "./timeline.service.js";
-import { cancelOpenTasksForLead, createTask } from "./tasks.service.js";
-import { getDealOr404, markWon, moveToNurture, updateDeal, type DealRow } from "./deals.service.js";
-import { autoEnroll, cancelRunsForLead } from "./runs.service.js";
-import { addDaysIso } from "../dto.js";
 import { pipelineStageIndex } from "../domain/pipeline.js";
+import { addDaysIso } from "../dto.js";
+import { userNameSql } from "./profiles.service.js";
+import { addTimelineEvent, actorEvent } from "./timeline.service.js";
+import { cancelOpenTasksForDeal, createTask } from "./tasks.service.js";
+import { getDealOr404, markWon, moveToNurture, updateDeal } from "./deals.service.js";
+import { autoEnroll, cancelRunsForDeal } from "./runs.service.js";
 
 export interface MeetingRow {
   id: string;
   workspace_id: string;
-  lead_id: string;
+  deal_id: string;
   owner_id: string | null;
   owner_name: string | null;
   title: string;
@@ -37,15 +38,16 @@ export interface MeetingRow {
   notify_whatsapp_next_attempt_at: Date | null;
   notify_whatsapp_attempt_count: number;
   created_by: string | null;
-  created_by_name: string | null;
   created_at: Date;
   updated_at: Date;
 }
 
+const MEETING_SELECT = `select m.*, ${userNameSql("m.owner_id")} as owner_name from crm.meetings m`;
+
 function meetingToDto(row: MeetingRow) {
   return {
     id: row.id,
-    leadId: row.lead_id,
+    dealId: row.deal_id,
     ownerId: row.owner_id ?? undefined,
     ownerName: row.owner_name ?? undefined,
     title: row.title,
@@ -73,7 +75,7 @@ export interface ScheduleMeetingParticipant {
 }
 
 export interface ScheduleMeetingInput {
-  leadId: string;
+  dealId: string;
   ownerId?: string;
   title: string;
   at: string;
@@ -82,71 +84,36 @@ export interface ScheduleMeetingInput {
   participants?: ScheduleMeetingParticipant[];
 }
 
-/** The meeting's owner is usually the lead's owner or the acting salesperson — both names are already on hand; only an explicit cross-assignment (input.ownerId pointing at someone else) needs a lookup. */
-async function resolveOwnerName(db: Queryable, ownerId: string, lead: DealRow, actor: Actor): Promise<string | null> {
-  if (ownerId === lead.owner_id) return lead.owner_name;
-  if (ownerId === actor.id) return actor.fullName;
-  const result = await db.query<{ full_name: string }>(`select full_name from public.profiles where id = $1`, [ownerId]);
-  return result.rows[0]?.full_name ?? null;
-}
-
 export async function scheduleMeeting(db: Queryable, actor: Actor, workspaceId: string, input: ScheduleMeetingInput) {
   if (!input.title.trim()) throw new ValidationError("Meeting title is required.");
-  const lead = await getDealOr404(db, workspaceId, input.leadId);
-  if (lead.contact_status === "do_not_contact") throw new DoNotContactError();
+  const deal = await getDealOr404(db, workspaceId, input.dealId);
+  if (deal.contact_status === "do_not_contact") throw new DoNotContactError();
+  if (deal.outcome !== "open") throw new ConflictError(`Meetings can only be booked on an open deal (this one is "${deal.outcome}").`);
+  const ownerId = input.ownerId ?? deal.owner_id ?? actor.id;
 
-  const ownerId = input.ownerId ?? lead.owner_id ?? actor.id;
-  const ownerName = await resolveOwnerName(db, ownerId, lead, actor);
+  // A booked meeting has a confirmed time, so it starts as 'scheduled', not the DB default 'tentative'.
+  const id = (
+    await db.query<{ id: string }>(
+      `insert into crm.meetings (workspace_id, deal_id, owner_id, title, scheduled_at, duration_minutes, meeting_url, status, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,'scheduled',$8) returning id`,
+      [workspaceId, input.dealId, ownerId, input.title.trim(), input.at, input.durationMin ?? 30, input.url ?? null, actor.id],
+    )
+  ).rows[0]!.id;
 
-  // A booked meeting has a confirmed date/time, so it starts life as
-  // 'scheduled' rather than the DB default 'tentative' (which is reserved
-  // for a not-yet-implemented "propose a time" flow) — intentional, not a bug.
-  const result = await db.query<{ id: string }>(
-    `insert into public.meetings (workspace_id, lead_id, owner_id, owner_name, title, scheduled_at, duration_minutes, meeting_url, status, created_by, created_by_name)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,'scheduled',$9,$10) returning id`,
-    [workspaceId, input.leadId, ownerId, ownerName, input.title.trim(), input.at, input.durationMin ?? 30, input.url ?? null, actor.id, actor.fullName],
-  );
-  const id = result.rows[0]!.id;
-
-  const participants = (input.participants ?? []).filter((p) => p.email.trim());
-  for (const participant of participants) {
-    await db.query(`insert into public.meeting_participants (meeting_id, name, email) values ($1,$2,$3)`, [
-      id,
-      participant.name?.trim() || null,
-      participant.email.trim(),
-    ]);
+  for (const p of (input.participants ?? []).filter((p) => p.email.trim())) {
+    await db.query(`insert into crm.meeting_participants (meeting_id, name, email) values ($1, $2, $3)`, [id, p.name?.trim() || null, p.email.trim()]);
   }
+  await addTimelineEvent(db, { dealId: input.dealId, kind: "meeting", title: "Meeting Scheduled", detail: input.title.trim(), ...actorEvent(actor), relatedMeetingId: id });
 
-  await addTimelineEvent(db, { dealId: input.leadId, kind: "meeting", title: "Meeting Scheduled", detail: input.title.trim(), ...actorEvent(actor) });
-
-  // Only advance the funnel forward — a lead already past meeting_scheduled
-  // (e.g. proposal_sent) must not be regressed by booking an additional
-  // meeting on it.
-  if (pipelineStageIndex(lead.stage) < pipelineStageIndex("meeting_scheduled")) {
-    await updateDeal(db, actor, workspaceId, input.leadId, { stage: "meeting_scheduled" });
+  // Only forward: a deal already past meeting_scheduled (e.g. proposal_sent) is not moved back.
+  if (pipelineStageIndex(deal.stage) < pipelineStageIndex("meeting_scheduled")) {
+    await updateDeal(db, actor, workspaceId, input.dealId, { stage: "meeting_scheduled" });
   }
-
-  // Edge case ("Meeting Booked During Nurture"): the objective of any
-  // in-flight nurture was to get a meeting booked — now that it has been,
-  // the old meeting-CTA nurture and its follow-up tasks are obsolete.
-  await cancelRunsForLead(db, input.leadId, "Meeting booked - nurture objective reached");
-  await cancelOpenTasksForLead(db, actor, input.leadId, "Superseded by scheduled meeting", [
-    "follow_up",
-    "nurture",
-    "schedule_meeting",
-    "call",
-  ]);
-
-  await createTask(db, actor, workspaceId, {
-    leadId: input.leadId,
-    ownerId,
-    type: "confirm_meeting",
-    title: "Prepare for the meeting",
-    dueAt: input.at,
-    origin: "manual",
-  });
-
-  await autoEnroll(db, workspaceId, input.leadId, "meeting_scheduled", `Meeting scheduled: ${input.title.trim()}`);
+  // The nurture's goal (a booked meeting) is reached: its runs and follow-ups are obsolete.
+  await cancelRunsForDeal(db, input.dealId, "Meeting booked - nurture objective reached");
+  await cancelOpenTasksForDeal(db, actor, input.dealId, "Superseded by scheduled meeting", ["follow_up", "nurture", "schedule_meeting", "call"]);
+  await createTask(db, actor, workspaceId, { dealId: input.dealId, ownerId, type: "confirm_meeting", title: "Prepare for the meeting", dueAt: input.at });
+  await autoEnroll(db, workspaceId, input.dealId, "meeting_scheduled", `Meeting scheduled: ${input.title.trim()}`);
 
   return getMeetingOr404(db, workspaceId, id);
 }
@@ -156,22 +123,17 @@ export async function getMeetingOr404(db: Queryable, workspaceId: string, id: st
 }
 
 export async function getMeetingRowOr404(db: Queryable, workspaceId: string, id: string): Promise<MeetingRow> {
-  const result = await db.query<MeetingRow>(`select * from public.meetings where id = $1 and workspace_id = $2`, [id, workspaceId]);
+  const result = await db.query<MeetingRow>(`${MEETING_SELECT} where m.id = $1 and m.workspace_id = $2`, [id, workspaceId]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Meeting");
   return row;
 }
 
-/**
- * The meeting a lead's automation should render against — most recently
- * created, excluding ones that never happened or won't. Takes leadId only
- * (no workspaceId): every caller (automation.service.ts's buildContext)
- * already has a workspace-validated lead in hand before calling this.
- */
-export async function getLatestMeetingForLead(db: Queryable, leadId: string): Promise<MeetingRow | null> {
+/** The meeting a deal's automation renders against: the newest one that is still happening or happened. */
+export async function getLatestMeetingForDeal(db: Queryable, dealId: string): Promise<MeetingRow | null> {
   const result = await db.query<MeetingRow>(
-    `select * from public.meetings where lead_id = $1 and status not in ('cancelled', 'failed') order by created_at desc limit 1`,
-    [leadId],
+    `${MEETING_SELECT} where m.deal_id = $1 and m.status not in ('cancelled', 'failed') order by m.created_at desc limit 1`,
+    [dealId],
   );
   return result.rows[0] ?? null;
 }
@@ -186,29 +148,18 @@ export function toRenderMeeting(meeting: MeetingRow): TemplateRenderMeeting {
 }
 
 export interface ListMeetingsFilters {
-  leadId?: string;
+  dealId?: string;
   status?: MeetingStatus;
   ownerId?: string;
 }
 
-export async function listMeetings(db: Queryable, workspaceId: string, filters: ListMeetingsFilters) {
-  const clauses: string[] = [`workspace_id = $1`];
+export async function listMeetings(db: Queryable, workspaceId: string, f: ListMeetingsFilters) {
   const params: unknown[] = [workspaceId];
-  let i = 2;
-  if (filters.leadId) {
-    clauses.push(`lead_id = $${i++}`);
-    params.push(filters.leadId);
-  }
-  if (filters.status) {
-    clauses.push(`status = $${i++}`);
-    params.push(filters.status);
-  }
-  if (filters.ownerId) {
-    clauses.push(`owner_id = $${i++}`);
-    params.push(filters.ownerId);
-  }
-  const where = `where ${clauses.join(" and ")}`;
-  const result = await db.query<MeetingRow>(`select * from public.meetings ${where} order by scheduled_at asc`, params);
+  const where = [`m.workspace_id = $1`];
+  if (f.dealId) where.push(`m.deal_id = $${params.push(f.dealId)}`);
+  if (f.status) where.push(`m.status = $${params.push(f.status)}`);
+  if (f.ownerId) where.push(`m.owner_id = $${params.push(f.ownerId)}`);
+  const result = await db.query<MeetingRow>(`${MEETING_SELECT} where ${where.join(" and ")} order by m.scheduled_at asc`, params);
   return result.rows.map(meetingToDto);
 }
 
@@ -221,102 +172,69 @@ export interface UpdateMeetingInput {
   notes?: string;
 }
 
-/** Plain field/status edits with no outcome routing — use recordMeetingOutcome for Completed + outcome. */
+/** Plain field/status edits with no outcome routing; use recordMeetingOutcome for Completed + outcome. */
 export async function updateMeeting(db: Queryable, actor: Actor, workspaceId: string, id: string, patch: UpdateMeetingInput) {
   const current = await getMeetingRowOr404(db, workspaceId, id);
   const sets: string[] = [];
   const params: unknown[] = [];
-  let i = 1;
-  const push = (col: string, value: unknown) => {
-    sets.push(`${col} = $${i++}`);
-    params.push(value);
-  };
-  if (patch.title !== undefined) push("title", patch.title.trim());
-  if (patch.at !== undefined) push("scheduled_at", patch.at);
-  if (patch.durationMin !== undefined) push("duration_minutes", patch.durationMin);
-  if (patch.url !== undefined) push("meeting_url", patch.url || null);
+  const set = (col: string, value: unknown) => sets.push(`${col} = $${params.push(value)}`);
+  if (patch.title !== undefined) set("title", patch.title.trim());
+  if (patch.at !== undefined) set("scheduled_at", patch.at);
+  if (patch.durationMin !== undefined) set("duration_minutes", patch.durationMin);
+  if (patch.url !== undefined) set("meeting_url", patch.url || null);
   if (patch.status !== undefined) {
-    push("status", patch.status);
-    // DB constraint meetings_outcome_requires_completed forbids a non-null
-    // outcome on any status other than 'completed' — moving a meeting away
-    // from 'completed' (e.g. rescheduling one that already has an outcome)
-    // must clear it here, or the update below throws a raw constraint error.
-    if (patch.status !== "completed") push("outcome", null);
+    set("status", patch.status);
+    // meetings_outcome_requires_completed: leaving 'completed' must clear the outcome.
+    if (patch.status !== "completed") set("outcome", null);
   }
-  if (patch.notes !== undefined) push("notes", patch.notes);
+  if (patch.notes !== undefined) set("notes", patch.notes);
   if (sets.length === 0) return meetingToDto(current);
 
-  params.push(id);
-  await db.query(`update public.meetings set ${sets.join(", ")} where id = $${i}`, params);
+  await db.query(`update crm.meetings set ${sets.join(", ")} where id = $${params.push(id)}`, params);
 
   if (patch.status && patch.status !== current.status) {
     const title = patch.status === "rescheduled" ? "Meeting Rescheduled" : patch.status === "cancelled" ? "Meeting Cancelled" : `Meeting ${patch.status}`;
-    await addTimelineEvent(db, { dealId: current.lead_id, kind: "meeting", title, ...actorEvent(actor), relatedMeetingId: id });
-
-    // The auto-created "Prepare for the meeting" task is only meaningful
-    // while the meeting is still going to happen — without this, cancelling
-    // or no-showing a meeting leaves a stale prep task behind.
+    await addTimelineEvent(db, { dealId: current.deal_id, kind: "meeting", title, ...actorEvent(actor), relatedMeetingId: id });
+    // The "Prepare for the meeting" task only makes sense while the meeting will happen.
     if (patch.status === "cancelled" || patch.status === "no_show" || patch.status === "failed") {
-      await cancelOpenTasksForLead(db, actor, current.lead_id, "Meeting was cancelled", ["confirm_meeting"]);
+      await cancelOpenTasksForDeal(db, actor, current.deal_id, "Meeting was cancelled", ["confirm_meeting"]);
     }
   }
-
   return getMeetingOr404(db, workspaceId, id);
 }
 
 /**
- * Meeting outcome routing (product brief, "MEETINGS"). Only valid once the
- * meeting is marked Completed (mirrors the DB CHECK constraint
- * meetings_outcome_requires_completed).
+ * Meeting outcome routing (CONTEXT.md, "Meeting routing"). Marks the meeting completed. An exact
+ * repeat is a no-op: its side effects (tasks, stage) are not safe to re-run.
  */
 export async function recordMeetingOutcome(db: Queryable, actor: Actor, workspaceId: string, id: string, outcome: MeetingOutcome, notes?: string) {
   const meeting = await getMeetingRowOr404(db, workspaceId, id);
+  if (meeting.status === "completed" && meeting.outcome === outcome) return meetingToDto(meeting);
 
-  // Idempotent on an exact repeat (double-submit / retried request): the
-  // routing side effects below (task creation, stage change) are NOT safe to
-  // re-run, so a no-op return here is required, not just an optimization. A
-  // genuine correction to a *different* outcome still goes through normally.
-  if (meeting.status === "completed" && meeting.outcome === outcome) {
-    return meetingToDto(meeting);
-  }
-
-  await db.query(
-    `update public.meetings set status = 'completed', outcome = $2, notes = coalesce($3, notes) where id = $1`,
-    [id, outcome, notes ?? null],
-  );
-  await addTimelineEvent(db, {
-    dealId: meeting.lead_id,
-    kind: "meeting",
-    title: "Meeting Completed",
-    detail: `Outcome: ${outcome}`,
-    ...actorEvent(actor),
-    relatedMeetingId: id,
-  });
+  await db.query(`update crm.meetings set status = 'completed', outcome = $2, notes = coalesce($3, notes) where id = $1`, [id, outcome, notes ?? null]);
+  await addTimelineEvent(db, { dealId: meeting.deal_id, kind: "meeting", title: "Meeting Completed", detail: `Outcome: ${outcome}`, ...actorEvent(actor), relatedMeetingId: id });
 
   const routing = routeMeetingOutcome(outcome);
-  // stage and objectionType must land in one update statement — see the
-  // identical constraint note in calls.service.ts::logCall.
+  // Stage first: it can only change while the deal is still open. Stage + objection type in one update.
   if (routing.stage || routing.objectionType) {
-    await updateDeal(db, actor, workspaceId, meeting.lead_id, {
+    await updateDeal(db, actor, workspaceId, meeting.deal_id, {
       ...(routing.stage ? { stage: routing.stage } : {}),
       ...(routing.objectionType ? { objectionType: routing.objectionType } : {}),
     });
   }
-  if (routing.outcome === "nurture") await moveToNurture(db, actor, workspaceId, meeting.lead_id, `Meeting outcome: ${outcome}`);
-  if (routing.outcome === "won") await markWon(db, actor, workspaceId, meeting.lead_id, `Meeting outcome: ${outcome}`);
+  if (routing.outcome === "nurture") await moveToNurture(db, actor, workspaceId, meeting.deal_id, `Meeting outcome: ${outcome}`);
+  if (routing.outcome === "won") await markWon(db, actor, workspaceId, meeting.deal_id, `Meeting outcome: ${outcome}`);
   if (routing.task) {
     await createTask(db, actor, workspaceId, {
-      leadId: meeting.lead_id,
+      dealId: meeting.deal_id,
       ownerId: meeting.owner_id,
       type: routing.task.type,
       title: routing.task.title,
       dueAt: addDaysIso(routing.task.dueInDays),
-      origin: "manual",
     });
   }
   if (routing.workflowTrigger) {
-    await autoEnroll(db, workspaceId, meeting.lead_id, routing.workflowTrigger, `Meeting outcome: ${outcome}`);
+    await autoEnroll(db, workspaceId, meeting.deal_id, routing.workflowTrigger, `Meeting outcome: ${outcome}`);
   }
-
   return getMeetingOr404(db, workspaceId, id);
 }

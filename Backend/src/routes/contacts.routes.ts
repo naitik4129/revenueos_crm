@@ -3,11 +3,13 @@ import { z } from "zod";
 import { asyncHandler } from "../asyncHandler.js";
 import { pool, withTransaction } from "../db.js";
 import { parseBody, parseId, parseQuery } from "../validation/parse.js";
-import { CONTACT_CHANNELS, CONTACT_STATUSES, LIFECYCLE_STAGES } from "../domain/enums.js";
+import { CALL_CONNECTED_OUTCOMES, CALL_NOT_CONNECTED_REASONS, CONTACT_CHANNELS, CONTACT_STATUSES, LIFECYCLE_STAGES } from "../domain/enums.js";
 import * as contacts from "../services/contacts.service.js";
 import { contactToDto } from "../services/contacts.service.js";
 import { listDeals } from "../services/deals.service.js";
 import { listTimeline } from "../services/timeline.service.js";
+import { listCallsForContact, listEmailActivities, logCall } from "../services/calls.service.js";
+import { listTasks } from "../services/tasks.service.js";
 
 /** Mounted under the workspace-gated crmRouter (routes/index.ts). */
 export const contactsRouter = Router();
@@ -214,5 +216,50 @@ contactsRouter.get(
   asyncHandler(async (req, res) => {
     const contactId = (await contacts.getContactOr404(pool, req.workspaceId!, id(req))).id;
     res.json({ data: await listTimeline(pool, req.workspaceId!, { ...parseQuery(z.object(page), req.query), contactId }) });
+  }),
+);
+
+// --- Calls (human + AI), email activity, tasks ---------------------------------------------
+
+const logCallSchema = z.object({
+  connected: z.boolean(),
+  notConnectedReason: z.enum(CALL_NOT_CONNECTED_REASONS).optional(),
+  connectedOutcome: z.enum(CALL_CONNECTED_OUTCOMES).optional(),
+  notes: z.string().optional(),
+  callbackDueAt: z.string().datetime({ offset: true }).optional(),
+  taskId: z.string().uuid().optional(),
+  // "Interested - Later" capture, read only when connectedOutcome = interested_later.
+  interestedLater: z
+    .object({ reason: z.string().optional(), restartAt: z.string().optional(), nextAction: z.string().optional(), decisionOwner: z.string().optional() })
+    .optional(),
+});
+
+contactsRouter.post(
+  "/:id/calls",
+  asyncHandler(async (req, res) => {
+    const input = parseBody(logCallSchema, req.body);
+    res.status(201).json(await withTransaction((db) => logCall(db, req.actor!, req.workspaceId!, id(req), input)));
+  }),
+);
+
+contactsRouter.get(
+  "/:id/calls",
+  asyncHandler(async (req, res) => {
+    res.json({ data: await listCallsForContact(pool, req.workspaceId!, id(req)) });
+  }),
+);
+
+contactsRouter.get(
+  "/:id/email-activities",
+  asyncHandler(async (req, res) => {
+    res.json({ data: await listEmailActivities(pool, req.workspaceId!, id(req)) });
+  }),
+);
+
+contactsRouter.get(
+  "/:id/tasks",
+  asyncHandler(async (req, res) => {
+    const contactId = (await contacts.getContactOr404(pool, req.workspaceId!, id(req))).id;
+    res.json(await listTasks(pool, req.workspaceId!, { ...parseQuery(z.object(page), req.query), contactId }));
   }),
 );

@@ -93,7 +93,7 @@ async function sendMeetingEmailNow(meeting: MeetingRow, lead: DealRow): Promise<
 /** Best-effort — never throws, so a failure here can't undo the meeting/Calendar sync that already succeeded. */
 export async function notifyMeetingScheduled(meetingId: string): Promise<void> {
   const meeting = await getMeetingRowById(meetingId);
-  const lead = await getDealOr404(pool, meeting.workspace_id, meeting.lead_id);
+  const lead = await getDealOr404(pool, meeting.workspace_id, meeting.deal_id);
 
   if (lead.email) {
     await sendMeetingEmailNow(meeting, lead);
@@ -128,7 +128,7 @@ export async function claimQueuedMeetingWhatsappSends(db: Queryable, limit: numb
 
 export async function processQueuedMeetingWhatsappSend(row: MeetingRow): Promise<void> {
   try {
-    const lead = await getDealOr404(pool, row.workspace_id, row.lead_id);
+    const lead = await getDealOr404(pool, row.workspace_id, row.deal_id);
     if (lead.contact_status === "do_not_contact" || !lead.phone_e164) {
       await pool.query(`update public.meetings set notify_whatsapp_status = 'failed', notify_whatsapp_error = $2 where id = $1`, [
         row.id,

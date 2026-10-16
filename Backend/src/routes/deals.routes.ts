@@ -7,6 +7,10 @@ import { AUTOMATION_MODES, DEAL_OUTCOMES, LEAD_LOSS_REASONS, PIPELINE_STAGES, RE
 import * as deals from "../services/deals.service.js";
 import { dealToDto } from "../services/deals.service.js";
 import { listTimeline } from "../services/timeline.service.js";
+import { listTasks } from "../services/tasks.service.js";
+import { listMeetings } from "../services/meetings.service.js";
+import { listProposals } from "../services/proposals.service.js";
+import { listRuns } from "../services/runs.service.js";
 
 /** Mounted under the workspace-gated crmRouter (routes/index.ts). */
 export const dealsRouter = Router();
@@ -127,3 +131,24 @@ dealsRouter.get(
     res.json({ data: await listTimeline(pool, req.workspaceId!, { ...parseQuery(z.object(page), req.query), dealId }) });
   }),
 );
+
+// --- Related lists ----------------------------------------------------------------------
+
+dealsRouter.get(
+  "/:id/tasks",
+  asyncHandler(async (req, res) => {
+    const dealId = (await deals.getDealOr404(pool, req.workspaceId!, id(req))).id;
+    res.json(await listTasks(pool, req.workspaceId!, { ...parseQuery(z.object(page), req.query), dealId }));
+  }),
+);
+
+const related = { meetings: listMeetings, proposals: listProposals, runs: listRuns } as const;
+for (const [path, list] of Object.entries(related)) {
+  dealsRouter.get(
+    `/:id/${path}`,
+    asyncHandler(async (req, res) => {
+      const dealId = (await deals.getDealOr404(pool, req.workspaceId!, id(req))).id;
+      res.json({ data: await list(pool, req.workspaceId!, { dealId }) });
+    }),
+  );
+}

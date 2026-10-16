@@ -26,7 +26,7 @@ function createWorkflowDb() {
     row,
     db: {
       query: async (sql: string, params?: unknown[]) => {
-        if (sql.startsWith("select * from public.workflows")) {
+        if (/^select \* from (public|crm)\.workflows /.test(sql)) {
           return { rows: [row] };
         }
         if (sql.startsWith("update public.workflows set")) {

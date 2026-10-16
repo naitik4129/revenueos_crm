@@ -119,7 +119,7 @@ async function workflowToDto(db: Queryable, row: WorkflowRow) {
 }
 
 export async function getWorkflowRowOr404(db: Queryable, workspaceId: string, id: string): Promise<WorkflowRow> {
-  const result = await db.query<WorkflowRow>(`select * from public.workflows where id = $1 and workspace_id = $2`, [id, workspaceId]);
+  const result = await db.query<WorkflowRow>(`select * from crm.workflows where id = $1 and workspace_id = $2`, [id, workspaceId]);
   const row = result.rows[0];
   if (!row) throw new NotFoundError("Workflow");
   return row;
@@ -141,8 +141,8 @@ export async function getWorkflow(db: Queryable, workspaceId: string, id: string
 export async function findActiveWorkflowsForTrigger(db: Queryable, workspaceId: string, trigger: WorkflowTrigger) {
   const result = await db.query<{ workflow_id: string; version_id: string; version_number: number }>(
     `select w.id as workflow_id, wv.id as version_id, wv.version_number
-       from public.workflows w
-       join public.workflow_versions wv on wv.workflow_id = w.id and wv.status = 'published'
+       from crm.workflows w
+       join crm.workflow_versions wv on wv.workflow_id = w.id and wv.status = 'published'
       where w.workspace_id = $1 and w.trigger = $2 and w.status = 'active'`,
     [workspaceId, trigger],
   );

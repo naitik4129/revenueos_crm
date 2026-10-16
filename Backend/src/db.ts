@@ -1,5 +1,9 @@
-import { Pool, type PoolClient } from "pg";
+import pg, { Pool, type PoolClient } from "pg";
 import { env } from "./env.js";
+
+// Postgres `date` (OID 1082) stays a "YYYY-MM-DD" string. Parsed into a JS Date it becomes local
+// midnight, and toISOString() then shifts it to the previous day east of UTC (e.g. Asia/Kolkata).
+pg.types.setTypeParser(1082, (value) => value);
 
 // Single pool for the whole process. Supabase's pooled connection strings
 // (pgbouncer) are fine here too, but transactions (BEGIN/COMMIT) require a

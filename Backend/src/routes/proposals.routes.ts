@@ -1,114 +1,62 @@
-import { Router, type NextFunction, type Request, type Response } from "express";
-import multer from "multer";
+import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../asyncHandler.js";
-import { requireAuth } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
-import { parseBody, parseQuery } from "../validation/parse.js";
-import { ValidationError } from "../errors.js";
+import { parseBody, parseId, parseQuery } from "../validation/parse.js";
 import { LEAD_LOSS_REASONS, PROPOSAL_STATUSES } from "../domain/enums.js";
-import { listProposals, updateProposal, updateProposalStatus } from "../services/proposals.service.js";
-import { createAndSendProposal } from "../services/proposalSending.service.js";
+import { createProposal, getProposalOr404, listProposals, updateProposal, updateProposalStatus } from "../services/proposals.service.js";
 
+/**
+ * Mounted under the workspace-gated crmRouter (routes/index.ts). Proposals are created as
+ * drafts here; uploading the document and sending it by email/WhatsApp comes back in P5.
+ */
 export const proposalsRouter = Router();
-proposalsRouter.use(requireAuth);
 
-const ALLOWED_DOCUMENT_MIME_TYPES = new Set([
-  "application/pdf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.ms-excel",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-]);
-
-// 10MB — the stricter of the email (15MB) and WhatsApp (10MB) attachment
-// ceilings, since one uploaded document must satisfy both channels.
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (!ALLOWED_DOCUMENT_MIME_TYPES.has(file.mimetype)) {
-      cb(new ValidationError(`Unsupported file type: ${file.mimetype}. Allowed: PDF, Word, Excel, or images.`));
-      return;
-    }
-    cb(null, true);
-  },
-});
-
-function uploadDocument(req: Request, res: Response, next: NextFunction) {
-  upload.single("document")(req, res, (err: unknown) => {
-    if (err instanceof multer.MulterError) {
-      next(new ValidationError(err.code === "LIMIT_FILE_SIZE" ? "The proposal document is too large (max 10MB)." : err.message));
-      return;
-    }
-    next(err);
-  });
-}
-
-const listQuerySchema = z.object({
-  leadId: z.string().uuid().optional(),
-  status: z.enum(PROPOSAL_STATUSES).optional(),
-  ownerId: z.string().uuid().optional(),
-});
+const id = (req: { params: Record<string, string | undefined> }) => parseId(req.params.id, "Proposal");
 
 proposalsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    const filters = parseQuery(listQuerySchema, req.query);
-    res.json({ data: await listProposals(pool, req.workspaceId!, filters) });
+    const q = parseQuery(
+      z.object({ dealId: z.string().uuid().optional(), status: z.enum(PROPOSAL_STATUSES).optional(), ownerId: z.string().uuid().optional() }),
+      req.query,
+    );
+    res.json({ data: await listProposals(pool, req.workspaceId!, q) });
   }),
 );
 
-// multer puts multipart text fields into req.body as strings, so numeric
-// fields are coerced rather than validated as JSON numbers.
 const createSchema = z.object({
-  leadId: z.string().uuid(),
+  dealId: z.string().uuid(),
   title: z.string().min(1),
-  amount: z.coerce.number().nonnegative().optional(),
+  amount: z.number().nonnegative().optional(),
+  currency: z.string().trim().length(3).optional(),
   notes: z.string().optional(),
-  emailTemplateId: z.string().uuid(),
-  whatsappTemplateId: z.string().uuid(),
 });
 
 proposalsRouter.post(
   "/",
-  uploadDocument,
   asyncHandler(async (req, res) => {
-    if (!req.file) throw new ValidationError("A proposal document is required.");
     const input = parseBody(createSchema, req.body);
-    const proposal = await createAndSendProposal(req.actor!, req.workspaceId!, input, {
-      buffer: req.file.buffer,
-      originalName: req.file.originalname,
-      mimeType: req.file.mimetype,
-      size: req.file.size,
-    });
-    res.status(201).json(proposal);
+    res.status(201).json(await withTransaction((db) => createProposal(db, req.actor!, req.workspaceId!, input)));
   }),
 );
 
-const updateSchema = z.object({
-  title: z.string().min(1).optional(),
-  fileName: z.string().optional(),
-  amount: z.number().nonnegative().optional(),
-  notes: z.string().optional(),
-});
+proposalsRouter.get(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    res.json(await getProposalOr404(pool, req.workspaceId!, id(req)));
+  }),
+);
 
 proposalsRouter.patch(
   "/:id",
   asyncHandler(async (req, res) => {
-    const patch = parseBody(updateSchema, req.body);
-    const proposal = await withTransaction((client) => updateProposal(client, req.workspaceId!, req.params.id!, patch));
-    res.json(proposal);
+    const patch = parseBody(z.object({ title: z.string().min(1).optional(), amount: z.number().nonnegative().optional(), notes: z.string().optional() }), req.body);
+    res.json(await withTransaction((db) => updateProposal(db, req.workspaceId!, id(req), patch)));
   }),
 );
 
-// lossReason is required by updateProposalStatus itself when status is
-// rejected/expired; kept optional here so the schema doesn't
-// reject a "sent"/"accepted" etc. call for omitting it.
+// lossReason is required (by the service) only for rejected/expired.
 const statusSchema = z.object({
   status: z.enum(PROPOSAL_STATUSES),
   lossReason: z.enum(LEAD_LOSS_REASONS).optional(),
@@ -119,9 +67,6 @@ proposalsRouter.post(
   "/:id/status",
   asyncHandler(async (req, res) => {
     const { status, lossReason, lossNotes } = parseBody(statusSchema, req.body);
-    const proposal = await withTransaction((client) =>
-      updateProposalStatus(client, req.actor!, req.workspaceId!, req.params.id!, status, { lossReason, lossNotes }),
-    );
-    res.json(proposal);
+    res.json(await withTransaction((db) => updateProposalStatus(db, req.actor!, req.workspaceId!, id(req), status, { lossReason, lossNotes })));
   }),
 );
