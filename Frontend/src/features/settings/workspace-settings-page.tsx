@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { useWorkspace } from "@/store/workspace-context";
+import { DefaultsPanel } from "./defaults-panel";
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Something went wrong.";
@@ -26,7 +27,7 @@ export function WorkspaceSettingsPage() {
         title="Settings"
         description={
           currentWorkspace
-            ? `Email, WhatsApp, and Google Calendar connections for ${currentWorkspace.name}.`
+            ? `Defaults and email, WhatsApp, and Google Calendar connections for ${currentWorkspace.name}.`
             : isLoading
               ? "Loading workspace…"
               : "Select a workspace to configure its connections."
@@ -35,6 +36,7 @@ export function WorkspaceSettingsPage() {
       <div className="p-6">
         {currentWorkspace ? (
           <div className="space-y-6">
+            <DefaultsPanel workspace={currentWorkspace} />
             <EmailPanel workspaceId={currentWorkspace.id} />
             <WhatsAppPanel workspaceId={currentWorkspace.id} />
             <GoogleCalendarPanel workspaceId={currentWorkspace.id} />

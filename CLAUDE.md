@@ -32,7 +32,7 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), being reworked. `C
 - Shared Supabase Auth (`auth.users`) with the platform and brain.
 - **`crm.profiles`** = `id` (FK `auth.users`, on delete cascade), `role` (admin/salesperson), `is_active`, `created_at`. Name/email are read from `public.revenueos_profiles` (read-only); missing name → show email; initials computed in code.
 - **No trigger on `auth.users`**, never write to `public.*`. CRM access = an active `crm.profiles` row; otherwise 403.
-- Creating a user with no auth account goes through Supabase Auth admin (the platform's own trigger then creates its `revenueos_profiles` row — accepted). Deactivating only sets `crm.profiles.is_active = false`; never disable/delete the shared auth user.
+- **The CRM never creates auth users.** Adding a user = an existing RevenueOS account (found in `public.revenueos_profiles`) gets a `crm.profiles` row; accounts are created on the platform. Deactivating only sets `crm.profiles.is_active = false`; never disable/delete the shared auth user.
 - **Admins** see and edit everything in every workspace (no membership row needed), manage users, and get **no notifications**. **Only admins** create workspaces and assign members.
 - **Salespeople** see only workspaces they are members of (`crm.workspace_members`).
 
@@ -54,7 +54,7 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), being reworked. `C
 - **Call with no open deal**: the call is always saved. If the outcome moves the pipeline and the contact has no open deal, reopen its `nurture` deal if one exists, else create a new open deal, then route. Contact-level outcomes (DNC, wrong number) never create a deal.
 - **Merge + DNC**: if either contact is DNC, the target becomes DNC. Merge moves deals first, then tasks' `contact_id`; blocked if both have an open deal.
 - **Template variables**: `{{contact.*}}`, `{{company.*}}`, `{{deal.*}}`; no aliases for the old `{{lead.*}}` names.
-- **CRM user management**: an email that already has a shared account (found in `public.revenueos_profiles`) only gets a `crm.profiles` row; otherwise the account is created via Supabase Auth admin. The CRM changes only `role` and `is_active`; name, email and password belong to the platform. No `crm.profiles` row → 403 (not 401). Admins cannot deactivate or demote themselves.
+- **CRM user management** (changed in P7f): `POST /admin/users` takes email + role only; an email with a shared account (found in `public.revenueos_profiles`) gets a `crm.profiles` row, an unknown email is refused ("No RevenueOS account with this email — create it on the platform first."). The CRM changes only `role` and `is_active`; name, email and password belong to the platform. No `crm.profiles` row → 403 (not 401). Admins cannot deactivate or demote themselves.
 - **Test database**: integration tests run on PGlite + pglite-socket (`Backend/tests/integration/testDb.ts`, migrations 000-010 on stand-in `auth`/`public` tables), no Docker. **Single-session limit**: all connections share one PGlite session — an open transaction blocks the others and `SET` leaks between connections — so tests must run sequentially; use a real Postgres if tests ever need concurrent transactions.
 
 ### Brain intake (2026-10-16)
@@ -79,6 +79,14 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), being reworked. `C
 - Overdue = due before the start of today (Asia/Kolkata); never overlaps "due today" (dashboard and the tasks list agree).
 - Admins use the whole app (all workspaces) plus `/admin`; only admins see "Create workspace". A user with no workspace sees an empty state; a saved workspace id that is no longer allowed is dropped.
 - P7d2 removed the old leads code (`features/leads/`, leads routes, `types/lead.ts`). Proposals are created and sent in steps (create → upload document → send); call and meeting tasks on the Tasks page open their deal.
+
+### P7f admin (2026-10-16)
+- `/admin` has four tabs: Users, Workspaces, Members, Brain API keys. Admin-only: the nav item is hidden for salespeople and `/admin` redirects them home (`lib/admin-gate.ts`); backend checks stay the source of truth.
+- The Google Calendar OAuth landing `/admin?calendar=…` is forwarded to `/settings` for every role (tested in `admin-gate.test.ts`).
+- **Default owner** (`workspaces.default_owner_id`): set by admins only (`PATCH /workspaces/:id`), must be an active salesperson member; removing that member clears it. Settings shows it read-only to salespeople.
+- **Default meeting templates** and the settings connections stay editable by any member, as before.
+- Platform project id is pasted (checked in code against `revenueos_projects`); no project picker.
+- A brain key's full value is shown once, in the create dialog; lists show only the prefix.
 
 ### Kept features
 CSV import, calls + routing, nurture workflows + worker, templates + attachments, email (Resend/SMTP), WhatsApp (Baileys), Google Calendar, meetings, proposals, tasks, DNC, merge, delete + audit, notifications, dashboard, workspaces, admin users.

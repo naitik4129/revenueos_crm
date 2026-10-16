@@ -11,6 +11,9 @@ export interface WorkspaceRow {
   slug: string;
   is_active: boolean;
   platform_project_id: string | null;
+  default_owner_id: string | null;
+  default_meeting_email_template_id: string | null;
+  default_meeting_whatsapp_template_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -22,6 +25,9 @@ export function workspaceToDto(row: WorkspaceRow) {
     slug: row.slug,
     isActive: row.is_active,
     platformProjectId: row.platform_project_id,
+    defaultOwnerId: row.default_owner_id,
+    defaultMeetingEmailTemplateId: row.default_meeting_email_template_id,
+    defaultMeetingWhatsappTemplateId: row.default_meeting_whatsapp_template_id,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -109,6 +115,19 @@ export interface UpdateWorkspaceInput {
   name?: string;
   isActive?: boolean;
   platformProjectId?: string | null;
+  /** Handover owner when the brain names none; must be an active salesperson member. */
+  defaultOwnerId?: string | null;
+}
+
+async function assertDefaultOwner(db: Queryable, workspaceId: string, userId: string) {
+  const member = await db.query(
+    `select 1 from crm.workspace_members m join crm.profiles p on p.id = m.user_id
+      where m.workspace_id = $1 and m.user_id = $2 and p.role = 'salesperson' and p.is_active`,
+    [workspaceId, userId],
+  );
+  if (!member.rows[0]) {
+    throw new ValidationError("The default owner must be an active salesperson who is a member of this workspace.", { field: "defaultOwnerId" });
+  }
 }
 
 export async function updateWorkspace(actor: Actor, id: string, input: UpdateWorkspaceInput) {
@@ -121,15 +140,25 @@ export async function updateWorkspace(actor: Actor, id: string, input: UpdateWor
 
     if (name) await assertNameFree(db, name, id);
     if (input.platformProjectId) await assertPlatformProject(db, input.platformProjectId, id);
+    if (input.defaultOwnerId) await assertDefaultOwner(db, id, input.defaultOwnerId);
 
     const result = await db.query<WorkspaceRow>(
       `update crm.workspaces
           set name = coalesce($2, name),
               is_active = coalesce($3, is_active),
-              platform_project_id = case when $4 then $5::uuid else platform_project_id end
+              platform_project_id = case when $4 then $5::uuid else platform_project_id end,
+              default_owner_id = case when $6 then $7::uuid else default_owner_id end
         where id = $1
         returning *`,
-      [id, name ?? null, input.isActive ?? null, input.platformProjectId !== undefined, input.platformProjectId ?? null],
+      [
+        id,
+        name ?? null,
+        input.isActive ?? null,
+        input.platformProjectId !== undefined,
+        input.platformProjectId ?? null,
+        input.defaultOwnerId !== undefined,
+        input.defaultOwnerId ?? null,
+      ],
     );
     await recordAdminAudit(db, actor, "workspace.updated", "workspace", id, { ...input });
     return workspaceToDto(result.rows[0]!);
@@ -183,6 +212,14 @@ export async function setMembers(actor: Actor, workspaceId: string, userIds: str
     );
     if (added.length || removed.length) {
       await recordAdminAudit(db, actor, "workspace.members_changed", "workspace", workspaceId, { added, removed });
+    }
+    // A removed member can no longer be the default owner.
+    const cleared = await db.query(
+      `update crm.workspaces set default_owner_id = null where id = $1 and default_owner_id = any($2::uuid[]) returning id`,
+      [workspaceId, removed],
+    );
+    if (cleared.rows[0]) {
+      await recordAdminAudit(db, actor, "workspace.updated", "workspace", workspaceId, { defaultOwnerId: null, reason: "owner removed from members" });
     }
   });
   return listMembers(workspaceId);

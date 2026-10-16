@@ -41,6 +41,7 @@ const updateWorkspaceSchema = z
     name: z.string().trim().min(1).optional(),
     isActive: z.boolean().optional(),
     platformProjectId: z.string().uuid().nullable().optional(),
+    defaultOwnerId: z.string().uuid().nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
 

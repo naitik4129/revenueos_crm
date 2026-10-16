@@ -163,6 +163,29 @@ describe("auth and workspaces (PGlite)", () => {
       const audit = await seed.query(`select action from crm.admin_audit_events where target_id = $1`, [ids.w2]);
       expect(audit.rows.map((r) => r.action)).toContain("workspace.members_changed");
     });
+
+    it("sets the default owner (admins only, active salesperson members only); removing the member clears it", async () => {
+      const patch = (userId: string, defaultOwnerId: string | null) =>
+        request(app).patch(`/api/v1/workspaces/${ids.w2}`).set(as(userId)).send({ defaultOwnerId });
+      const members = (userIds: string[]) => request(app).put(`/api/v1/workspaces/${ids.w2}/members`).set(as(ids.admin)).send({ userIds });
+      await members([ids.sales2, ids.inactive]);
+
+      expect((await patch(ids.sales2, ids.sales2)).status).toBe(403);
+      expect((await patch(ids.admin, ids.sales)).status).toBe(400); // not a member
+      expect((await patch(ids.admin, ids.admin)).status).toBe(400); // admins are never members
+      expect((await patch(ids.admin, ids.inactive)).status).toBe(400); // deactivated
+
+      const ok = await patch(ids.admin, ids.sales2);
+      expect(ok.status).toBe(200);
+      expect(ok.body).toMatchObject({ defaultOwnerId: ids.sales2, defaultMeetingEmailTemplateId: null, defaultMeetingWhatsappTemplateId: null });
+
+      await members([ids.inactive]);
+      const w2 = (await get("/api/v1/workspaces", ids.admin)).body.data.find((w: { id: string }) => w.id === ids.w2);
+      expect(w2.defaultOwnerId).toBeNull();
+
+      await members([ids.sales2]);
+      expect((await patch(ids.admin, null)).body.defaultOwnerId).toBeNull();
+    });
   });
 
   describe("admin users", () => {
@@ -177,23 +200,17 @@ describe("auth and workspaces (PGlite)", () => {
       expect(again.status).toBe(409);
     });
 
-    it("creates a new account through Supabase Auth admin when none exists", async () => {
-      authAdmin.createUser.mockImplementationOnce(async ({ email, user_metadata }) => {
-        // Stands in for auth.users + the platform trigger that fills revenueos_profiles.
-        const id = (await seed.query(`insert into auth.users (email) values ($1) returning id`, [email])).rows[0].id;
-        await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, $2, $3)`, [id, user_metadata.full_name, email]);
-        return { data: { user: { id } }, error: null };
-      });
-      const noPassword = await request(app).post("/api/v1/admin/users").set(as(ids.admin)).send({ email: "new@x.com" });
-      expect(noPassword.status).toBe(400);
+    it("never creates auth accounts: an unknown email is refused, name/password are rejected", async () => {
+      const unknown = await request(app).post("/api/v1/admin/users").set(as(ids.admin)).send({ email: "new@x.com" });
+      expect(unknown.status).toBe(400);
+      expect(unknown.body.error.message).toBe("No RevenueOS account with this email — create it on the platform first.");
 
-      const res = await request(app)
+      const extra = await request(app)
         .post("/api/v1/admin/users")
         .set(as(ids.admin))
         .send({ email: "new@x.com", name: "Nia New", password: "long-enough-password" });
-      expect(res.status).toBe(201);
-      expect(res.body).toMatchObject({ name: "Nia New", email: "new@x.com", initials: "NN", role: "salesperson" });
-      expect(authAdmin.createUser).toHaveBeenCalledTimes(1);
+      expect(extra.status).toBe(400);
+      expect(authAdmin.createUser).not.toHaveBeenCalled();
     });
 
     it("deactivates by flag only, never touching the shared auth account", async () => {

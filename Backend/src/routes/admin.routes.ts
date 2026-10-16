@@ -13,12 +13,8 @@ adminRouter.get("/users", asyncHandler(async (_req, res) => res.json({ data: awa
 
 const roleSchema = z.enum(["admin", "salesperson"]);
 
-const createUserSchema = z.object({
-  email: z.string().email(),
-  name: z.string().trim().min(1).optional(),
-  password: z.string().min(12).optional(),
-  role: roleSchema.optional(),
-});
+// Email + role only: the CRM never creates auth accounts, so name/password are rejected.
+const createUserSchema = z.object({ email: z.string().email(), role: roleSchema.optional() }).strict();
 adminRouter.post(
   "/users",
   asyncHandler(async (req, res) => {

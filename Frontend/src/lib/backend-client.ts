@@ -324,11 +324,15 @@ export interface DealFilters extends Page {
   search?: string | undefined;
 }
 
+export type CrmRole = "admin" | "salesperson";
+
+/** A CRM user; name and email come from the platform and are read-only here. */
 export interface AdminUser {
   id: string;
   name: string;
   email: string;
   initials: string;
+  role: CrmRole;
   active: boolean;
   createdAt: string;
 }
@@ -339,8 +343,28 @@ export interface Workspace {
   slug: string;
   isActive: boolean;
   platformProjectId: string | null;
+  defaultOwnerId: string | null;
+  defaultMeetingEmailTemplateId: string | null;
+  defaultMeetingWhatsappTemplateId: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UpdateWorkspaceInput {
+  name?: string;
+  isActive?: boolean;
+  platformProjectId?: string | null;
+  defaultOwnerId?: string | null;
+}
+
+/** A brain service key; the full key is only in the create response. */
+export interface BrainKey {
+  id: string;
+  label: string;
+  prefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
 }
 
 export interface EmailConnection {
@@ -415,18 +439,31 @@ export const backend = {
   admin: {
     users: {
       list: (signal?: AbortSignal) => get<{ data: AdminUser[] }>("/admin/users", signal),
-      create: (input: { name: string; email: string; password: string }) =>
+      /** Existing RevenueOS accounts only; the CRM never creates auth users. */
+      create: (input: { email: string; role: CrmRole }) =>
         send<AdminUser>("POST", "/admin/users", input),
-      update: (
-        id: string,
-        input: { name?: string; email?: string; password?: string; active?: boolean },
-      ) => send<AdminUser>("PATCH", `/admin/users/${id}`, input),
+      update: (id: string, input: { role?: CrmRole; active?: boolean }) =>
+        send<AdminUser>("PATCH", `/admin/users/${id}`, input),
     },
   },
   workspaces: {
     list: (signal?: AbortSignal) => get<{ data: Workspace[] }>("/workspaces", signal),
-    create: (name: string) => send<Workspace>("POST", "/workspaces", { name }),
-    rename: (id: string, name: string) => send<Workspace>("PATCH", `/workspaces/${id}`, { name }),
+    create: (name: string, platformProjectId?: string | null) =>
+      send<Workspace>("POST", "/workspaces", { name, platformProjectId }),
+    update: (id: string, input: UpdateWorkspaceInput) =>
+      send<Workspace>("PATCH", `/workspaces/${id}`, input),
+    members: (id: string, signal?: AbortSignal) =>
+      get<{ data: AdminUser[] }>(`/workspaces/${id}/members`, signal),
+    setMembers: (id: string, userIds: string[]) =>
+      send<{ data: AdminUser[] }>("PUT", `/workspaces/${id}/members`, { userIds }),
+    brainKeys: {
+      list: (id: string, signal?: AbortSignal) =>
+        get<{ data: BrainKey[] }>(`/workspaces/${id}/brain-keys`, signal),
+      create: (id: string, label: string) =>
+        send<BrainKey & { key: string }>("POST", `/workspaces/${id}/brain-keys`, { label }),
+      revoke: (id: string, keyId: string) =>
+        request<BrainKey>(`/workspaces/${id}/brain-keys/${keyId}`, { method: "DELETE" }),
+    },
   },
   connections: {
     email: {

@@ -102,12 +102,7 @@ describe("backend client", () => {
     ],
     [
       "admin user",
-      () =>
-        backend.admin.users.create({
-          name: "Ada Administered",
-          email: "ada@example.com",
-          password: "permanent-password",
-        }),
+      () => backend.admin.users.create({ email: "ada@example.com", role: "salesperson" }),
       "POST",
       "/api/v1/admin/users",
     ],
@@ -122,6 +117,12 @@ describe("backend client", () => {
       () => backend.workspaces.create("Second Brand"),
       "POST",
       "/api/v1/workspaces",
+    ],
+    [
+      "brain key revoke",
+      () => backend.workspaces.brainKeys.revoke("ws-1", "key-1"),
+      "DELETE",
+      "/api/v1/workspaces/ws-1/brain-keys/key-1",
     ],
   ])("sends an authenticated %s request", async (_name, invoke, method, pathname) => {
     const fetchMock = vi.fn<typeof fetch>(async () => response({ id: "result-1" }));

@@ -1,7 +1,6 @@
 import type { Actor } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
 import { ConflictError, NotFoundError, ValidationError } from "../errors.js";
-import { supabaseAdmin } from "../supabaseAdmin.js";
 import { recordAdminAudit } from "./admin-audit.service.js";
 import { getProfile, PROFILE_COLUMNS, PROFILE_JOIN, profileToDto, type ProfileRow } from "./profiles.service.js";
 
@@ -16,15 +15,12 @@ export async function listUsers() {
 
 export interface CreateUserInput {
   email: string;
-  name?: string;
-  password?: string;
   role?: Role;
 }
 
 /**
- * Gives a person CRM access. If they already have a shared Supabase account (platform or
- * brain user) we only add the crm.profiles row. Otherwise the account is created through
- * Supabase Auth admin; the platform's own trigger then creates its revenueos_profiles row.
+ * Gives an existing shared RevenueOS account (platform or brain user) CRM access by adding its
+ * crm.profiles row. The CRM never creates auth users: accounts are made on the platform.
  */
 export async function createUser(actor: Actor, input: CreateUserInput) {
   const email = input.email.trim().toLowerCase();
@@ -34,41 +30,19 @@ export async function createUser(actor: Actor, input: CreateUserInput) {
     `select id from public.revenueos_profiles where lower(email) = $1`,
     [email],
   );
-  let userId = existing.rows[0]?.id;
-  let createdAuthUser = false;
-
-  if (!userId) {
-    if (!input.password || input.password.length < 12) {
-      throw new ValidationError("A password of at least 12 characters is required for a new account.", { field: "password" });
-    }
-    const { data, error } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password: input.password,
-      email_confirm: true,
-      user_metadata: input.name?.trim() ? { full_name: input.name.trim() } : {},
-    });
-    if (error || !data.user) {
-      throw new ConflictError(error?.message ?? "Unable to create the account.");
-    }
-    userId = data.user.id;
-    createdAuthUser = true;
+  const id = existing.rows[0]?.id;
+  if (!id) {
+    throw new ValidationError("No RevenueOS account with this email — create it on the platform first.", { field: "email" });
   }
 
-  const id = userId;
-  try {
-    await withTransaction(async (db) => {
-      const inserted = await db.query(
-        `insert into crm.profiles (id, role) values ($1, $2) on conflict (id) do nothing returning id`,
-        [id, role],
-      );
-      if (!inserted.rows[0]) throw new ConflictError("This person already has CRM access.", { field: "email" });
-      await recordAdminAudit(db, actor, "user.created", "profile", id, { email, role, newAccount: createdAuthUser });
-    });
-  } catch (error) {
-    // Only undo an account we just created; never delete a pre-existing shared account.
-    if (createdAuthUser) await supabaseAdmin.auth.admin.deleteUser(id).catch(() => undefined);
-    throw error;
-  }
+  await withTransaction(async (db) => {
+    const inserted = await db.query(
+      `insert into crm.profiles (id, role) values ($1, $2) on conflict (id) do nothing returning id`,
+      [id, role],
+    );
+    if (!inserted.rows[0]) throw new ConflictError("This person already has CRM access.", { field: "email" });
+    await recordAdminAudit(db, actor, "user.created", "profile", id, { email, role });
+  });
   return (await getProfile(pool, id))!;
 }
 

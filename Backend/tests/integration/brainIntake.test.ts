@@ -91,6 +91,9 @@ describe("brain intake API (PGlite)", () => {
       const spare = (await request(app).post(`/api/v1/workspaces/${ws}/brain-keys`).set("Authorization", `Bearer ${admin}`).send({ label: "spare" })).body;
       expect((await brain("/companies", [acme], spare.key)).status).toBe(200);
       await request(app).delete(`/api/v1/workspaces/${ws}/brain-keys/${spare.id}`).set("Authorization", `Bearer ${admin}`);
+      const again = await request(app).delete(`/api/v1/workspaces/${ws}/brain-keys/${spare.id}`).set("Authorization", `Bearer ${admin}`);
+      expect(again.status).toBe(200); // revoking twice keeps the first revoke time
+      expect(again.body.revokedAt).not.toBeNull();
       const res = await brain("/companies", [acme], spare.key);
       expect(res.status).toBe(401);
       expect(res.body.error.message).toMatch(/revoked/);

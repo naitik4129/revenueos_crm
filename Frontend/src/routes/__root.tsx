@@ -20,6 +20,7 @@ import { useSupabaseSession } from "@/lib/use-supabase-session";
 import { LoginPage } from "@/features/auth/login-page";
 import { backend, BackendError } from "@/lib/backend-client";
 import { BrandLogo } from "@/components/common/brand-logo";
+import { adminPathRedirect } from "@/lib/admin-gate";
 
 function NotFoundComponent() {
   return (
@@ -205,16 +206,14 @@ function AuthGate({ children, queryClient }: { children: ReactNode; queryClient:
   }
   if (me.isError || !me.data) throw me.error;
   if (adminPath) {
-    // The Google Calendar OAuth callback (Backend/src/routes/googleCalendarOAuth.routes.ts)
-    // always redirects the browser back to /admin?calendar=connected|error, since that's this
-    // app's one fixed frontend base URL. Connections live at /settings, so forward the landing
-    // query string there instead of dropping it on the floor.
-    if (typeof window !== "undefined" && window.location.search.includes("calendar=")) {
-      window.location.replace(`/settings${window.location.search}`);
+    const search = typeof window !== "undefined" ? window.location.search : "";
+    const target = adminPathRedirect(search, me.data.role);
+    if (target?.startsWith("/settings")) {
+      window.location.replace(target);
       return null;
     }
     // Admin pages are for admins only; admins also use every other page.
-    if (me.data.role !== "admin") return <Navigate to="/" replace />;
+    if (target) return <Navigate to="/" replace />;
   }
   return (
     <StoreProvider>

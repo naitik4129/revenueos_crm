@@ -13,6 +13,7 @@ import { addNote, createContact, markDnc, mergeContacts } from "../src/services/
 import { createDeal, markDiscarded, markLost, markWon, moveToNurture, updateDeal } from "../src/services/deals.service.js";
 import { logCall } from "../src/services/calls.service.js";
 import { createTask } from "../src/services/tasks.service.js";
+import { createBrainKey, revokeBrainKey } from "../src/services/brain-keys.service.js";
 import { scheduleMeeting } from "../src/services/meetings.service.js";
 import { createProposal } from "../src/services/proposals.service.js";
 import { DEMO_USERS, type DemoUserInfo as SeedUser } from "./users.js";
@@ -30,7 +31,7 @@ Prospect: Yes, send me a few times. Thursday works best.
 AI: Great, I'll have the team reach out. Thanks for your time!`;
 
 export async function seedDemo() {
-  const [, sam, priya] = DEMO_USERS as [SeedUser, SeedUser, SeedUser];
+  const [admin, sam, priya] = DEMO_USERS as [SeedUser, SeedUser, SeedUser];
   for (const u of DEMO_USERS) {
     await pool.query(`insert into auth.users (id, email) values ($1, $2)`, [u.id, u.email]);
     await pool.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, $2, $3)`, [u.id, u.name, u.email]);
@@ -43,6 +44,17 @@ export async function seedDemo() {
   // Sam works on both clients, Priya on Acme only; the admin needs no membership.
   await pool.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3), ($1, $4)`, [acme, globex, sam.id, priya.id]);
   await pool.query(`update crm.workspaces set default_owner_id = $2 where id = $1`, [acme, sam.id]);
+
+  // For the admin tabs: a deactivated salesperson (not on the login picker) and brain keys, one revoked.
+  const ravi = "d0000000-0000-4000-8000-000000000004";
+  await pool.query(`insert into auth.users (id, email) values ($1, 'ravi@demo.local')`, [ravi]);
+  await pool.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, 'Ravi Former', 'ravi@demo.local')`, [ravi]);
+  await pool.query(`insert into crm.profiles (id, role, is_active) values ($1, 'salesperson', false)`, [ravi]);
+  await pool.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [globex, ravi]);
+  await createBrainKey(actorOf(admin), acme, "RevenueOS brain");
+  await createBrainKey(actorOf(admin), globex, "RevenueOS brain");
+  const old = await createBrainKey(actorOf(admin), globex, "Old brain key");
+  await revokeBrainKey(actorOf(admin), globex, old.id);
 
   await seedAcme(acme, actorOf(sam), actorOf(priya));
   await seedGlobex(globex, actorOf(sam));
