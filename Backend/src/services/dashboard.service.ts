@@ -1,132 +1,60 @@
 import type { Queryable } from "../dto.js";
+import { LIFECYCLE_STAGES, PIPELINE_STAGES } from "../domain/enums.js";
 
-/**
- * Aggregates the counts the existing Dashboard UI needs (product brief,
- * "DASHBOARD REQUIREMENTS") — deliberately just these, not a general
- * reporting platform. Every query here is scoped to workspaceId so a
- * workspace's dashboard never leaks another workspace's numbers.
- *
- * Deliberately does NOT select from public.overdue_tasks /
- * public.active_leads_missing_next_action (the read-only views
- * 001_initial_migration.sql defines): those views were created with a bare
- * `select *` / `select l.*` before workspace_id existed on tasks/leads, and
- * Postgres freezes a view's column list at CREATE VIEW time — a later
- * `alter table ... add column workspace_id` does NOT propagate into an
- * already-created view. 015_workspaces.sql never recreates them, so neither
- * view actually exposes a workspace_id column to filter on. The underlying
- * table logic is inlined below instead of relying on those views.
- */
+// Day/week/month boundaries are Asia/Kolkata calendar periods (weeks start Monday).
+const istStart = (unit: "day" | "week" | "month") => `(date_trunc('${unit}', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata')`;
+const TODAY = istStart("day");
+const TOMORROW = `(${TODAY} + interval '1 day')`;
+const WEEK = istStart("week");
+const MONTH = istStart("month");
+
+// shortcut: the close date comes from the Won/Lost timeline event (deals have no closed_at); add a column if this gets slow.
+const closedThisMonth = (outcome: "won" | "lost", title: string) => `(
+  select count(*)::int from crm.deals d
+   where d.workspace_id = $1 and d.outcome = '${outcome}'
+     and exists (select 1 from crm.timeline_events e
+                  where e.deal_id = d.id and e.event_kind = 'system' and e.title = '${title}' and e.occurred_at >= ${MONTH}))`;
+
+/** One workspace's dashboard numbers. Every query filters on workspace_id. */
 export async function getDashboardSummary(db: Queryable, workspaceId: string) {
-  const [activeLeads, dueToday, overdue, meetingsToday, proposalFollowUps, missingNextAction, automationFailures, funnel] = await Promise.all([
-    db.query<{ count: string }>(`select count(*)::text as count from public.leads where workspace_id = $1 and lifecycle_state = 'active'`, [workspaceId]),
-    db.query<{ count: string }>(
-      `select count(*)::text as count from public.tasks
-        where workspace_id = $1
-          and status = 'open'
-          and due_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
-          and due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`,
-      [workspaceId],
-    ),
-    db.query<{ count: string }>(
-      `select count(*)::text as count from public.tasks where workspace_id = $1 and status = 'open' and due_at < now()`,
-      [workspaceId],
-    ),
-    db.query<{ count: string }>(
-      `select count(*)::text as count from public.meetings
-        where workspace_id = $1
-          and status not in ('cancelled')
-          and scheduled_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
-          and scheduled_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'`,
-      [workspaceId],
-    ),
-    db.query<{ count: string }>(
-      `select count(*)::text as count from public.proposals where workspace_id = $1 and status in ('sent', 'revision_requested', 'revised')`,
-      [workspaceId],
-    ),
-    db.query<{ count: string }>(
-      `select count(*)::text as count
-         from public.leads l
-        where l.workspace_id = $1
-          and l.lifecycle_state = 'active'
-          and not exists (select 1 from public.tasks t where t.lead_id = l.id and t.status = 'open')`,
-      [workspaceId],
-    ),
-    db.query<{ count: string }>(
-      `select count(*)::text as count from public.workflow_runs where workspace_id = $1 and status = 'failed'`,
-      [workspaceId],
-    ),
-    getPipelineFunnel(db, workspaceId),
-  ]);
+  const counts = await db.query<Record<string, number>>(
+    `select
+       ${closedThisMonth("won", "Won")} as won,
+       ${closedThisMonth("lost", "Lost")} as lost,
+       (select count(*)::int from crm.calls where workspace_id = $1 and source = 'ai' and occurred_at >= ${WEEK}) as ai_calls,
+       (select count(*)::int from crm.calls where workspace_id = $1 and source = 'human' and occurred_at >= ${WEEK}) as human_calls,
+       (select count(*)::int from crm.email_activities where workspace_id = $1 and sent_at >= ${WEEK}) as emails_sent,
+       (select count(*)::int from crm.email_activities where workspace_id = $1 and replied_at >= ${WEEK}) as emails_replied,
+       (select count(*)::int from crm.tasks where workspace_id = $1 and status = 'open' and due_at >= ${TODAY} and due_at < ${TOMORROW}) as due_today,
+       (select count(*)::int from crm.tasks where workspace_id = $1 and status = 'open' and due_at < now()) as overdue,
+       (select count(*)::int from crm.deals d where d.workspace_id = $1 and d.outcome = 'open'
+           and not exists (select 1 from crm.tasks t where t.deal_id = d.id and t.status = 'open')) as missing_next_action,
+       (select count(*)::int from crm.meetings where workspace_id = $1 and status not in ('cancelled', 'failed')
+           and scheduled_at >= ${TODAY} and scheduled_at < ${TOMORROW}) as meetings_today,
+       (select count(*)::int from crm.proposals where workspace_id = $1 and status in ('sent', 'revision_requested', 'revised')) as proposals_awaiting`,
+    [workspaceId],
+  );
+  const lifecycle = await db.query<{ stage: string; count: number }>(
+    `select lifecycle_stage as stage, count(*)::int as count from crm.contacts
+      where workspace_id = $1 and status <> 'merged' group by 1`,
+    [workspaceId],
+  );
+  const stages = await db.query<{ stage: string; count: number }>(
+    `select stage, count(*)::int as count from crm.deals where workspace_id = $1 and outcome = 'open' group by 1`,
+    [workspaceId],
+  );
+  const c = counts.rows[0]!;
+  const countOf = (rows: { stage: string; count: number }[], stage: string) => rows.find((r) => r.stage === stage)?.count ?? 0;
 
   return {
-    activeLeads: Number(activeLeads.rows[0]?.count ?? 0),
-    tasksDueToday: Number(dueToday.rows[0]?.count ?? 0),
-    overdueActions: Number(overdue.rows[0]?.count ?? 0),
-    meetingsToday: Number(meetingsToday.rows[0]?.count ?? 0),
-    proposalFollowUps: Number(proposalFollowUps.rows[0]?.count ?? 0),
-    leadsWithNoNextAction: Number(missingNextAction.rows[0]?.count ?? 0),
-    automationFailures: Number(automationFailures.rows[0]?.count ?? 0),
-    pipelineFunnel: funnel,
+    lifecycleFunnel: LIFECYCLE_STAGES.map((stage) => ({ stage, count: countOf(lifecycle.rows, stage) })),
+    openDealsByStage: PIPELINE_STAGES.map((stage) => ({ stage, count: countOf(stages.rows, stage) })),
+    dealsThisMonth: { won: c.won, lost: c.lost },
+    activityThisWeek: { aiCalls: c.ai_calls, humanCalls: c.human_calls, emailsSent: c.emails_sent, emailsReplied: c.emails_replied },
+    // Same rules as the tasks list filters (dueTodayOnly / overdueOnly), so a task due earlier today counts in both.
+    tasks: { dueToday: c.due_today, overdue: c.overdue },
+    openDealsMissingNextAction: c.missing_next_action,
+    meetingsToday: c.meetings_today,
+    proposalsAwaitingDecision: c.proposals_awaiting,
   };
-}
-
-async function getPipelineFunnel(db: Queryable, workspaceId: string) {
-  const totalLeads = await db.query<{ count: string }>(`select count(*)::text as count from public.leads where workspace_id = $1`, [workspaceId]);
-  const called = await db.query<{ count: string }>(
-    `select count(distinct lead_id)::text as count from public.calls where workspace_id = $1`,
-    [workspaceId],
-  );
-  const connected = await db.query<{ count: string }>(
-    `select count(distinct lead_id)::text as count from public.calls where workspace_id = $1 and connected = true`,
-    [workspaceId],
-  );
-  const meetings = await db.query<{ count: string }>(
-    `select count(distinct lead_id)::text as count from public.meetings where workspace_id = $1`,
-    [workspaceId],
-  );
-  const proposals = await db.query<{ count: string }>(
-    `select count(distinct lead_id)::text as count from public.proposals where workspace_id = $1`,
-    [workspaceId],
-  );
-  const won = await db.query<{ count: string }>(
-    `select count(*)::text as count from public.leads where workspace_id = $1 and lifecycle_state = 'won'`,
-    [workspaceId],
-  );
-
-  return [
-    { label: "Leads", value: Number(totalLeads.rows[0]?.count ?? 0) },
-    { label: "Called", value: Number(called.rows[0]?.count ?? 0) },
-    { label: "Connected", value: Number(connected.rows[0]?.count ?? 0) },
-    { label: "Meetings", value: Number(meetings.rows[0]?.count ?? 0) },
-    { label: "Proposals", value: Number(proposals.rows[0]?.count ?? 0) },
-    { label: "Won", value: Number(won.rows[0]?.count ?? 0) },
-  ];
-}
-
-export async function listTodaysQueue(db: Queryable, workspaceId: string) {
-  const result = await db.query<{
-    id: string;
-    lead_id: string;
-    title: string;
-    task_type: string;
-    due_at: Date;
-    owner_id: string | null;
-  }>(
-    `select id, lead_id, title, task_type, due_at, owner_id
-       from public.tasks
-      where workspace_id = $1
-        and status = 'open'
-        and due_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'
-      order by due_at asc
-      limit 10`,
-    [workspaceId],
-  );
-  return result.rows.map((r) => ({
-    id: r.id,
-    leadId: r.lead_id,
-    title: r.title,
-    type: r.task_type,
-    dueAt: r.due_at.toISOString(),
-    ownerId: r.owner_id ?? undefined,
-  }));
 }

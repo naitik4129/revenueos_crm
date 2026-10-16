@@ -2,6 +2,7 @@ import { Router } from "express";
 import { asyncHandler } from "../asyncHandler.js";
 import { requireAuth } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
+import { parseId } from "../validation/parse.js";
 import { listNotificationsFor, markAllNotificationsRead, markNotificationRead } from "../services/notifications.service.js";
 
 export const notificationsRouter = Router();
@@ -17,7 +18,7 @@ notificationsRouter.get(
 notificationsRouter.post(
   "/:id/read",
   asyncHandler(async (req, res) => {
-    const notification = await withTransaction((client) => markNotificationRead(client, req.actor!.id, req.workspaceId!, req.params.id!));
+    const notification = await withTransaction((client) => markNotificationRead(client, req.actor!.id, req.workspaceId!, parseId(req.params.id, "Notification")));
     res.json(notification);
   }),
 );
