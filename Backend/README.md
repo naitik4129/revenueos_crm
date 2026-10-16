@@ -79,6 +79,36 @@ npm run test:integration     # requires TEST_DATABASE_URL, see below
 npm run check              # typecheck && lint && test:run
 ```
 
+## Demo mode (local click-through)
+
+```sh
+cd Backend
+npm run demo
+```
+
+Open http://127.0.0.1:8080 and click a demo user (password `demo` for all):
+`admin@demo.local` (admin), `sam@demo.local` (salesperson, both workspaces),
+`priya@demo.local` (salesperson, Acme only). Ctrl+C stops everything.
+
+One Node process runs it all: PGlite with migrations 000-012 and seed data (two client
+workspaces, companies, contacts in every lifecycle stage, deals in every outcome, tasks,
+AI + human calls, campaign emails, a meeting, a proposal, notifications), a local fake of
+Supabase Auth/Storage, the API on 127.0.0.1:8787, the automation worker in dry run, and the
+frontend dev server on 127.0.0.1:8080. Data is in memory and reset on every start.
+
+Guards (code in `demo/`, tests in `demo/*.test.ts` and
+`Frontend/src/features/auth/demo-login.build.test.ts`):
+- runs only with `DEMO_MODE=true` and `NODE_ENV=development` (set by `demo/demo.env`; a shell
+  `NODE_ENV=production` wins and it refuses), and refuses if `DATABASE_URL` is set;
+- after loading, the database must be the local PGlite and auth the local fake, and provider
+  keys (`RESEND_API_KEY`, `SMTP_FROM_ADDRESS`, `GOOGLE_OAUTH_*`) are blanked and checked;
+- `demo/` is outside the build (`tsconfig.json` includes only `src` and `tests`), so it is never
+  in `dist/` or a Docker image; compose and the Dockerfiles never mention it;
+- the frontend demo login is dev-only and is removed from production builds.
+
+Not available in demo mode: creating real user accounts, Google Calendar connect, WhatsApp
+pairing, and real email sends (the worker logs "(dry run)" instead).
+
 ## Running the integration tests
 
 `tests/integration/*.test.ts` exercise full business flows (create lead →

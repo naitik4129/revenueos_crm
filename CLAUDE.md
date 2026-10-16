@@ -164,7 +164,10 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
 - **Email Tool results endpoint**: needed before email events beyond `sent` can be pushed.
 - **Refresh `CONTEXT.md`** once the `crm` schema and code are in place (it still describes the old system).
 
+## Demo mode (2026-10-16)
+`cd Backend && npm run demo` -> http://127.0.0.1:8080, users admin@/sam@/priya@demo.local (password `demo`). Local PGlite + seed + fake Supabase Auth/Storage + API + dry-run worker + Vite, all in one process. Code lives in `Backend/demo/` (never built or shipped); guards and tests are described in `Backend/README.md`. No demo code in `Backend/src`.
+
 ## Commands
 
-Backend (`cd Backend`): `npm run typecheck`, `npm run lint`, `npm run test:run` (includes PGlite integration tests), `npm run build`.
+Backend (`cd Backend`): `npm run typecheck` (also typechecks `demo/`), `npm run lint`, `npm run test:run` (includes PGlite integration tests and the demo guard tests), `npm run build`, `npm run demo`.
 Frontend (`cd Frontend`): `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run test:run`, `npm run build` (the build regenerates `src/routeTree.gen.ts`).

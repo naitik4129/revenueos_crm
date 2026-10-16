@@ -1,9 +1,16 @@
-import { useState, type FormEvent } from "react";
+import { lazy, Suspense, useState, type FormEvent } from "react";
 import { BrandLogo } from "@/components/common/brand-logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabase-client";
+
+// Demo mode only. Vite replaces import.meta.env.DEV with false in production builds, so this
+// branch and the demo picker are removed from the production bundle (demo-login.build.test.ts).
+const DemoLogin =
+  import.meta.env.DEV && import.meta.env["VITE_DEMO_MODE"] === "true"
+    ? lazy(() => import("./demo-login"))
+    : null;
 
 /**
  * Real Supabase Auth sign-in. There is no self-service sign-up form here on
@@ -83,6 +90,11 @@ export function LoginPage({ adminMode = false }: { adminMode?: boolean }) {
             Accounts are provisioned by your administrator - there is no self-service sign-up.
           </p>
         </form>
+        {DemoLogin && (
+          <Suspense fallback={null}>
+            <DemoLogin />
+          </Suspense>
+        )}
       </div>
     </div>
   );
