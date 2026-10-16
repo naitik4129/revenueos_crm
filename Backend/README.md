@@ -1,54 +1,67 @@
 # Northbeam CRM — Backend
 
-The trusted business layer between the existing frontend and the Supabase
-foundation (`Supabase/migrations/*.sql`, applied in order):
+The trusted business layer of the v2 CRM. The system overview is in
+[`../CONTEXT.md`](../CONTEXT.md); rules and decisions are in [`../CLAUDE.md`](../CLAUDE.md).
 
 ```
-Frontend  →  Backend (this)  →  Supabase Postgres + Auth
+Frontend / RevenueOS brain  →  Backend (this)  →  Supabase Postgres (schema crm) + Auth + Storage
+Worker (src/worker.ts)      →  Email (Resend/SMTP), WhatsApp (Baileys), Google Calendar
 ```
 
-Node 22 + TypeScript (ESM) + Express + `pg` (direct Postgres access, not
-PostgREST) + `zod` for validation. Auth identity comes from Supabase Auth;
-business data access goes through a direct Postgres connection so
-multi-table writes (e.g. "log a call" touching `calls`, `leads`, `tasks`,
-`timeline_events`, `workflow_runs`) can be wrapped in a real transaction —
-something PostgREST-style REST calls can't give you.
+Node 22 + TypeScript (ESM) + Express + `pg` + `zod`. Auth identity comes from Supabase Auth
+(`supabase.auth.getUser(token)`); all CRM data goes through a direct Postgres connection, so
+multi-table writes (e.g. "log a call" touching `crm.calls`, `crm.deals`, `crm.tasks`,
+`crm.timeline_events`, `crm.workflow_runs`) run in one real transaction.
 
 ## Layout
 
 ```
 src/
-  env.ts                 zod-validated environment config
-  db.ts                  pg Pool + withTransaction() helper
-  supabaseAdmin.ts        server-only Supabase Auth verification/admin client
-  authMiddleware.ts        verifies token, active profile, and role
+  env.ts / workerEnv.ts   zod-validated environment config (API / worker)
+  db.ts                   pg Pool + withTransaction()
+  supabaseAdmin.ts        server-only Supabase Auth/Storage client
+  authMiddleware.ts       token -> active crm.profiles row -> role; workspace access
   errors.ts / errorMiddleware.ts   typed AppError taxonomy -> JSON responses
-  domain/                 pure business-rule modules (no I/O, unit-tested)
-    enums.ts               mirrors the migration's Postgres enums
-    pipeline.ts             lifecycle/pipeline-stage guards
-    callRouting.ts           call outcome -> stage/automation/task/workflow
-    meetingRouting.ts        meeting outcome -> stage/lifecycle/task
-    proposalRouting.ts       proposal status -> stage/lifecycle/task
-  services/                one file per aggregate: SQL + orchestration,
-                            composable inside a single db transaction
-  routes/                  thin Express routers: validate -> call service -> respond
+  domain/                 pure rules, no I/O (enums, pipeline, call/meeting/proposal routing,
+                          template renderer, phone/email normalisation)
+  services/               one file per aggregate: SQL + orchestration inside a transaction
+  routes/                 thin Express routers: validate -> call service -> respond
+  providers/              email, WhatsApp (Baileys), Google Calendar
+  security/               AES encryption for stored secrets
+  worker.ts               automation worker (separate process)
 tests/
-  unit/                    domain logic, no DB required
-  integration/              real business flows against a live Postgres,
-                            skipped unless TEST_DATABASE_URL is set
+  unit/                   domain logic
+  integration/            full HTTP flows on PGlite (see below)
+demo/                     demo mode only; never built or shipped
 ```
 
-## Why direct Postgres instead of the Supabase JS client for data access
+## Database and access
 
-RLS stays enabled on every table (defense-in-depth), but this backend
-connects with a role that bypasses it (see `.env.example`) and enforces
-authorization itself — the same trust model Supabase's own `service_role`
-key has over PostgREST. The difference is `pg` gives us real
-`BEGIN`/`COMMIT`/`ROLLBACK` transactions, which composite business
-operations (log a call, complete a meeting, publish a workflow version)
-require (see Rule 16 in the product brief: a business operation must fully
-land or not at all). `@supabase/supabase-js` is used for exactly one thing:
-`supabase.auth.getUser(token)` to verify who is calling.
+- Every CRM table and enum lives in schema **`crm`** in the shared RevenueOSDatabase Supabase
+  project. The backend never writes outside `crm`; it only reads `public.revenueos_profiles`
+  (names, emails) and `public.revenueos_projects` (workspace links).
+- Backend and worker connect as role **`crm_app`** (created by `000_platform_grants.sql`, rights
+  on `crm` from `001`). It has `BYPASSRLS`: RLS is on for every `crm` table with no policies, and
+  this backend enforces access in code.
+- CRM access = an active **`crm.profiles`** row (`admin` or `salesperson`); a valid account
+  without one gets 403. Salespeople see only workspaces in `crm.workspace_members`; admins see
+  all. The CRM never creates or changes auth accounts.
+
+### Migrations (`../Supabase/migrations`, run by hand, in this order)
+
+1. `000_platform_grants.sql`: the `crm_app` role. Run once by a platform developer, as
+   `postgres`, after the platform team approves; then set its password outside version control
+   (`alter role crm_app with password '…'`).
+2. `001_crm_schema.sql` … `012_crm_deal_closed_at.sql`, in filename order: schema and grants,
+   enums, identity, core, activity, automation, integrations, audit, triggers, RLS, brain intake,
+   `deals.closed_at`.
+
+They have not been run on the shared project yet.
+
+### Storage buckets
+
+Create these two private buckets by hand in the Supabase dashboard (not by SQL):
+`crm-template-attachments` and `crm-proposal-documents`.
 
 ## Setup
 
@@ -56,27 +69,28 @@ land or not at all). `@supabase/supabase-js` is used for exactly one thing:
 cd Backend
 npm install
 cp .env.example .env
-# fill in DATABASE_URL, Supabase values, and INTEGRATION_ENCRYPTION_KEY
+# fill in DATABASE_URL (as crm_app), Supabase values and INTEGRATION_ENCRYPTION_KEY
 npm run dev
 ```
 
-`DATABASE_URL` must point at the same Supabase Postgres database the
-all `Supabase/migrations/*.sql` migrations have been applied in order
-to, using a role that bypasses RLS (the Supabase dashboard's `postgres`
-connection string, or a dedicated backend role you grant `BYPASSRLS`).
+Through the Supabase pooler the database user is `crm_app.<project_ref>`. Use one stable
+`INTEGRATION_ENCRYPTION_KEY` for both API and worker.
 
 ## Scripts
 
 ```bash
-npm run dev             # tsx watch — auto-restarting dev server
-npm run build            # tsc -> dist/
-npm start                 # node dist/index.js (after build)
-npm run typecheck
+npm run dev               # tsx watch — API dev server
+npm run worker:dev        # tsx watch — worker
+npm run build             # tsc -> dist/
+npm start                 # node dist/src/index.js (after build)
+npm run worker            # node dist/src/worker.js (after build)
+npm run typecheck         # src + tests, and demo/
 npm run lint
-npm test / test:run        # vitest (watch / single run) — unit + integration
-npm run test:unit           # domain logic only, no DB needed
-npm run test:integration     # requires TEST_DATABASE_URL, see below
-npm run check              # typecheck && lint && test:run
+npm test / test:run       # vitest (watch / single run): unit, integration and demo tests
+npm run test:unit
+npm run test:integration
+npm run check             # typecheck && lint && test:run
+npm run demo              # local click-through, see below
 ```
 
 ## Demo mode (local click-through)
@@ -92,9 +106,10 @@ Open http://127.0.0.1:8080 and click a demo user (password `demo` for all):
 
 One Node process runs it all: PGlite with migrations 000-012 and seed data (two client
 workspaces, companies, contacts in every lifecycle stage, deals in every outcome, tasks,
-AI + human calls, campaign emails, a meeting, a proposal, notifications), a local fake of
-Supabase Auth/Storage, the API on 127.0.0.1:8787, the automation worker in dry run, and the
-frontend dev server on 127.0.0.1:8080. Data is in memory and reset on every start.
+AI + human calls, campaign emails, a meeting today, a proposal, notifications, brain keys and an
+inactive user), a local fake of Supabase Auth/Storage, the API on 127.0.0.1:8787, the automation
+worker in dry run, and the frontend dev server on 127.0.0.1:8080. Data is in memory and reset on
+every start.
 
 Guards (code in `demo/`, tests in `demo/*.test.ts` and
 `Frontend/src/features/auth/demo-login.build.test.ts`):
@@ -106,130 +121,102 @@ Guards (code in `demo/`, tests in `demo/*.test.ts` and
   in `dist/` or a Docker image; compose and the Dockerfiles never mention it;
 - the frontend demo login is dev-only and is removed from production builds.
 
-Not available in demo mode: creating real user accounts, Google Calendar connect, WhatsApp
-pairing, and real email sends (the worker logs "(dry run)" instead).
+Not available in demo mode: Google Calendar connect, WhatsApp pairing, and real email sends (the
+worker logs "(dry run)" instead).
 
-## Running the integration tests
+## Integration tests
 
-`tests/integration/*.test.ts` exercise full business flows (create lead →
-log call → outcome routing → workflow enrollment, DNC cascade, etc.)
-against a real Postgres instance running the migration. They're skipped
-automatically when `TEST_DATABASE_URL` isn't set, so `npm test` is green in
-any environment — including this one, which has no Docker/Supabase CLI
-available and so was never able to run them. To actually run them:
-
-```bash
-# against a local Supabase stack (requires Docker + the Supabase CLI):
-supabase start
-TEST_DATABASE_URL=postgres://postgres:postgres@localhost:54322/postgres npm run test:integration
-
-# or against a disposable Supabase project with the migration applied:
-TEST_DATABASE_URL=postgres://postgres:<password>@db.<ref>.supabase.co:5432/postgres npm run test:integration
-```
+`tests/integration/*.test.ts` run full HTTP flows (contacts → deals → calls and routing,
+meetings, proposals, workflows and the worker, brain intake, admin) on an in-process
+**PGlite** database with migrations `000`–`012` applied on stand-in `auth` and `public` tables
+(`tests/integration/testDb.ts`). No Docker or Supabase needed; `npm run test:run` includes them.
+All connections share one PGlite session, so the tests run sequentially.
 
 ## API shape
 
-All business routes are mounted under `/api/v1` and require
-`Authorization: Bearer <supabase-access-token>`. `GET /health` is
-unauthenticated (liveness only). Errors are always
-`{ "error": { "code": string, "message": string, "details"?: unknown } }`
-with a matching HTTP status — see `src/errors.ts` for the taxonomy
-(`invalid_input` 400, `authentication_failed` 401, `forbidden` 403,
-`not_found` 404, `conflict` 409, `do_not_contact` 409,
-`invalid_transition` 422, `internal_error` 500).
-
-Key endpoints (see `src/routes/*.ts` for the complete list):
+Everything is under `/api/v1` and needs `Authorization: Bearer <supabase-access-token>`;
+workspace-scoped routes also need `X-Workspace-Id`. `GET /health` is unauthenticated. Errors are
+always `{ "error": { "code", "message", "details"? } }` with a matching status (see
+`src/errors.ts`: `invalid_input` 400, `authentication_failed` 401, `forbidden` 403, `not_found`
+404, `conflict` 409, `do_not_contact` 409, `invalid_transition` 422, `internal_error` 500).
+Workspace lists are paged (`limit`, `offset`; the response has `total`).
 
 ```
-GET/POST   /leads                          list / create
-GET/PATCH  /leads/:id                       detail / edit descriptive fields
-POST       /leads/:id/notes
-POST       /leads/:id/communications        persist manual email/WhatsApp activity
-POST       /leads/:id/automation            {mode, reason?}
-POST       /leads/:id/dnc                   {reason}
-POST       /leads/:id/dnc/reactivate        {reason}
-POST       /leads/:id/won | /discard | /reactivate
-POST       /leads/:id/lost                   {lossReason, notes?}
-POST       /leads/:id/long-term-nurture      {reason?}
-POST       /leads/:id/merge                 {targetLeadId, reason?}
-GET/POST   /leads/:id/contactability
-GET/POST   /leads/:id/calls                  logging a call IS outcome processing
-GET        /leads/:id/timeline | /meetings | /proposals | /runs
+GET        /me | /profiles
+GET/POST/PATCH  /admin/users                     admins: email + role only; role / active
+GET/POST/PATCH  /workspaces                      list (all users); create / edit (admins)
+GET/PUT    /workspaces/:id/members               admins
+GET/POST/DELETE /workspaces/:id/brain-keys       admins; the full key is returned once
 
-GET/POST   /tasks                            PATCH /tasks/:id, POST /tasks/:id/complete | /cancel
-GET/POST   /meetings                          PATCH /meetings/:id, POST /meetings/:id/outcome
-GET/POST   /proposals                          PATCH /proposals/:id, POST /proposals/:id/status
+GET/POST   /companies          GET/PATCH /companies/:id
+GET/POST   /contacts           GET/PATCH /contacts/:id, POST /contacts/import
+           /contacts/:id/notes | /calls | /dnc | /dnc/reactivate | /merge
+GET/POST   /deals              GET/PATCH /deals/:id, outcome actions (won, lost, nurture, …)
+GET        /deals/:id/tasks | /meetings | /proposals | /runs | /timeline
 
-GET/POST   /workflows                          PATCH /workflows/:id
-POST       /workflows/:id/draft
-PUT        /workflows/:id/versions/:v/steps
-POST       /workflows/:id/versions/:v/publish
-POST       /workflows/:id/duplicate
-GET/POST   /templates                           PATCH /templates/:id
+GET/POST   /tasks              PATCH /tasks/:id, POST /tasks/:id/complete | /cancel
+GET/POST   /meetings           PATCH /meetings/:id, POST /meetings/:id/outcome   (when=upcoming|past|today)
+GET/POST   /proposals          GET /proposals/summary, POST /proposals/:id/document | /send | /status
 
-GET/POST   /runs                                 POST /runs/:id/pause|resume|cancel|retry
-GET        /scheduled-actions                     (read/cancel only, salesperson-facing)
+GET/POST   /workflows          drafts, steps, publish, duplicate
+GET/POST   /templates          GET /templates/variables, POST /templates/preview, attachments
+GET/POST   /runs               POST /runs/:id/pause | resume | cancel | retry
+GET        /scheduled-actions
 
 GET        /dashboard/summary
-GET/POST   /notifications                          POST /notifications/:id/read
-GET        /me | /profiles
+GET        /notifications      POST /notifications/:id/read | /read-all
+GET/PUT    /connections/email | /whatsapp/settings | /google-calendar …
 
-GET/POST/PATCH /admin/users
-GET/PUT        /admin/connections/email
-POST           /admin/connections/email/test
-GET/PUT        /admin/connections/whatsapp/settings
-POST           /admin/connections/whatsapp/connect|restart|logout
+POST       /brain/v1/companies | /contacts | /calls | /email-events | /handovers
+GET        /brain/v1/suppressions                brain service key, not a user token
 ```
+
+See `src/routes/*.ts` for the complete list.
 
 ### Automation execution
 
-There is no external executor and no separate service-auth API surface —
-`src/worker.ts` is a standalone Node process (`npm run worker`) that polls
-`scheduled_actions` directly and calls the same functions in
-`src/services/automation.service.ts` in-process: claim due actions
-(concurrency-safe `SKIP LOCKED` claim), recheck eligibility
-(lifecycle/DNC/automation-mode/contactability/response-state), render the
-template, send through the admin-selected Resend/TLS SMTP connection or the
-single shared Baileys socket, and record the
-result — which advances the run to the next step or applies backend-owned
-retry/backoff on failure. All business logic (next-step selection, delay
-calculation, template/stage resolution, retry/backoff, eligibility) lives
-in `automation.service.ts`; `worker.ts` is deliberately thin and just calls
-it on a poll loop (see `INTEGRATION_ENCRYPTION_KEY` / `WORKER_*` in
-`.env.example`).
+`src/worker.ts` is a separate Node process (`npm run worker`) that calls the same service code
+in-process. Each tick it claims due `crm.scheduled_actions` (`SKIP LOCKED`), rechecks
+eligibility (deal outcome, DNC, channel status, automation mode, reply state), renders the
+template, sends through the workspace's email connection or WhatsApp socket, records the result
+and schedules the next step (or retries with backoff). It also sends queued proposal and meeting
+WhatsApp messages. `WORKER_DRY_RUN=true` logs instead of sending.
 
-The worker owns the only Baileys socket and holds a PostgreSQL advisory lock
-for its lifetime. Baileys credentials and individual Signal keys are stored
-encrypted in Postgres; QR values are admin-only and short-lived. Inbound
-direct replies retain metadata only and atomically stop all matching lead
-automation. Baileys is an unofficial WhatsApp Web client, so protocol and
-account-enforcement risk remains even with conservative throttling.
+The worker keeps one Baileys socket per active workspace, each behind its own PostgreSQL
+advisory lock. Baileys credentials and Signal keys are stored encrypted; QR codes are short-lived
+and shown only on the Settings page. Inbound replies keep metadata only (never the body) and stop
+the matching automation. Baileys is unofficial, so protocol and account-ban risk remains.
 
-## Initial administrator
+## First admin
 
-Create the first identity in Supabase Auth, then promote it after migration:
+The person's account must already exist on the RevenueOS platform. Give it CRM access (the
+human runs this; the CRM never writes to `public.*`):
 
 ```sql
-update public.profiles set role = 'admin' where email = 'admin@example.com';
+insert into crm.profiles (id, role)
+select id, 'admin' from public.revenueos_profiles where lower(email) = lower('admin@example.com');
 ```
 
-Admin identities are restricted to `/admin`; salesperson identities are
-restricted to CRM business routes.
+After that, the admin manages everyone else in the app: **Admin → Users** (add an existing
+RevenueOS account by email, set role, activate/deactivate), **Workspaces**, **Members** and
+**Brain API keys**.
 
 ## Safe production rollout
 
-1. Apply migrations in filename order and set one stable
-   `INTEGRATION_ENCRYPTION_KEY` on both API and worker.
-2. Promote the first admin with the SQL above, then deploy with Email and
-   WhatsApp outbound disabled.
-3. Configure and test Resend or encrypted SMTP in Admin → Connections.
-4. Pair a disposable, dedicated WhatsApp account and verify worker restart
-   reconnects without a second QR.
-5. Send one opted-in internal message, reply, and confirm the matching run
-   and future actions are cancelled without reply content being stored.
-6. Enable WhatsApp outbound only after the cap, heartbeat, restriction state,
-   and pending counts look healthy.
+1. `crm_app` approved and created (`000`), then `001`–`012` run in order, and the two storage
+   buckets created.
+2. Set the env vars, with one stable `INTEGRATION_ENCRYPTION_KEY` on API and worker; deploy
+   with email and WhatsApp outbound off.
+3. Add the first admin (SQL above); the admin creates the client workspaces, adds and assigns
+   salespeople, and sets each workspace's default owner.
+4. Per workspace, on the **Settings** page: configure and test email (Resend or SMTP), connect
+   Google Calendar, pair a dedicated WhatsApp number and check a worker restart reconnects
+   without a new QR.
+5. Send one opted-in internal email and WhatsApp message, reply, and confirm the matching run
+   and future actions are cancelled without the reply text being stored.
+6. Create a brain key per workspace (Admin → Brain API keys) and hand it to the brain; check
+   `GET /brain/v1/suppressions`, then push a small batch.
+7. Turn WhatsApp outbound on only once cap, connection state and pending counts look healthy.
 
-Rollback starts by switching WhatsApp outbound off. The migration is
-additive and scheduled actions remain in Postgres; restoring a prior provider
-image is an explicit manual deployment decision, not an automatic fallback.
+Rollback starts by switching WhatsApp outbound off and pausing workflows/runs. Migrations are
+additive; scheduled actions and provider state stay in Postgres.
