@@ -13,7 +13,7 @@
 ## Goal
 
 A HubSpot-style CRM for MOTM's team, serving many clients. **One workspace = one client project.**
-The RevenueOS brain does cold outreach; this CRM nurtures the qualified leads (email + WhatsApp via Baileys), through calls, meetings, proposals and won/lost.
+The RevenueOS brain does cold outreach; this CRM holds **all** of a client's data — every prospect company/person the brain finds, its AI calls and email campaign activity — and nurtures the qualified leads (email + WhatsApp via Baileys), through calls, meetings, proposals and won/lost.
 
 This repo is a copy of the old CRM (`Lead-Managment-System`), being reworked. `CONTEXT.md` still describes the OLD system until it is refreshed.
 
@@ -49,17 +49,32 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), being reworked. `C
 - Leak fixes: `notifications.workspace_id` NOT NULL; default meeting-scheduled templates are per-workspace columns on `crm.workspaces` (not global flags on templates).
 
 ### Backend rework rules (2026-10-16)
-- Phases: P0 PGlite test DB → P1 auth/workspaces → P2 companies/contacts/deals → P3 calls/tasks/meetings/proposals → P4 automation/worker → P5 WhatsApp/email/calendar → P6 dashboard/notifications → P7 frontend. One phase per "go".
+- Phases: P0 PGlite test DB → P1 auth/workspaces → P2a migration 011 → P2 companies/contacts/deals → P2b brain intake API → P3 calls/tasks/meetings/proposals → P4 automation/worker → P5 WhatsApp/email/calendar → P6 dashboard/notifications → P7 frontend. One phase per "go".
 - **Call with no open deal**: the call is always saved. If the outcome moves the pipeline and the contact has no open deal, reopen its `nurture` deal if one exists, else create a new open deal, then route. Contact-level outcomes (DNC, wrong number) never create a deal.
 - **Merge + DNC**: if either contact is DNC, the target becomes DNC. Merge moves deals first, then tasks' `contact_id`; blocked if both have an open deal.
 - **Template variables**: `{{contact.*}}`, `{{company.*}}`, `{{deal.*}}`; no aliases for the old `{{lead.*}}` names.
 - **CRM user management**: an email that already has a shared account (found in `public.revenueos_profiles`) only gets a `crm.profiles` row; otherwise the account is created via Supabase Auth admin. The CRM changes only `role` and `is_active`; name, email and password belong to the platform. No `crm.profiles` row → 403 (not 401). Admins cannot deactivate or demote themselves.
 - **Test database**: integration tests run on PGlite + pglite-socket (`Backend/tests/integration/testDb.ts`, migrations 000-010 on stand-in `auth`/`public` tables), no Docker. **Single-session limit**: all connections share one PGlite session — an open transaction blocks the others and `SET` leaks between connections — so tests must run sequentially; use a real Postgres if tests ever need concurrent transactions.
 
+### Brain intake (2026-10-16)
+- **Mapping**: QuickICP companies → `crm.companies`; QuickICP people → `crm.contacts` (lifecycle `prospect`); Quickhowl AI calls → `crm.calls` with `source = 'ai'`; Email Tool campaign emails → `crm.email_activities`; qualified handover → `crm.deals` (owner assigned).
+- **Write path**: the brain writes only through the CRM API `/brain/v1/...` with a per-workspace service key (`crm.brain_api_keys`, SHA-256 hash, shown once). Never direct DB writes. Batches of up to 500, one transaction per item, per-item results, idempotent by external ids.
+- **Identity**: `crm.external_refs` maps (source, external id) → company/contact; a contact can have ids from several tools. The brain sends the QuickICP person id with calls and email events. Match order: external ref → email → E.164 phone; a merged contact resolves to its target.
+- **Updates fill empty fields only**: brain data never overwrites a non-empty CRM field.
+- **Lifecycle stage** (`crm.lifecycle_stage`, like HubSpot): prospect → contacted → engaged → qualified → customer. Set by code, forward only: call or email sent → contacted; email reply or connected call → engaged (opens never count); deal created/handover → qualified; deal won → customer. Admins may move it back manually, with a timeline note.
+- **Consent both ways**: email unsubscribe/bounce update the email channel; an AI call flagged DNC puts the contact on DNC. The brain reads `GET /brain/v1/suppressions` before contacting anyone.
+- **AI calls are activity only**: no human call routing; qualification comes only through `/brain/v1/handovers`.
+- **Handover owner**: `ownerEmail` if that user is a member of the workspace, else `crm.workspaces.default_owner_id`, else unassigned + notify all members.
+- **Volume**: ~150-200 companies and 250-350 contacts per client per month. Batch size 500; all lists paginated.
+- **Personal data**: email reply text and call transcripts are stored in full; no auto-delete in V1.
+- **Fresh start** = no old CRM data; a one-time QuickICP push later through the same API is allowed.
+- **Email events beyond `sent`** (delivered, opened, replied, bounced, unsubscribed) wait for the Email Tool results endpoint.
+- Workflow trigger `lead_created` is renamed `deal_created`: prospects never auto-enroll; only deals do.
+
 ### Kept features
 CSV import, calls + routing, nurture workflows + worker, templates + attachments, email (Resend/SMTP), WhatsApp (Baileys), Google Calendar, meetings, proposals, tasks, DNC, merge, delete + audit, notifications, dashboard, workspaces, admin users.
 
-## Tables (32, all in `crm`)
+## Tables (35, all in `crm`)
 
 Identity
 1. `profiles` — CRM access record (role, is_active).
@@ -105,6 +120,13 @@ Audit
 31. `deleted_records_audit` — with entity type.
 32. `admin_audit_events`
 
+Brain intake (011)
+33. `external_refs` — (source, external id) → company or contact.
+34. `email_activities` — one row per campaign email per contact; status = highest event so far.
+35. `brain_api_keys` — per-workspace service keys (hash only).
+
+011 also adds `contacts.lifecycle_stage` (+ linkedin_url, country, location), `companies.headcount/linkedin_url/location`, AI-call fields on `calls`, `workspaces.default_owner_id`, and drops `external_source/external_id` from companies and contacts (replaced by `external_refs`).
+
 Enums live in `crm` too.
 
 ## SQL files to write (in order, in `Supabase/migrations/`)
@@ -119,12 +141,17 @@ Enums live in `crm` too.
 8. `008_crm_audit.sql` — deleted_records_audit, admin_audit_events.
 9. `009_crm_triggers.sql` — updated_at, DNC history, consent/automation stop, deal outcome cascade.
 10. `010_crm_rls.sql` — enable RLS on all crm tables, no policies.
+11. `011_crm_brain_intake.sql` — lifecycle stage, external refs, AI calls, email activities, brain API keys, default owner.
+
+Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the human runs it first).
 
 ## Open items
 
 - **`crm_app` role**: needs approval from the platform developers before any SQL is run.
 - **Google privacy URL**: `/privacy` was removed; Google OAuth consent verification needs a public privacy-policy URL hosted elsewhere (e.g. the marketing site).
 - **`brain_customer_key` check**: confirm `revenueos_projects.brain_customer_key` matches the brain's `customer` text (QuickICP tables) before building brain pushes.
+- **Retention period** for email reply text, call transcripts and recordings: management decision (no auto-delete in V1).
+- **Email Tool results endpoint**: needed before email events beyond `sent` can be pushed.
 - **Refresh `CONTEXT.md`** once the `crm` schema and code are in place (it still describes the old system).
 
 ## Commands
