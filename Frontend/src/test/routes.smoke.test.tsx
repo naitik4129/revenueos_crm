@@ -52,6 +52,12 @@ vi.mock("@/store", () => {
       isFetching: false,
     }),
     useIndustries: () => [],
+    useDeals: () => ({
+      data: { data: [], total: 0, limit: 50, offset: 0 },
+      isLoading: false,
+      error: null,
+      isFetching: false,
+    }),
     useTasks: () => ({
       tasks: [],
       isLoading: false,
@@ -123,6 +129,7 @@ vi.mock("@/store", () => {
 import { DashboardPage } from "@/features/dashboard/dashboard-page";
 import { CompaniesPage } from "@/features/companies/companies-page";
 import { ContactsPage } from "@/features/contacts/contacts-page";
+import { DealsPage } from "@/features/deals/deals-page";
 import { LeadsPage } from "@/features/leads/leads-page";
 import { TasksPage } from "@/features/tasks/tasks-page";
 import { MeetingsPage } from "@/features/meetings/meetings-page";
@@ -150,6 +157,7 @@ describe("zero-record route states", () => {
     [DashboardPage, "Nothing due today."],
     [ContactsPage, "No contacts match these filters."],
     [CompaniesPage, "No companies match these filters."],
+    [DealsPage, "New"],
     [LeadsPage, "No leads match these filters."],
     [TasksPage, "Nothing here."],
     [MeetingsPage, "No meetings."],

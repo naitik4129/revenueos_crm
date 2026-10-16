@@ -1,8 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PageHeader } from "@/app/app-shell";
+import { DealsPage } from "@/features/deals/deals-page";
 
-// shortcut: placeholder until P7d1 builds this screen.
 export const Route = createFileRoute("/deals/")({
   head: () => ({ meta: [{ title: "Deals - MOTM Flow" }] }),
-  component: () => <PageHeader title="Deals" description="Open deals by pipeline stage." />,
+  component: DealsPage,
 });

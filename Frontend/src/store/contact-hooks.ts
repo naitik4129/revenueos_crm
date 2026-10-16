@@ -1,5 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { backend, type CompanyFilters, type ContactFilters } from "@/lib/backend-client";
+import {
+  backend,
+  type CompanyFilters,
+  type ContactFilters,
+  type DealFilters,
+} from "@/lib/backend-client";
 import { keys } from "./query";
 import { useWorkspace } from "./workspace-context";
 
@@ -81,9 +86,28 @@ export function useCompanyDetail(id: string) {
   };
 }
 
+export function useDeals(filters: DealFilters) {
+  const { currentWorkspaceId } = useWorkspace();
+  return useQuery({
+    queryKey: keys.deals(currentWorkspaceId, filters),
+    queryFn: ({ signal }) => backend.deals.list(filters, signal),
+    enabled: Boolean(currentWorkspaceId),
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useDeal(id: string) {
+  const { currentWorkspaceId } = useWorkspace();
+  return useQuery({
+    queryKey: keys.deal(currentWorkspaceId, id),
+    queryFn: ({ signal }) => backend.deals.get(id, signal),
+    enabled: Boolean(currentWorkspaceId),
+  });
+}
+
 /**
- * Wraps a contact or company write: afterwards refreshes contact and company lists and detail
- * pages, the dashboard and tasks (a call or DNC can change lifecycle, deals and tasks; a
+ * Wraps a contact, company or deal write: afterwards refreshes contact, company and deal lists
+ * and detail pages, the dashboard and tasks (a call or DNC can change lifecycle, deals and tasks; a
  * contact edit changes its company's contact list).
  */
 export function useCrmMutation<I, O>(fn: (input: I) => Promise<O>) {
@@ -98,6 +122,8 @@ export function useCrmMutation<I, O>(fn: (input: I) => Promise<O>) {
           keys.contacts(ws),
           ["company", ws],
           keys.companies(ws),
+          ["deal", ws],
+          keys.deals(ws),
           keys.dashboard(ws),
           keys.tasks(ws),
         ].map((queryKey) => client.invalidateQueries({ queryKey })),

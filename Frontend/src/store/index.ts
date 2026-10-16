@@ -19,6 +19,8 @@ export {
   useCompanies,
   useCompanyDetail,
   useIndustries,
+  useDeals,
+  useDeal,
   useCrmMutation,
 } from "./contact-hooks";
 export type {

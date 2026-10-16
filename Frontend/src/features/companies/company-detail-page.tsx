@@ -115,6 +115,13 @@ export function CompanyDetailPage({ companyId }: { companyId: string }) {
                       <span className="ml-auto text-xs text-muted-foreground">
                         {deal.ownerName ?? "Unassigned"} · {relDay(deal.lastActivityAt)}
                       </span>
+                      <Link
+                        to="/deals/$dealId"
+                        params={{ dealId: deal.id }}
+                        className="text-xs font-medium text-primary hover:underline"
+                      >
+                        Open deal
+                      </Link>
                     </div>
                   ))
                 }

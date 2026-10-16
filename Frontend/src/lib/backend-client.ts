@@ -581,6 +581,12 @@ export const backend = {
     list: (params?: DealFilters, signal?: AbortSignal) =>
       get<Paged<Deal>>(query("/deals", { ...params }), signal),
     get: (id: string, signal?: AbortSignal) => get<Deal>(`/deals/${id}`, signal),
+    create: (input: { contactId: string; ownerId?: string | null; serviceInterest?: string }) =>
+      send<Deal>("POST", "/deals", input),
+    update: (
+      id: string,
+      input: { stage?: PipelineStage; ownerId?: string | null; serviceInterest?: string },
+    ) => send<Deal>("PATCH", `/deals/${id}`, input),
     timeline: (id: string, params?: Page, signal?: AbortSignal) =>
       get<{ data: CrmTimelineEvent[] }>(query(`/deals/${id}/timeline`, { ...params }), signal),
   },

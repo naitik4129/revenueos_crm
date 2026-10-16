@@ -78,13 +78,29 @@ describe("companies, contacts, deals (PGlite)", () => {
 
     const second = await api("post", "/deals", { body: { contactId: c.id } });
     expect(second.status).toBe(409);
-    expect(second.body.error.details).toEqual({ reason: "open_deal_exists" });
+    expect(second.body.error.details).toEqual({ reason: "open_deal_exists", dealId: first.id });
 
     expect((await api("post", `/deals/${first.id}/nurture`)).body.outcome).toBe("nurture");
     const replacement = await newDeal(c.id);
     expect((await api("post", `/deals/${first.id}/reopen`)).status).toBe(409);
     await api("post", `/deals/${replacement.id}/lost`, { body: { lossReason: "no_urgency" } });
     expect((await api("post", `/deals/${first.id}/reopen`)).body).toMatchObject({ outcome: "open", automationMode: "manual" });
+  });
+
+  it("board moves: stage changes on an open deal; objection nurture without a type and closed deals are refused", async () => {
+    const c = await newContact({ email: "board@x.com" });
+    const deal = await newDeal(c.id);
+    const move = (stage: string) => api("patch", `/deals/${deal.id}`, { body: { stage } });
+
+    expect((await move("negotiation")).body.stage).toBe("negotiation");
+    const objection = await move("objection_nurture");
+    expect(objection.status).toBe(422);
+    expect(objection.body.error.message).toMatch(/objection type/);
+
+    await api("post", `/deals/${deal.id}/won`);
+    const closed = await move("new");
+    expect(closed.status).toBe(422);
+    expect((await api("get", `/deals/${deal.id}`)).body.stage).toBe("negotiation");
   });
 
   it("DNC keeps the deal open, stops its automation and cancels open tasks", async () => {

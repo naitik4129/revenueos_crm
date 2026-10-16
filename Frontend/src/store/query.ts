@@ -24,6 +24,9 @@ export const keys = {
       : (["companies", workspaceId] as const),
   company: (workspaceId: string | null, id: string, part?: string) =>
     part ? (["company", workspaceId, id, part] as const) : (["company", workspaceId, id] as const),
+  deals: (workspaceId: string | null, filters?: object) =>
+    filters ? (["deals", workspaceId, filters] as const) : (["deals", workspaceId] as const),
+  deal: (workspaceId: string | null, id: string) => ["deal", workspaceId, id] as const,
   leads: (workspaceId: string | null) => ["leads", workspaceId] as const,
   lead: (workspaceId: string | null, id: string) => ["lead", workspaceId, id] as const,
   notes: (workspaceId: string | null, id: string) => ["notes", workspaceId, id] as const,

@@ -207,7 +207,13 @@ export function ContactDetailPage({ contactId }: { contactId: string }) {
                     >
                       <StatusBadge value={deal.outcome} />
                       <StatusBadge value={deal.stage} />
-                      <span className="text-sm">{deal.serviceInterest ?? "Deal"}</span>
+                      <Link
+                        to="/deals/$dealId"
+                        params={{ dealId: deal.id }}
+                        className="text-sm hover:underline"
+                      >
+                        {deal.serviceInterest ?? "Deal"}
+                      </Link>
                       <span className="ml-auto text-xs text-muted-foreground">
                         {deal.ownerName ?? "Unassigned"} · {relDay(deal.lastActivityAt)}
                       </span>

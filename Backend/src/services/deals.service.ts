@@ -1,6 +1,6 @@
 import type { Actor } from "../authMiddleware.js";
 import type { Queryable } from "../dto.js";
-import { ConflictError, isUniqueViolation, NotFoundError } from "../errors.js";
+import { ConflictError, InvalidTransitionError, isUniqueViolation, NotFoundError } from "../errors.js";
 import type {
   AutomationMode,
   ContactStatus,
@@ -179,6 +179,11 @@ export async function createDeal(db: Queryable, actor: Actor | EventActor | null
   if (!c) throw new NotFoundError("Contact");
   if (c.status === "merged") throw new ConflictError("This contact was merged into another contact.");
   if (input.stage) assertValidPipelineStage(input.stage);
+  // Name the open deal so the UI can link to it (the unique index still guards races).
+  const open = await db.query<{ id: string }>(`select id from crm.deals where contact_id = $1 and outcome = 'open'`, [input.contactId]);
+  if (open.rows[0]) {
+    throw new ConflictError("This contact already has an open deal.", { reason: "open_deal_exists", dealId: open.rows[0].id });
+  }
 
   const ownerId = input.ownerId !== undefined ? input.ownerId : c.owner_id ?? (user?.role === "salesperson" ? user.id : null);
   const id = await db
@@ -262,6 +267,10 @@ export async function updateDeal(db: Queryable, actor: Actor | null, workspaceId
   if (patch.stage) {
     assertValidPipelineStage(patch.stage);
     assertPipelineStageEditable(current.outcome);
+    // deals_objection_stage_has_type: the objection type comes from call routing.
+    if (patch.stage === "objection_nurture" && !(patch.objectionType ?? current.objection_type)) {
+      throw new InvalidTransitionError("Objection Nurture needs an objection type. Log a call with the objection outcome instead.");
+    }
   }
 
   const sets: string[] = [];
