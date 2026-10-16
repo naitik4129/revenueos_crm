@@ -57,24 +57,20 @@ export const LEAD_LOSS_REASONS = [
 ] as const;
 export type LeadLossReason = (typeof LEAD_LOSS_REASONS)[number];
 
-export const LIFECYCLE_STATES = [
-  "active",
-  "long_term_nurture",
-  "won",
-  "lost",
-  "discarded",
-  "do_not_contact",
-  "merged",
-] as const;
-export type LifecycleState = (typeof LIFECYCLE_STATES)[number];
+/** Consent, on the contact. */
+export const CONTACT_STATUSES = ["active", "do_not_contact", "merged"] as const;
+export type ContactStatus = (typeof CONTACT_STATUSES)[number];
 
-export const TERMINAL_LIFECYCLE_STATES: LifecycleState[] = [
-  "won",
-  "lost",
-  "discarded",
-  "do_not_contact",
-  "merged",
-];
+/** The sales journey's result, on the deal. `nurture` is parked, not open. */
+export const DEAL_OUTCOMES = ["open", "won", "lost", "nurture", "discarded"] as const;
+export type DealOutcome = (typeof DEAL_OUTCOMES)[number];
+
+/** HubSpot-style contact lifecycle, in order (code only moves it forward; admins may move it back). */
+export const LIFECYCLE_STAGES = ["prospect", "contacted", "engaged", "qualified", "customer"] as const;
+export type LifecycleStage = (typeof LIFECYCLE_STAGES)[number];
+
+export const ACTOR_SOURCES = ["user", "system", "automation", "brain"] as const;
+export type ActorSource = (typeof ACTOR_SOURCES)[number];
 
 export const AUTOMATION_MODES = ["active", "paused", "manual", "stopped"] as const;
 export type AutomationMode = (typeof AUTOMATION_MODES)[number];
@@ -100,12 +96,12 @@ export const CONTACT_CHANNEL_STATUS: Record<ContactChannel, readonly string[]> =
 export const LEAD_SOURCES = [
   "linkedin",
   "email",
-  "website",
   "cold_call",
   "referral",
   "event",
   "inbound_form",
   "other",
+  "brain",
 ] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
@@ -234,7 +230,7 @@ export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
  * trigger of its own — it reuses `objection_internal_approval`.
  */
 export const WORKFLOW_TRIGGERS = [
-  "lead_created",
+  "deal_created",
   "meeting_scheduled",
   "meeting_agreed",
   "call_not_connected",

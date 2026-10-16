@@ -80,7 +80,7 @@ export async function processInboundUpsert(workspaceId: string, event: { message
           [lead.id],
         );
         await addTimelineEvent(db, {
-          leadId: lead.id,
+          dealId: lead.id,
           kind: "whatsapp",
           title: "WhatsApp reply received - automation stopped",
           metadata: { messageId: id, messageType: type, duplicatePhoneMatch: matches.rowCount! > 1 },

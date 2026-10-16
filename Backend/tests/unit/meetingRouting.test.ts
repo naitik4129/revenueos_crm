@@ -20,17 +20,17 @@ describe("routeMeetingOutcome", () => {
     expect(r.task?.type).toBe("schedule_meeting");
   });
 
-  it("Not Interested -> lifecycle Long-Term Nurture, not a pipeline stage, enrolls Not a Fit workflow", () => {
+  it("Not Interested -> deal outcome Nurture, not a pipeline stage, enrolls Not a Fit workflow", () => {
     const r = routeMeetingOutcome("not_interested");
-    expect(r.lifecycle).toBe("long_term_nurture");
+    expect(r.outcome).toBe("nurture");
     expect(r.stage).toBeUndefined();
     expect(r.task).toMatchObject({ dueInDays: 45 });
     expect(r.workflowTrigger).toBe("meeting_not_a_fit");
   });
 
-  it("Won -> lifecycle Won, no stage change, no task", () => {
+  it("Won -> deal outcome Won, no stage change, no task", () => {
     const r = routeMeetingOutcome("won");
-    expect(r.lifecycle).toBe("won");
+    expect(r.outcome).toBe("won");
     expect(r.stage).toBeUndefined();
     expect(r.task).toBeUndefined();
   });

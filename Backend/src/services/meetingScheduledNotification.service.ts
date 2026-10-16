@@ -1,7 +1,7 @@
 import type { Queryable } from "../dto.js";
 import { pool } from "../db.js";
 import { NotFoundError } from "../errors.js";
-import { getLeadRowOr404, type LeadRow } from "./leads.service.js";
+import { getDealOr404, type DealRow } from "./deals.service.js";
 import { toRenderMeeting, type MeetingRow } from "./meetings.service.js";
 import { renderTemplate, type TemplateRenderLead } from "../domain/templateRenderer.js";
 import { htmlToWhatsAppText } from "../domain/htmlToWhatsAppText.js";
@@ -54,11 +54,11 @@ async function getDefaultTemplate(channel: "email" | "whatsapp"): Promise<Notifi
   return result.rows[0] ?? null;
 }
 
-function toRenderLead(lead: LeadRow): TemplateRenderLead {
+function toRenderLead(lead: DealRow): TemplateRenderLead {
   return {
     firstName: lead.first_name,
     lastName: lead.last_name,
-    company: lead.company,
+    company: lead.company_name ?? "",
     industry: lead.industry,
     email: lead.email,
     phone: lead.phone,
@@ -66,7 +66,7 @@ function toRenderLead(lead: LeadRow): TemplateRenderLead {
   };
 }
 
-async function sendMeetingEmailNow(meeting: MeetingRow, lead: LeadRow): Promise<void> {
+async function sendMeetingEmailNow(meeting: MeetingRow, lead: DealRow): Promise<void> {
   try {
     if (!lead.email) throw new Error("Email-eligible meeting notification has no lead email (invariant violation).");
     const template = await getDefaultTemplate("email");
@@ -93,7 +93,7 @@ async function sendMeetingEmailNow(meeting: MeetingRow, lead: LeadRow): Promise<
 /** Best-effort — never throws, so a failure here can't undo the meeting/Calendar sync that already succeeded. */
 export async function notifyMeetingScheduled(meetingId: string): Promise<void> {
   const meeting = await getMeetingRowById(meetingId);
-  const lead = await getLeadRowOr404(pool, meeting.workspace_id, meeting.lead_id);
+  const lead = await getDealOr404(pool, meeting.workspace_id, meeting.lead_id);
 
   if (lead.email) {
     await sendMeetingEmailNow(meeting, lead);
@@ -128,11 +128,11 @@ export async function claimQueuedMeetingWhatsappSends(db: Queryable, limit: numb
 
 export async function processQueuedMeetingWhatsappSend(row: MeetingRow): Promise<void> {
   try {
-    const lead = await getLeadRowOr404(pool, row.workspace_id, row.lead_id);
-    if (lead.lifecycle_state === "do_not_contact" || !lead.phone_e164) {
+    const lead = await getDealOr404(pool, row.workspace_id, row.lead_id);
+    if (lead.contact_status === "do_not_contact" || !lead.phone_e164) {
       await pool.query(`update public.meetings set notify_whatsapp_status = 'failed', notify_whatsapp_error = $2 where id = $1`, [
         row.id,
-        lead.lifecycle_state === "do_not_contact" ? "Lead is now Do Not Contact." : "Lead no longer has a WhatsApp-capable phone number.",
+        lead.contact_status === "do_not_contact" ? "Lead is now Do Not Contact." : "Lead no longer has a WhatsApp-capable phone number.",
       ]);
       return;
     }

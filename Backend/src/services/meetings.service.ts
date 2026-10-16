@@ -6,7 +6,7 @@ import type { TemplateRenderMeeting } from "../domain/templateRenderer.js";
 import { routeMeetingOutcome } from "../domain/meetingRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
 import { cancelOpenTasksForLead, createTask } from "./tasks.service.js";
-import { getLeadRowOr404, markWon, moveToLongTermNurture, updateLead, type LeadRow } from "./leads.service.js";
+import { getDealOr404, markWon, moveToNurture, updateDeal, type DealRow } from "./deals.service.js";
 import { autoEnroll, cancelRunsForLead } from "./runs.service.js";
 import { addDaysIso } from "../dto.js";
 import { pipelineStageIndex } from "../domain/pipeline.js";
@@ -83,7 +83,7 @@ export interface ScheduleMeetingInput {
 }
 
 /** The meeting's owner is usually the lead's owner or the acting salesperson — both names are already on hand; only an explicit cross-assignment (input.ownerId pointing at someone else) needs a lookup. */
-async function resolveOwnerName(db: Queryable, ownerId: string, lead: LeadRow, actor: Actor): Promise<string | null> {
+async function resolveOwnerName(db: Queryable, ownerId: string, lead: DealRow, actor: Actor): Promise<string | null> {
   if (ownerId === lead.owner_id) return lead.owner_name;
   if (ownerId === actor.id) return actor.fullName;
   const result = await db.query<{ full_name: string }>(`select full_name from public.profiles where id = $1`, [ownerId]);
@@ -92,8 +92,8 @@ async function resolveOwnerName(db: Queryable, ownerId: string, lead: LeadRow, a
 
 export async function scheduleMeeting(db: Queryable, actor: Actor, workspaceId: string, input: ScheduleMeetingInput) {
   if (!input.title.trim()) throw new ValidationError("Meeting title is required.");
-  const lead = await getLeadRowOr404(db, workspaceId, input.leadId);
-  if (lead.lifecycle_state === "do_not_contact") throw new DoNotContactError();
+  const lead = await getDealOr404(db, workspaceId, input.leadId);
+  if (lead.contact_status === "do_not_contact") throw new DoNotContactError();
 
   const ownerId = input.ownerId ?? lead.owner_id ?? actor.id;
   const ownerName = await resolveOwnerName(db, ownerId, lead, actor);
@@ -117,13 +117,13 @@ export async function scheduleMeeting(db: Queryable, actor: Actor, workspaceId: 
     ]);
   }
 
-  await addTimelineEvent(db, { leadId: input.leadId, kind: "meeting", title: "Meeting Scheduled", detail: input.title.trim(), ...actorEvent(actor) });
+  await addTimelineEvent(db, { dealId: input.leadId, kind: "meeting", title: "Meeting Scheduled", detail: input.title.trim(), ...actorEvent(actor) });
 
   // Only advance the funnel forward — a lead already past meeting_scheduled
   // (e.g. proposal_sent) must not be regressed by booking an additional
   // meeting on it.
-  if (pipelineStageIndex(lead.pipeline_stage) < pipelineStageIndex("meeting_scheduled")) {
-    await updateLead(db, actor, workspaceId, input.leadId, { pipelineStage: "meeting_scheduled" });
+  if (pipelineStageIndex(lead.stage) < pipelineStageIndex("meeting_scheduled")) {
+    await updateDeal(db, actor, workspaceId, input.leadId, { stage: "meeting_scheduled" });
   }
 
   // Edge case ("Meeting Booked During Nurture"): the objective of any
@@ -251,7 +251,7 @@ export async function updateMeeting(db: Queryable, actor: Actor, workspaceId: st
 
   if (patch.status && patch.status !== current.status) {
     const title = patch.status === "rescheduled" ? "Meeting Rescheduled" : patch.status === "cancelled" ? "Meeting Cancelled" : `Meeting ${patch.status}`;
-    await addTimelineEvent(db, { leadId: current.lead_id, kind: "meeting", title, ...actorEvent(actor), relatedMeetingId: id });
+    await addTimelineEvent(db, { dealId: current.lead_id, kind: "meeting", title, ...actorEvent(actor), relatedMeetingId: id });
 
     // The auto-created "Prepare for the meeting" task is only meaningful
     // while the meeting is still going to happen — without this, cancelling
@@ -285,7 +285,7 @@ export async function recordMeetingOutcome(db: Queryable, actor: Actor, workspac
     [id, outcome, notes ?? null],
   );
   await addTimelineEvent(db, {
-    leadId: meeting.lead_id,
+    dealId: meeting.lead_id,
     kind: "meeting",
     title: "Meeting Completed",
     detail: `Outcome: ${outcome}`,
@@ -297,13 +297,13 @@ export async function recordMeetingOutcome(db: Queryable, actor: Actor, workspac
   // stage and objectionType must land in one update statement — see the
   // identical constraint note in calls.service.ts::logCall.
   if (routing.stage || routing.objectionType) {
-    await updateLead(db, actor, workspaceId, meeting.lead_id, {
-      ...(routing.stage ? { pipelineStage: routing.stage } : {}),
+    await updateDeal(db, actor, workspaceId, meeting.lead_id, {
+      ...(routing.stage ? { stage: routing.stage } : {}),
       ...(routing.objectionType ? { objectionType: routing.objectionType } : {}),
     });
   }
-  if (routing.lifecycle === "long_term_nurture") await moveToLongTermNurture(db, actor, workspaceId, meeting.lead_id, `Meeting outcome: ${outcome}`);
-  if (routing.lifecycle === "won") await markWon(db, actor, workspaceId, meeting.lead_id, `Meeting outcome: ${outcome}`);
+  if (routing.outcome === "nurture") await moveToNurture(db, actor, workspaceId, meeting.lead_id, `Meeting outcome: ${outcome}`);
+  if (routing.outcome === "won") await markWon(db, actor, workspaceId, meeting.lead_id, `Meeting outcome: ${outcome}`);
   if (routing.task) {
     await createTask(db, actor, workspaceId, {
       leadId: meeting.lead_id,

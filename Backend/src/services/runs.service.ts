@@ -1,8 +1,8 @@
 import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { ConflictError, NotFoundError } from "../errors.js";
-import type { AutomationMode, LifecycleState, WorkflowRunStatus, WorkflowStepAction, WorkflowTrigger } from "../domain/enums.js";
-import { isTerminalLifecycle } from "../domain/pipeline.js";
+import type { AutomationMode, ContactStatus, DealOutcome, WorkflowRunStatus, WorkflowStepAction, WorkflowTrigger } from "../domain/enums.js";
+import { canRunAutomation } from "../domain/pipeline.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { findActiveWorkflowsForTrigger, getWorkflowRowOr404 } from "./workflows.service.js";
 
@@ -176,20 +176,21 @@ export async function scheduleStepAfter(db: Queryable, workspaceId: string, runI
  * already imports applyAutomationModeToRuns from this one, and importing
  * back would create a circular dependency between the two files. Mirrors
  * setAutomationMode's own update + timeline event + cascade inline instead,
- * using the same terminal-lifecycle guard (isTerminalLifecycle) so a
- * won/lost/discarded/do_not_contact/merged lead's automation is never
- * resurrected by an enrollment call.
+ * using the same guard (canRunAutomation) so a closed deal or a DNC/merged
+ * contact's automation is never resurrected by an enrollment call.
  */
 async function activateAutomationForEnrollment(db: Queryable, leadId: string, reason: string) {
-  const result = await db.query<{ automation_mode: AutomationMode; lifecycle_state: LifecycleState }>(
-    `select automation_mode, lifecycle_state from public.leads where id = $1`,
+  const result = await db.query<{ automation_mode: AutomationMode; outcome: DealOutcome; contact_status: ContactStatus }>(
+    `select d.automation_mode, d.outcome, c.status as contact_status
+       from crm.deals d join crm.contacts c on c.id = d.contact_id
+      where d.id = $1`,
     [leadId],
   );
-  const lead = result.rows[0];
-  if (!lead || lead.automation_mode === "active" || isTerminalLifecycle(lead.lifecycle_state)) return;
+  const deal = result.rows[0];
+  if (!deal || deal.automation_mode === "active" || !canRunAutomation(deal.outcome, deal.contact_status)) return;
 
-  await db.query(`update public.leads set automation_mode = 'active', last_activity_at = now() where id = $1`, [leadId]);
-  await addTimelineEvent(db, { leadId, kind: "automation", title: "Automation Resumed", detail: reason, ...AUTOMATION_ACTOR });
+  await db.query(`update crm.deals set automation_mode = 'active', last_activity_at = now() where id = $1`, [leadId]);
+  await addTimelineEvent(db, { dealId: leadId, kind: "automation", title: "Automation Resumed", detail: reason, ...AUTOMATION_ACTOR });
   await applyAutomationModeToRuns(db, leadId, "active", reason);
 }
 
@@ -230,7 +231,7 @@ async function enrollLeadInVersion(
   );
 
   await addTimelineEvent(db, {
-    leadId,
+    dealId: leadId,
     kind: "automation",
     title: "Workflow Enrolled",
     detail: reason,
@@ -345,7 +346,7 @@ async function setRunStatus(
 
   const who = actor ? actorEvent(actor) : AUTOMATION_ACTOR;
   await addTimelineEvent(db, {
-    leadId: run.lead_id,
+    dealId: run.lead_id,
     kind: "automation",
     title: timelineTitle,
     detail: reason,
@@ -399,7 +400,7 @@ export async function retryRun(db: Queryable, actor: Actor, workspaceId: string,
   // A salesperson clicking "Retry" means "try again now" — the failed
   // action's scheduled_for is already in the past, so the worker's next
   // poll picks it up.
-  await addTimelineEvent(db, { leadId: run.lead_id, kind: "automation", title: "Workflow Retried", ...actorEvent(actor), relatedWorkflowRunId: run.id });
+  await addTimelineEvent(db, { dealId: run.lead_id, kind: "automation", title: "Workflow Retried", ...actorEvent(actor), relatedWorkflowRunId: run.id });
   const updated = await getRunRowOr404(db, workspaceId, id);
   return runToDto(updated, updated.version_number);
 }

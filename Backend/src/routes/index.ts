@@ -1,5 +1,7 @@
 import { Router } from "express";
-import { leadsRouter } from "./leads.routes.js";
+import { companiesRouter } from "./companies.routes.js";
+import { contactsRouter } from "./contacts.routes.js";
+import { dealsRouter } from "./deals.routes.js";
 import { tasksRouter } from "./tasks.routes.js";
 import { meetingsRouter } from "./meetings.routes.js";
 import { proposalsRouter } from "./proposals.routes.js";
@@ -44,7 +46,9 @@ apiRouter.use(profilesAccessRouter);
 const crmRouter = Router();
 // Admins may use every workspace; salespeople only those they are members of.
 crmRouter.use(requireAuth, requireCrmUser, requireWorkspace);
-crmRouter.use("/leads", leadsRouter);
+crmRouter.use("/companies", companiesRouter);
+crmRouter.use("/contacts", contactsRouter);
+crmRouter.use("/deals", dealsRouter);
 crmRouter.use("/tasks", tasksRouter);
 crmRouter.use("/meetings", meetingsRouter);
 crmRouter.use("/proposals", proposalsRouter);

@@ -4,7 +4,8 @@ import type { WorkflowStepAction, WorkflowRunStatus, TaskType } from "../domain/
 import { assertPipelineStageEditable, assertValidPipelineStage } from "../domain/pipeline.js";
 import { addTimelineEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { getRunRowOr404, scheduleStepAfter, type RunRow } from "./runs.service.js";
-import { getLeadRowOr404, type LeadRow } from "./leads.service.js";
+import { getDealOr404, type DealRow } from "./deals.service.js";
+import { canRunAutomation } from "../domain/pipeline.js";
 import { createTask } from "./tasks.service.js";
 import { getLatestMeetingForLead, toRenderMeeting } from "./meetings.service.js";
 import type { TemplateRenderMeeting } from "../domain/templateRenderer.js";
@@ -68,7 +69,7 @@ export interface Eligibility {
 
 function computeEligibility(
   action: ScheduledActionRow,
-  lead: LeadRow,
+  lead: DealRow,
   run: RunRow,
   template: TemplateRow | null,
   contactStatus: string | undefined,
@@ -76,8 +77,8 @@ function computeEligibility(
   if (!["running", "waiting"].includes(run.status)) {
     return { ok: false, reason: `Workflow run status is "${run.status}".` };
   }
-  if (lead.lifecycle_state !== "active") {
-    return { ok: false, reason: `Lead lifecycle is "${lead.lifecycle_state}".` };
+  if (!canRunAutomation(lead.outcome, lead.contact_status)) {
+    return { ok: false, reason: `Deal is "${lead.outcome}" and contact is "${lead.contact_status}".` };
   }
   if (["paused", "manual", "stopped"].includes(lead.automation_mode)) {
     return { ok: false, reason: `Lead automation mode is "${lead.automation_mode}".` };
@@ -126,7 +127,7 @@ export interface ActionContext {
     phoneE164: string | null;
     ownerId: string | null;
     ownerName: string | null;
-    pipelineStage: string;
+    stage: string;
     lifecycleState: string;
     automationMode: string;
     responseState: string;
@@ -149,8 +150,8 @@ export interface ActionContext {
 
 async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<ActionContext> {
   const run = await getRunRowOr404(db, action.workspace_id, action.workflow_run_id);
-  const leadRow = await getLeadRowOr404(db, action.workspace_id, action.lead_id);
-  const lead = leadRow as LeadRow & { owner_name: string | null };
+  const leadRow = await getDealOr404(db, action.workspace_id, action.lead_id);
+  const lead = leadRow as DealRow & { owner_name: string | null };
 
   const stepResult = await db.query<StepRow>(
     `select id, step_order, delay_days, action, config, template_id from public.workflow_steps where id = $1`,
@@ -212,15 +213,15 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
       id: lead.id,
       firstName: lead.first_name,
       lastName: lead.last_name,
-      company: lead.company,
+      company: lead.company_name ?? "",
       industry: lead.industry,
       email: lead.email,
       phone: lead.phone,
       phoneE164: lead.phone_e164,
       ownerId: lead.owner_id,
       ownerName: lead.owner_name ?? null,
-      pipelineStage: lead.pipeline_stage,
-      lifecycleState: lead.lifecycle_state,
+      stage: lead.stage,
+      lifecycleState: lead.outcome,
       automationMode: lead.automation_mode,
       responseState: lead.response_state,
     },
@@ -286,7 +287,7 @@ export async function skipAction(db: Queryable, actionId: string, reason: string
   if (run.status === "paused") {
     await db.query(`update public.scheduled_actions set status = 'paused', last_error = $2 where id = $1`, [actionId, reason]);
     await addTimelineEvent(db, {
-      leadId: action.lead_id,
+      dealId: action.lead_id,
       kind: "automation",
       title: "Automation Step Paused",
       detail: reason,
@@ -297,7 +298,7 @@ export async function skipAction(db: Queryable, actionId: string, reason: string
   }
   await db.query(`update public.scheduled_actions set status = 'skipped', last_error = $2 where id = $1`, [actionId, reason]);
   await addTimelineEvent(db, {
-    leadId: action.lead_id,
+    dealId: action.lead_id,
     kind: "automation",
     title: "Automation Step Skipped",
     detail: reason,
@@ -339,13 +340,13 @@ async function advanceRun(db: Queryable, run: RunRow) {
       `update public.workflow_runs set current_step_id = $2, status = $3, next_run_at = $4 where id = $1`,
       [run.id, result.currentStepId, result.status, result.nextRunAt],
     );
-    await addTimelineEvent(db, { leadId: run.lead_id, kind: "automation", title: "Workflow Advanced", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
+    await addTimelineEvent(db, { dealId: run.lead_id, kind: "automation", title: "Workflow Advanced", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
   } else {
     await db.query(
       `update public.workflow_runs set current_step_id = null, status = 'completed', completed_at = now(), next_run_at = null where id = $1`,
       [run.id],
     );
-    await addTimelineEvent(db, { leadId: run.lead_id, kind: "automation", title: "Workflow Completed", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
+    await addTimelineEvent(db, { dealId: run.lead_id, kind: "automation", title: "Workflow Completed", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
   }
 
   return getRunRowOr404(db, run.workspace_id, run.id);
@@ -369,11 +370,11 @@ export async function executeInternalAction(db: Queryable, actionId: string) {
   }
 
   const run = await getRunRowOr404(db, action.workspace_id, action.workflow_run_id);
-  const leadRow = await getLeadRowOr404(db, action.workspace_id, action.lead_id);
-  const lead = leadRow as LeadRow & { owner_name: string | null };
+  const leadRow = await getDealOr404(db, action.workspace_id, action.lead_id);
+  const lead = leadRow as DealRow & { owner_name: string | null };
 
-  if (lead.lifecycle_state !== "active" || !["running", "waiting"].includes(run.status)) {
-    const reason = `Lead/run no longer eligible at execution time (lifecycle=${lead.lifecycle_state}, run=${run.status}).`;
+  if (!canRunAutomation(lead.outcome, lead.contact_status) || !["running", "waiting"].includes(run.status)) {
+    const reason = `Deal/run no longer eligible at execution time (deal=${lead.outcome}, contact=${lead.contact_status}, run=${run.status}).`;
     const context = await skipAction(db, actionId, reason);
     return { action: context.action, run: await getRunRowOr404(db, action.workspace_id, run.id), skipped: true };
   }
@@ -396,9 +397,9 @@ export async function executeInternalAction(db: Queryable, actionId: string) {
   } else if (action.action_type === "change_lead_stage") {
     if (!config) throw new ValidationError("This change_lead_stage step has no target stage configured.");
     assertValidPipelineStage(config);
-    assertPipelineStageEditable(lead.lifecycle_state);
+    assertPipelineStageEditable(lead.outcome);
     await db.query(`update public.leads set pipeline_stage = $2, last_activity_at = now() where id = $1`, [lead.id, config]);
-    await addTimelineEvent(db, { leadId: lead.id, kind: "stage", title: `Stage changed to ${config}`, ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
+    await addTimelineEvent(db, { dealId: lead.id, kind: "stage", title: `Stage changed to ${config}`, ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
   } else if (action.action_type === "stop_workflow") {
     await db.query(`update public.workflow_runs set status = 'completed', completed_at = now(), next_run_at = null where id = $1`, [run.id]);
     await db.query(
@@ -407,7 +408,7 @@ export async function executeInternalAction(db: Queryable, actionId: string) {
         where workflow_run_id = $1 and status in ('pending', 'due', 'paused')`,
       [run.id],
     );
-    await addTimelineEvent(db, { leadId: lead.id, kind: "automation", title: "Workflow Stopped", detail: "Stop Workflow step executed", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
+    await addTimelineEvent(db, { dealId: lead.id, kind: "automation", title: "Workflow Stopped", detail: "Stop Workflow step executed", ...AUTOMATION_ACTOR, relatedWorkflowRunId: run.id });
   }
 
   await db.query(`update public.scheduled_actions set status = 'completed', executed_at = now() where id = $1`, [actionId]);
@@ -454,7 +455,7 @@ export async function recordActionResult(db: Queryable, actionId: string, input:
   if (input.outcome === "success") {
     await db.query(`update public.scheduled_actions set status = 'completed', executed_at = now(), last_error = null where id = $1`, [actionId]);
     await addTimelineEvent(db, {
-      leadId: action.lead_id,
+      dealId: action.lead_id,
       kind: action.action_type === "send_email" ? "email" : "whatsapp",
       title: action.action_type === "send_email" ? "Email Sent" : "WhatsApp Sent",
       detail: input.providerMessageId ? `Provider message id: ${input.providerMessageId}` : undefined,
@@ -482,7 +483,7 @@ export async function recordActionResult(db: Queryable, actionId: string, input:
       [actionId, attemptCount, input.error ?? null, nextAttemptAt.toISOString()],
     );
     await addTimelineEvent(db, {
-      leadId: action.lead_id,
+      dealId: action.lead_id,
       kind: "automation",
       title: "Automation Step Failed - Retry Scheduled",
       detail: input.error,
@@ -495,7 +496,7 @@ export async function recordActionResult(db: Queryable, actionId: string, input:
   await db.query(`update public.scheduled_actions set status = 'failed', attempt_count = $2, last_error = $3 where id = $1`, [actionId, attemptCount, input.error ?? null]);
   await db.query(`update public.workflow_runs set status = 'failed', last_error = $2 where id = $1`, [run.id, input.error ?? "Automation step failed"]);
   await addTimelineEvent(db, {
-    leadId: action.lead_id,
+    dealId: action.lead_id,
     kind: "automation",
     title: "Workflow Failed",
     detail: input.error,

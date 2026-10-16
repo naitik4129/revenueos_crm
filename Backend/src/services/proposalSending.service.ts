@@ -3,7 +3,7 @@ import type { Queryable } from "../dto.js";
 import type { Actor } from "../authMiddleware.js";
 import { pool, withTransaction } from "../db.js";
 import { DoNotContactError, NotFoundError, ValidationError } from "../errors.js";
-import { getLeadRowOr404, type LeadRow } from "./leads.service.js";
+import { getDealOr404, type DealRow } from "./deals.service.js";
 import { createProposal, getProposalOr404, getProposalRowOr404, updateProposalStatus, type ProposalRow } from "./proposals.service.js";
 import { renderTemplate, type TemplateRenderLead } from "../domain/templateRenderer.js";
 import { htmlToWhatsAppText } from "../domain/htmlToWhatsAppText.js";
@@ -47,11 +47,11 @@ async function getActiveTemplateOrThrow(db: Queryable, workspaceId: string, id: 
   return template;
 }
 
-function toRenderLead(lead: LeadRow & { owner_name?: string | null }): TemplateRenderLead {
+function toRenderLead(lead: DealRow & { owner_name?: string | null }): TemplateRenderLead {
   return {
     firstName: lead.first_name,
     lastName: lead.last_name,
-    company: lead.company,
+    company: lead.company_name ?? "",
     industry: lead.industry,
     email: lead.email,
     phone: lead.phone,
@@ -77,7 +77,7 @@ async function tryAdvanceToSent(workspaceId: string, proposalId: string): Promis
 
 async function sendProposalEmailNow(
   proposal: ProposalRow,
-  lead: LeadRow & { owner_name?: string | null },
+  lead: DealRow & { owner_name?: string | null },
   template: TemplateRow,
 ): Promise<void> {
   try {
@@ -127,8 +127,8 @@ export async function createAndSendProposal(actor: Actor, workspaceId: string, i
     throw new ValidationError("An email template and a WhatsApp template are both required.");
   }
 
-  const lead = await getLeadRowOr404(pool, workspaceId, input.leadId);
-  if (lead.lifecycle_state === "do_not_contact") throw new DoNotContactError();
+  const lead = await getDealOr404(pool, workspaceId, input.leadId);
+  if (lead.contact_status === "do_not_contact") throw new DoNotContactError();
 
   // Both validated up front so a bad selection fails fast; the WhatsApp
   // template is re-read fresh in processQueuedProposalWhatsappSend.
@@ -200,11 +200,11 @@ export async function claimQueuedProposalWhatsappSends(db: Queryable, limit: num
 
 export async function processQueuedProposalWhatsappSend(row: ProposalRow): Promise<void> {
   try {
-    const lead = (await getLeadRowOr404(pool, row.workspace_id, row.lead_id)) as LeadRow & { owner_name: string | null };
-    if (lead.lifecycle_state === "do_not_contact" || !lead.phone_e164) {
+    const lead = (await getDealOr404(pool, row.workspace_id, row.lead_id)) as DealRow & { owner_name: string | null };
+    if (lead.contact_status === "do_not_contact" || !lead.phone_e164) {
       await pool.query(`update public.proposals set whatsapp_send_status = 'failed', whatsapp_send_error = $2 where id = $1`, [
         row.id,
-        lead.lifecycle_state === "do_not_contact" ? "Lead is now Do Not Contact." : "Lead no longer has a WhatsApp-capable phone number.",
+        lead.contact_status === "do_not_contact" ? "Lead is now Do Not Contact." : "Lead no longer has a WhatsApp-capable phone number.",
       ]);
       return;
     }

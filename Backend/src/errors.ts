@@ -52,9 +52,15 @@ export class ConflictError extends AppError {
   }
 }
 
-/** Lead is under Do Not Contact and the requested action is customer-facing. */
+/** Postgres unique_violation (23505), optionally on one named constraint/index. */
+export function isUniqueViolation(err: unknown, constraint?: string): boolean {
+  const e = err as { code?: string; constraint?: string } | null;
+  return e?.code === "23505" && (!constraint || e.constraint === constraint);
+}
+
+/** Contact is under Do Not Contact and the requested action is customer-facing. */
 export class DoNotContactError extends AppError {
-  constructor(message = "This lead is marked Do Not Contact.") {
+  constructor(message = "This contact is marked Do Not Contact.") {
     super(409, "do_not_contact", message);
     this.name = "DoNotContactError";
   }

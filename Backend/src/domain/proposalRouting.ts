@@ -1,8 +1,8 @@
-import type { LifecycleState, PipelineStage, ProposalStatus, TaskType } from "./enums.js";
+import type { DealOutcome, PipelineStage, ProposalStatus, TaskType } from "./enums.js";
 
 export interface ProposalRoutingResult {
   stage?: PipelineStage;
-  lifecycle?: LifecycleState;
+  outcome?: Exclude<DealOutcome, "open">;
   task?: { type: TaskType; title: string; dueInDays: number };
   /** Cancel this lead's other open proposal-follow-up tasks (decision made). */
   cancelOpenProposalFollowUps?: boolean;
@@ -42,7 +42,7 @@ export function routeProposalStatus(status: ProposalStatus): ProposalRoutingResu
       };
     case "accepted":
       return {
-        lifecycle: "won",
+        outcome: "won",
         cancelAllOpenTasks: true,
       };
     case "rejected":
@@ -51,13 +51,13 @@ export function routeProposalStatus(status: ProposalStatus): ProposalRoutingResu
       // decides the reactivation approach/content; routing here only
       // decides the generic default timing.
       return {
-        lifecycle: "long_term_nurture",
+        outcome: "nurture",
         task: { type: "re_engage", title: "Re-engage after rejection", dueInDays: 45 },
         cancelOpenProposalFollowUps: true,
       };
     case "expired":
       return {
-        lifecycle: "long_term_nurture",
+        outcome: "nurture",
         task: { type: "re_engage", title: "Re-engage after proposal expired", dueInDays: 45 },
         cancelOpenProposalFollowUps: true,
       };

@@ -5,7 +5,7 @@ import type { EmailSendStatus, LeadLossReason, ProposalStatus, WhatsappSendStatu
 import { routeProposalStatus } from "../domain/proposalRouting.js";
 import { addTimelineEvent, actorEvent, AUTOMATION_ACTOR } from "./timeline.service.js";
 import { cancelOpenTasksForLead, createTask } from "./tasks.service.js";
-import { getLeadRowOr404, markWon, moveToLongTermNurture, updateLead } from "./leads.service.js";
+import { getDealOr404, markWon, moveToNurture, updateDeal } from "./deals.service.js";
 import { autoEnroll } from "./runs.service.js";
 import { addDaysIso } from "../dto.js";
 
@@ -96,8 +96,8 @@ export interface CreateProposalInput {
 
 export async function createProposal(db: Queryable, actor: Actor, workspaceId: string, input: CreateProposalInput) {
   if (!input.title.trim()) throw new ValidationError("Proposal title is required.");
-  const lead = await getLeadRowOr404(db, workspaceId, input.leadId);
-  if (lead.lifecycle_state === "do_not_contact") throw new DoNotContactError();
+  const lead = await getDealOr404(db, workspaceId, input.leadId);
+  if (lead.contact_status === "do_not_contact") throw new DoNotContactError();
 
   const result = await db.query<{ id: string }>(
     `insert into public.proposals
@@ -128,8 +128,8 @@ export async function createProposal(db: Queryable, actor: Actor, workspaceId: s
   );
   const id = result.rows[0]!.id;
 
-  await addTimelineEvent(db, { leadId: input.leadId, kind: "proposal", title: "Proposal Created", detail: input.title.trim(), ...actorEvent(actor) });
-  await updateLead(db, actor, workspaceId, input.leadId, { pipelineStage: "proposal_preparation" });
+  await addTimelineEvent(db, { dealId: input.leadId, kind: "proposal", title: "Proposal Created", detail: input.title.trim(), ...actorEvent(actor) });
+  await updateDeal(db, actor, workspaceId, input.leadId, { stage: "proposal_preparation" });
 
   return getProposalOr404(db, workspaceId, id);
 }
@@ -252,18 +252,18 @@ export async function updateProposalStatus(
   }
   await db.query(`update public.proposals set ${sets.join(", ")} where id = $1`, params);
 
-  await addTimelineEvent(db, { leadId: proposal.lead_id, kind: "proposal", title: `Proposal ${status}`, detail: proposal.title, ...(actor ? actorEvent(actor) : AUTOMATION_ACTOR), relatedProposalId: id });
+  await addTimelineEvent(db, { dealId: proposal.lead_id, kind: "proposal", title: `Proposal ${status}`, detail: proposal.title, ...(actor ? actorEvent(actor) : AUTOMATION_ACTOR), relatedProposalId: id });
 
   const routing = routeProposalStatus(status);
 
-  if (routing.lifecycle === "won") {
+  if (routing.outcome === "won") {
     await markWon(db, actor, workspaceId, proposal.lead_id, `Proposal accepted: ${proposal.title}`);
-  } else if (routing.lifecycle === "long_term_nurture") {
-    await moveToLongTermNurture(db, actor, workspaceId, proposal.lead_id, `Proposal ${status}: ${proposal.title}`);
+  } else if (routing.outcome === "nurture") {
+    await moveToNurture(db, actor, workspaceId, proposal.lead_id, `Proposal ${status}: ${proposal.title}`);
   }
 
   if (routing.stage) {
-    await updateLead(db, actor, workspaceId, proposal.lead_id, { pipelineStage: routing.stage });
+    await updateDeal(db, actor, workspaceId, proposal.lead_id, { stage: routing.stage });
   }
 
   if (routing.cancelAllOpenTasks) {

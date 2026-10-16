@@ -1,8 +1,8 @@
-import type { LifecycleState, MeetingOutcome, ObjectionType, PipelineStage, TaskType, WorkflowTrigger } from "./enums.js";
+import type { DealOutcome, MeetingOutcome, ObjectionType, PipelineStage, TaskType, WorkflowTrigger } from "./enums.js";
 
 export interface MeetingRoutingResult {
   stage?: PipelineStage;
-  lifecycle?: LifecycleState;
+  outcome?: Exclude<DealOutcome, "open">;
   task?: { type: TaskType; title: string; dueInDays: number };
   workflowTrigger?: WorkflowTrigger;
   objectionType?: ObjectionType;
@@ -22,7 +22,7 @@ export function routeMeetingOutcome(outcome: MeetingOutcome): MeetingRoutingResu
       // Lifecycle-level outcome, not a pipeline stage -- mirrors the
       // proposal-accepted -> lifecycle_state = 'won' path exactly (no stage
       // change, no follow-up task; markWon cancels open tasks itself).
-      return { lifecycle: "won" };
+      return { outcome: "won" };
     case "highly_interested":
       // "Highly interested -> Proposal / solution discussion" — moves
       // toward a proposal like proposal_required, but the immediate next
@@ -79,7 +79,7 @@ export function routeMeetingOutcome(outcome: MeetingOutcome): MeetingRoutingResu
       // lead truly dead can still Discard it explicitly from the lead
       // detail page. Now also enrolls a nurture/alternate-service sequence.
       return {
-        lifecycle: "long_term_nurture",
+        outcome: "nurture",
         task: { type: "re_engage", title: "Long-term re-engagement", dueInDays: 45 },
         workflowTrigger: "meeting_not_a_fit",
       };

@@ -109,7 +109,7 @@ export async function createTask(
 
   const who = origin === "automation" ? AUTOMATION_ACTOR : actor ? actorEvent(actor) : AUTOMATION_ACTOR;
   await addTimelineEvent(db, {
-    leadId: input.leadId,
+    dealId: input.leadId,
     kind: "task",
     title: "Task Created",
     detail: task.title,
@@ -154,7 +154,7 @@ export async function updateTask(db: Queryable, actor: Actor, workspaceId: strin
   params.push(id);
   const result = await db.query<TaskRow>(`update public.tasks set ${sets.join(", ")} where id = $${i} returning *`, params);
   const task = result.rows[0]!;
-  await addTimelineEvent(db, { leadId: task.lead_id, kind: "task", title: "Task Updated", detail: task.title, ...actorEvent(actor), relatedTaskId: task.id });
+  await addTimelineEvent(db, { dealId: task.lead_id, kind: "task", title: "Task Updated", detail: task.title, ...actorEvent(actor), relatedTaskId: task.id });
   return taskToDto(task);
 }
 
@@ -168,7 +168,7 @@ export async function completeTask(db: Queryable, actor: Actor, workspaceId: str
   );
   const task = result.rows[0]!;
   await addTimelineEvent(db, {
-    leadId: task.lead_id,
+    dealId: task.lead_id,
     kind: "task",
     title: "Task Completed",
     detail: task.title,
@@ -198,7 +198,7 @@ export async function cancelTask(
   const task = result.rows[0]!;
   const who = actor ? actorEvent(actor) : AUTOMATION_ACTOR;
   await addTimelineEvent(db, {
-    leadId: task.lead_id,
+    dealId: task.lead_id,
     kind: "task",
     title: "Task Cancelled",
     detail: reason ?? task.title,
@@ -237,7 +237,7 @@ export async function cancelOpenTasksForLead(
   const who = actor ? actorEvent(actor) : AUTOMATION_ACTOR;
   for (const task of result.rows) {
     await addTimelineEvent(db, {
-      leadId,
+      dealId: leadId,
       kind: "task",
       title: "Task Cancelled",
       detail: `${task.title} - ${reason}`,

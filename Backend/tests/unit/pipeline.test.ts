@@ -2,20 +2,32 @@ import { describe, expect, it } from "vitest";
 import {
   assertPipelineStageEditable,
   assertValidPipelineStage,
-  isTerminalLifecycle,
+  canRunAutomation,
+  isClosedOutcome,
+  lifecycleIndex,
   pipelineStageIndex,
 } from "../../src/domain/pipeline.js";
 import { InvalidTransitionError } from "../../src/errors.js";
 
-describe("isTerminalLifecycle", () => {
-  it("treats won/lost/discarded/do_not_contact/merged as terminal", () => {
-    for (const s of ["won", "lost", "discarded", "do_not_contact", "merged"] as const) {
-      expect(isTerminalLifecycle(s)).toBe(true);
-    }
+describe("isClosedOutcome", () => {
+  it("treats won/lost/discarded as closed", () => {
+    for (const o of ["won", "lost", "discarded"] as const) expect(isClosedOutcome(o)).toBe(true);
   });
-  it("treats active/long_term_nurture as non-terminal", () => {
-    expect(isTerminalLifecycle("active")).toBe(false);
-    expect(isTerminalLifecycle("long_term_nurture")).toBe(false);
+  it("treats open/nurture as not closed", () => {
+    expect(isClosedOutcome("open")).toBe(false);
+    expect(isClosedOutcome("nurture")).toBe(false);
+  });
+});
+
+describe("canRunAutomation", () => {
+  it("allows open and nurture deals of an active contact", () => {
+    expect(canRunAutomation("open", "active")).toBe(true);
+    expect(canRunAutomation("nurture", "active")).toBe(true);
+  });
+  it("blocks closed deals and DNC/merged contacts", () => {
+    expect(canRunAutomation("won", "active")).toBe(false);
+    expect(canRunAutomation("open", "do_not_contact")).toBe(false);
+    expect(canRunAutomation("nurture", "merged")).toBe(false);
   });
 });
 
@@ -29,19 +41,24 @@ describe("assertValidPipelineStage", () => {
 });
 
 describe("assertPipelineStageEditable", () => {
-  it("allows editing while active", () => {
-    expect(() => assertPipelineStageEditable("active")).not.toThrow();
+  it("allows editing while open", () => {
+    expect(() => assertPipelineStageEditable("open")).not.toThrow();
   });
-  it("blocks editing once a lead has left active (frozen stage)", () => {
+  it("blocks editing once the deal has left open (frozen stage)", () => {
     expect(() => assertPipelineStageEditable("won")).toThrow(InvalidTransitionError);
-    expect(() => assertPipelineStageEditable("do_not_contact")).toThrow(InvalidTransitionError);
+    expect(() => assertPipelineStageEditable("nurture")).toThrow(InvalidTransitionError);
   });
 });
 
-describe("pipelineStageIndex", () => {
-  it("reflects funnel order", () => {
+describe("ordering", () => {
+  it("pipeline stages reflect funnel order", () => {
     expect(pipelineStageIndex("new")).toBe(0);
     expect(pipelineStageIndex("meeting_scheduled")).toBeGreaterThan(pipelineStageIndex("meeting_scheduling"));
     expect(pipelineStageIndex("proposal_sent")).toBeGreaterThan(pipelineStageIndex("meeting_scheduled"));
+  });
+  it("lifecycle stages run prospect -> customer", () => {
+    expect(lifecycleIndex("prospect")).toBe(0);
+    expect(lifecycleIndex("engaged")).toBeGreaterThan(lifecycleIndex("contacted"));
+    expect(lifecycleIndex("customer")).toBeGreaterThan(lifecycleIndex("qualified"));
   });
 });

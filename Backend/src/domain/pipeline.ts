@@ -1,8 +1,21 @@
 import { InvalidTransitionError } from "../errors.js";
-import { LIFECYCLE_STATES, PIPELINE_STAGES, TERMINAL_LIFECYCLE_STATES, type LifecycleState, type PipelineStage } from "./enums.js";
+import {
+  LIFECYCLE_STAGES,
+  PIPELINE_STAGES,
+  type ContactStatus,
+  type DealOutcome,
+  type LifecycleStage,
+  type PipelineStage,
+} from "./enums.js";
 
-export function isTerminalLifecycle(state: LifecycleState): boolean {
-  return TERMINAL_LIFECYCLE_STATES.includes(state);
+/** won / lost / discarded: the journey is over (nurture is parked, not closed). */
+export function isClosedOutcome(outcome: DealOutcome): boolean {
+  return outcome === "won" || outcome === "lost" || outcome === "discarded";
+}
+
+/** Automation may run only on an open or nurture deal of an active contact (same rule as the 009 trigger). */
+export function canRunAutomation(outcome: DealOutcome, contactStatus: ContactStatus): boolean {
+  return (outcome === "open" || outcome === "nurture") && contactStatus === "active";
 }
 
 export function assertValidPipelineStage(value: string): asserts value is PipelineStage {
@@ -18,26 +31,18 @@ export function pipelineStageIndex(stage: PipelineStage): number {
   return PIPELINE_STAGES.indexOf(stage);
 }
 
-export function assertValidLifecycleState(value: string): asserts value is LifecycleState {
-  if (!(LIFECYCLE_STATES as readonly string[]).includes(value)) {
-    throw new InvalidTransitionError(`"${value}" is not a valid lifecycle state.`, {
-      allowed: LIFECYCLE_STATES,
-    });
+/**
+ * The stage is only meaningful while a deal is open; once it leaves open the stage is
+ * frozen (it records where the deal was when it closed or was parked).
+ */
+export function assertPipelineStageEditable(outcome: DealOutcome) {
+  if (outcome !== "open") {
+    throw new InvalidTransitionError(
+      `Pipeline stage cannot be changed while the deal is "${outcome}". Reopen the deal first if this is a deliberate re-engagement.`,
+    );
   }
 }
 
-/**
- * pipeline_stage is only meaningful while a lead is lifecycle_state = active
- * (see leads.pipeline_stage column comment in the migration: it is frozen,
- * not reset, once a lead leaves active). Editing it on a non-active lead
- * would silently rewrite "what stage was this lead at when it closed" —
- * exactly what the schema is designed to prevent.
- */
-export function assertPipelineStageEditable(lifecycle: LifecycleState) {
-  if (lifecycle !== "active") {
-    throw new InvalidTransitionError(
-      `Pipeline stage cannot be changed while the lead's lifecycle is "${lifecycle}". ` +
-        `Reactivate the lead first if this is a deliberate re-engagement.`,
-    );
-  }
+export function lifecycleIndex(stage: LifecycleStage): number {
+  return LIFECYCLE_STAGES.indexOf(stage);
 }

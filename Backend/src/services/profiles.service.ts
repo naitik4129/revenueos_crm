@@ -10,6 +10,11 @@ export const PROFILE_COLUMNS = `p.id, p.role, p.is_active, p.created_at,
   coalesce(rp.email, '') as email,
   coalesce(nullif(trim(rp.full_name), ''), rp.email, '') as full_name`;
 
+/** Display name of a user id column, e.g. `${userNameSql("d.owner_id")} as owner_name`. */
+export function userNameSql(idColumn: string) {
+  return `(select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = ${idColumn})`;
+}
+
 export interface ProfileRow {
   id: string;
   role: "admin" | "salesperson";

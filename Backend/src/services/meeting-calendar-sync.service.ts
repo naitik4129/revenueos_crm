@@ -1,5 +1,5 @@
 import { pool } from "../db.js";
-import { getLeadRowOr404 } from "./leads.service.js";
+import { getDealOr404 } from "./deals.service.js";
 import { loadGoogleCalendarConnection, markGoogleCalendarReauthRequired } from "./connections.service.js";
 import {
   CalendarSyncError,
@@ -77,7 +77,7 @@ export async function syncMeetingCreated(meetingId: string): Promise<void> {
 
   try {
     const [lead, participants] = await Promise.all([
-      getLeadRowOr404(pool, meeting.workspace_id, meeting.lead_id),
+      getDealOr404(pool, meeting.workspace_id, meeting.lead_id),
       getMeetingParticipants(meetingId),
     ]);
     const attendees = [
@@ -91,7 +91,7 @@ export async function syncMeetingCreated(meetingId: string): Promise<void> {
       calendarId: connection.connected_calendar_id,
       refreshToken,
       summary: meeting.title,
-      description: `Meeting with ${lead.company} via Northbeam CRM.`,
+      description: `Meeting with ${lead.company_name ?? `${lead.first_name} ${lead.last_name}`.trim()} via Northbeam CRM.`,
       startIso,
       endIso,
       timeZone: MEETING_TIME_ZONE,

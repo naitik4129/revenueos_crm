@@ -5,7 +5,8 @@ import type { CallConnectedOutcome, CallNotConnectedReason } from "../domain/enu
 import { routeConnectedOutcome, routeNotConnected, type InterestedLaterCapture } from "../domain/callRouting.js";
 import { addTimelineEvent, actorEvent } from "./timeline.service.js";
 import { createTask, cancelOpenTasksForLead, completeTask } from "./tasks.service.js";
-import { getLeadRowOr404, markDnc, setAutomationMode, setContactability, updateLead } from "./leads.service.js";
+import { getDealOr404, setAutomationMode, updateDeal } from "./deals.service.js";
+import { markDnc, setContactability } from "./contacts.service.js";
 import { addDaysIso } from "../dto.js";
 
 export interface LogCallInput {
@@ -58,8 +59,8 @@ function callToDto(row: CallRow) {
  * (Rule 16).
  */
 export async function logCall(db: Queryable, actor: Actor, workspaceId: string, leadId: string, input: LogCallInput) {
-  const lead = await getLeadRowOr404(db, workspaceId, leadId);
-  if (lead.lifecycle_state === "do_not_contact") {
+  const lead = await getDealOr404(db, workspaceId, leadId);
+  if (lead.contact_status === "do_not_contact") {
     throw new DoNotContactError("This lead is Do Not Contact - no further contact can be logged.");
   }
 
@@ -96,7 +97,7 @@ export async function logCall(db: Queryable, actor: Actor, workspaceId: string, 
   const call = callResult.rows[0]!;
 
   await addTimelineEvent(db, {
-    leadId,
+    dealId: leadId,
     kind: "call",
     title: input.connected ? `Call Connected - ${input.connectedOutcome}` : "Call Not Connected",
     detail: input.connected ? input.notes : `${input.notConnectedReason}${input.notes ? ` - ${input.notes}` : ""}`,
@@ -120,8 +121,8 @@ export async function logCall(db: Queryable, actor: Actor, workspaceId: string, 
   // Do Not Contact overrides everything else — shares the same path as the
   // lead-level DNC endpoint (Rule 6).
   if (input.connected && input.connectedOutcome === "do_not_contact") {
-    await markDnc(db, actor, workspaceId, leadId, { reason: input.notes?.trim() || "Requested on call" });
-    return { call: callToDto(call), lead: await getLeadRowOr404(db, workspaceId, leadId), workflowTrigger: undefined, promptScheduleMeeting: false };
+    await markDnc(db, actor, workspaceId, lead.contact_id, { reason: input.notes?.trim() || "Requested on call" });
+    return { call: callToDto(call), lead: await getDealOr404(db, workspaceId, leadId), workflowTrigger: undefined, promptScheduleMeeting: false };
   }
 
   const routing = input.connected
@@ -132,7 +133,7 @@ export async function logCall(db: Queryable, actor: Actor, workspaceId: string, 
     : routeNotConnected(input.notConnectedReason!);
 
   if (routing.phoneContactStatus) {
-    await setContactability(db, actor, workspaceId, leadId, { channel: "phone", status: routing.phoneContactStatus, reason: `Call outcome: ${input.notConnectedReason}` });
+    await setContactability(db, actor, workspaceId, lead.contact_id, { channel: "phone", status: routing.phoneContactStatus, reason: `Call outcome: ${input.notConnectedReason}` });
   }
 
   // stage and objectionType (and, for interested_later, the capture fields)
@@ -140,8 +141,8 @@ export async function logCall(db: Queryable, actor: Actor, workspaceId: string, 
   // requires objection_type whenever pipeline_stage = 'objection_nurture',
   // and that constraint is checked against the row as written, not per-column.
   if (routing.stage || routing.objectionType) {
-    await updateLead(db, actor, workspaceId, leadId, {
-      ...(routing.stage ? { pipelineStage: routing.stage } : {}),
+    await updateDeal(db, actor, workspaceId, leadId, {
+      ...(routing.stage ? { stage: routing.stage } : {}),
       ...(routing.objectionType ? { objectionType: routing.objectionType } : {}),
       ...(input.connectedOutcome === "interested_later" && input.interestedLater
         ? {
@@ -188,7 +189,7 @@ export async function logCall(db: Queryable, actor: Actor, workspaceId: string, 
   // always prompts a choice).
   return {
     call: callToDto(call),
-    lead: await getLeadRowOr404(db, workspaceId, leadId),
+    lead: await getDealOr404(db, workspaceId, leadId),
     workflowTrigger: routing.workflowTrigger,
     promptScheduleMeeting: routing.promptScheduleMeeting,
   };

@@ -1,5 +1,13 @@
 import type { ZodSchema } from "zod";
-import { ValidationError } from "../errors.js";
+import { NotFoundError, ValidationError } from "../errors.js";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A route id that is not a uuid cannot exist: 404, same as an id from another workspace. */
+export function parseId(value: string | undefined, resource: string): string {
+  if (!value || !UUID_RE.test(value)) throw new NotFoundError(resource);
+  return value;
+}
 
 export function parseBody<T>(schema: ZodSchema<T>, body: unknown): T {
   const result = schema.safeParse(body);
