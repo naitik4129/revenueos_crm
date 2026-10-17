@@ -2,6 +2,7 @@ import Papa from "papaparse";
 import type { ImportContactRow } from "@/lib/backend-client";
 import { validateContact } from "@/lib/contact-validation";
 import { CONTACT_SOURCES } from "@/types";
+import { downloadCsv } from "@/lib/csv";
 
 export const MAX_IMPORT_ROWS = 2000;
 
@@ -160,14 +161,5 @@ const SAMPLE = {
 };
 
 export function downloadSampleCsv() {
-  const url = URL.createObjectURL(
-    new Blob([Papa.unparse(SAMPLE)], { type: "text/csv;charset=utf-8;" }),
-  );
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "contacts-import-sample.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  downloadCsv("contacts-import-sample.csv", [SAMPLE.fields, ...SAMPLE.data]);
 }

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Proposal } from "@/types";
 import {
   backend,
@@ -31,6 +31,18 @@ export function useContactSearch(search: string) {
   return { results: search ? (query.data?.data ?? []) : [], isFetching: query.isFetching };
 }
 
+/** Header search: the first few companies matching `search` (empty = no request). */
+export function useCompanySearch(search: string) {
+  const { currentWorkspaceId } = useWorkspace();
+  const query = useQuery({
+    queryKey: keys.companies(currentWorkspaceId, { search, limit: 4 }),
+    queryFn: ({ signal }) => backend.companies.list({ search, limit: 4 }, signal),
+    enabled: Boolean(currentWorkspaceId) && search.length > 0,
+    placeholderData: (previous) => previous,
+  });
+  return { results: search ? (query.data?.data ?? []) : [], isFetching: query.isFetching };
+}
+
 /** One contact and everything shown on its detail page. */
 export function useContactDetail(id: string) {
   const { currentWorkspaceId: ws } = useWorkspace();
@@ -39,14 +51,28 @@ export function useContactDetail(id: string) {
     queryFn: ({ signal }: { signal: AbortSignal }) => fn(signal),
     enabled: Boolean(ws),
   });
+  const contact = useQuery(opts("contact", (s) => backend.contacts.get(id, s)));
+  const { companyId, openDealId } = contact.data ?? {};
   return {
-    contact: useQuery(opts("contact", (s) => backend.contacts.get(id, s))),
+    contact,
+    // These two wait for the contact: its company card and its open deal's meetings.
+    company: useQuery({
+      ...opts(`company:${companyId}`, (s) => backend.companies.get(companyId ?? "", s)),
+      enabled: Boolean(ws && companyId),
+    }),
+    meetings: useQuery({
+      ...opts(`meetings:${openDealId}`, (s) => backend.deals.meetings(openDealId ?? "", s)),
+      enabled: Boolean(ws && openDealId),
+    }),
     deals: useQuery(opts("deals", (s) => backend.contacts.deals(id, { limit: 50 }, s))),
     calls: useQuery(opts("calls", (s) => backend.contacts.calls(id, s))),
     emails: useQuery(opts("emails", (s) => backend.contacts.emailActivities(id, s))),
     timeline: useQuery(opts("timeline", (s) => backend.contacts.timeline(id, { limit: 100 }, s))),
     notes: useQuery(opts("notes", (s) => backend.contacts.notes(id, s))),
     channels: useQuery(opts("channels", (s) => backend.contacts.contactability(id, s))),
+    tasks: useQuery(
+      opts("tasks", (s) => backend.tasks.list({ contactId: id, status: "open", limit: 20 }, s)),
+    ),
   };
 }
 
@@ -79,10 +105,31 @@ export function useCompanyDetail(id: string) {
     queryFn: ({ signal }: { signal: AbortSignal }) => fn(signal),
     enabled: Boolean(ws),
   });
+  const deals = useQuery(opts("deals", (s) => backend.companies.deals(id, { limit: 200 }, s)));
+  // No tasks-by-company endpoint: collect the open tasks of the company's open deals.
+  // shortcut: first 10 open deals only, and contact-only tasks are missed; upgrade when the API
+  // can list tasks by company.
+  const openDealIds = (deals.data?.data ?? [])
+    .filter((d) => d.outcome === "open")
+    .slice(0, 10)
+    .map((d) => d.id);
+  const tasks = useQueries({
+    queries: openDealIds.map((dealId) =>
+      opts(`tasks:${dealId}`, (s) => backend.deals.tasks(dealId, s)),
+    ),
+    combine: (results) => ({
+      data: results
+        .flatMap((r) => r.data?.data ?? [])
+        .filter((t) => t.status === "open")
+        .sort((a, b) => a.dueAt.localeCompare(b.dueAt)),
+      isLoading: results.some((r) => r.isLoading),
+    }),
+  });
   return {
     company: useQuery(opts("company", (s) => backend.companies.get(id, s))),
     contacts: useQuery(opts("contacts", (s) => backend.companies.contacts(id, { limit: 200 }, s))),
-    deals: useQuery(opts("deals", (s) => backend.companies.deals(id, { limit: 200 }, s))),
+    deals,
+    tasks,
     timeline: useQuery(opts("timeline", (s) => backend.companies.timeline(id, { limit: 100 }, s))),
   };
 }

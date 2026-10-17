@@ -54,7 +54,9 @@ export function BrandLogo({ variant = "compact", caption, className }: BrandLogo
           <p
             className={cn(
               "text-muted-foreground",
-              signature ? "mt-4 text-xs" : "mt-1.5 text-[11px] leading-tight",
+              signature
+                ? "mt-4 text-xs"
+                : "mt-1 whitespace-nowrap text-[10px] leading-tight tracking-tight",
             )}
           >
             {caption}

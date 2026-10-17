@@ -112,13 +112,18 @@ const istParts = (iso: string) => ({
   }).format(new Date(iso)),
 });
 
-/** Adds a task to the deal, or reschedules/edits `task`. Times are India time. */
+/**
+ * Adds a task to the deal (or, with no deal, to `contactId`), or reschedules/edits `task`.
+ * Times are India time.
+ */
 export function TaskDialog({
   deal,
+  contactId,
   task,
   onOpenChange,
 }: {
-  deal: Deal;
+  deal?: Deal | undefined;
+  contactId?: string | undefined;
   task?: Task;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -128,7 +133,7 @@ export function TaskDialog({
   const [title, setTitle] = useState(task?.title ?? "");
   const [date, setDate] = useState(due.date);
   const [time, setTime] = useState(due.time);
-  const [ownerId, setOwnerId] = useState(task?.ownerId ?? deal.ownerId ?? "");
+  const [ownerId, setOwnerId] = useState(task?.ownerId ?? deal?.ownerId ?? "");
   const save = useCrmMutation(() => {
     const input = {
       type,
@@ -138,7 +143,7 @@ export function TaskDialog({
     };
     return task
       ? backend.tasks.update(task.id, input)
-      : backend.tasks.create({ ...input, dealId: deal.id });
+      : backend.tasks.create({ ...input, ...(deal ? { dealId: deal.id } : { contactId }) });
   });
 
   return (

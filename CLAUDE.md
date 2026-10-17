@@ -181,6 +181,19 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
 - **`brain_customer_key` check**: confirm `revenueos_projects.brain_customer_key` matches the brain's `customer` text (QuickICP tables) before building brain pushes.
 - **Retention period** for email reply text, call transcripts and recordings: management decision (no auto-delete in V1).
 - **Email Tool results endpoint**: needed before email events beyond `sent` can be pushed.
+- **API gaps found by the UI redesign** (branch `ui-redesign`, frontend only; listed, not built):
+  1. Contacts list: "Unassigned" filter (`ownerId` accepts only a uuid).
+  2. Contacts list: "has open deal" filter.
+  3. Contacts list: `sort` parameter (column sorting).
+  4. Bulk endpoints for contacts: owner, lifecycle, DNC, delete.
+  5. Assigning an owner must not move `last_activity_at` (today `PATCH /contacts/:id` always sets it to now).
+  6. Send or log a one-off email from a record (the record page uses `mailto:` until then).
+  7. Meetings by contact (meetings filter only by deal).
+  8. Saved views stored on the server (custom or shared per team).
+  9. Contacts list columns "last contacted" and "next task due".
+  10. Tasks by company (the company page collects open tasks from its first 10 open deals; tasks on a contact with no deal are missed).
+  11. Notes on a company (notes exist only on contacts and deals).
+  12. Companies list: the same "Unassigned" filter and `sort` parameter as contacts (gaps 1 and 3).
 
 ## Demo mode (2026-10-16)
 `cd Backend && npm run demo` -> http://127.0.0.1:8080, users admin@/sam@/priya@demo.local (password `demo`). Local PGlite + seed + fake Supabase Auth/Storage + API + dry-run worker + Vite, all in one process. Code lives in `Backend/demo/` (never built or shipped); guards and tests are described in `Backend/README.md`. No demo code in `Backend/src`.

@@ -17,6 +17,7 @@ export { messageFromError } from "./query";
 export {
   useContacts,
   useContactSearch,
+  useCompanySearch,
   useContactDetail,
   useCompanies,
   useCompanyDetail,

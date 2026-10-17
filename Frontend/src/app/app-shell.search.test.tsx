@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -34,6 +34,11 @@ vi.mock("@/store", () => ({
     error: null,
   }),
   useContactSearch: (text: string) => ({ results: text ? search(text) : [], isFetching: false }),
+  useCompanySearch: (text: string) => ({
+    results:
+      text && "globex".includes(text.toLowerCase()) ? [{ id: "co-1", name: "Globex Inc" }] : [],
+    isFetching: false,
+  }),
   // The Add contact dialog (closed in these tests) uses these.
   useCrmMutation: () => ({ mutateAsync: noop, isPending: false }),
   useNotifications: () => ({
@@ -89,7 +94,7 @@ async function renderShell() {
   });
   await router.load();
   const view = render(<RouterProvider router={router} />);
-  const input = screen.getByPlaceholderText("Search contacts…");
+  const input = screen.getByPlaceholderText("Search contacts and companies");
   return { view, input, router };
 }
 
@@ -109,7 +114,7 @@ describe("AppShell top search bar", () => {
   it("shows a no-results message instead of nothing", async () => {
     const { input } = await renderShell();
     fireEvent.change(input, { target: { value: "zzzznomatch" } });
-    expect(await screen.findByText(/No contacts match/)).toBeInTheDocument();
+    expect(await screen.findByText(/Nothing matches/)).toBeInTheDocument();
   });
 
   it("closes the dropdown on Escape while keeping the query text", async () => {
@@ -127,6 +132,19 @@ describe("AppShell top search bar", () => {
     expect(await screen.findByRole("listbox")).toBeInTheDocument();
     fireEvent.mouseDown(document.body);
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("lists matching companies under their own heading", async () => {
+    const { input } = await renderShell();
+    fireEvent.change(input, { target: { value: "glob" } });
+    expect(await screen.findByText("Globex Inc")).toBeInTheDocument();
+    expect(within(screen.getByRole("listbox")).getByText("Companies")).toBeInTheDocument();
+  });
+
+  it("focuses the search on Ctrl+K", async () => {
+    const { input } = await renderShell();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(input).toHaveFocus();
   });
 
   it("navigates to the highlighted result on ArrowDown + Enter", async () => {

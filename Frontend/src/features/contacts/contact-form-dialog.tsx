@@ -55,15 +55,17 @@ function fieldFromDetails(details: unknown): string | null {
   return typeof field === "string" ? field : null;
 }
 
-/** Add a contact (no `contact`) or edit one. */
+/** Add a contact (no `contact`, optionally at `defaultCompany`) or edit one. */
 export function ContactFormDialog({
   open,
   onOpenChange,
   contact,
+  defaultCompany,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   contact?: Contact;
+  defaultCompany?: PickerOption | undefined;
 }) {
   const { users, currentUser } = useSession();
   const navigate = useNavigate();
@@ -78,12 +80,16 @@ export function ContactFormDialog({
     if (!open) return;
     setForm(emptyForm(contact, currentUser?.id));
     setCompany(
-      contact?.companyId ? { id: contact.companyId, label: contact.companyName ?? "" } : null,
+      contact?.companyId
+        ? { id: contact.companyId, label: contact.companyName ?? "" }
+        : (defaultCompany ?? null),
     );
     setCreateDeal(false);
     setTouched(false);
     setServerError(null);
-  }, [open, contact, currentUser?.id]);
+    // Keyed on the id: callers pass a fresh object each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, contact, currentUser?.id, defaultCompany?.id]);
 
   const save = useCrmMutation((input: ContactInput) =>
     contact

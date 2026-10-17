@@ -141,8 +141,8 @@ async function renderScreen(Screen: () => ReactNode) {
 describe("zero-record route states", () => {
   it.each([
     [DashboardPage, "Nothing due today."],
-    [ContactsPage, "No contacts match these filters."],
-    [CompaniesPage, "No companies match these filters."],
+    [ContactsPage, "No contacts yet"],
+    [CompaniesPage, "No companies yet"],
     [DealsPage, "New"],
     [TasksPage, "Nothing here."],
     [MeetingsPage, "No upcoming meetings."],

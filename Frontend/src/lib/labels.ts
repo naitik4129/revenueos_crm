@@ -52,6 +52,36 @@ const SPECIAL: Record<string, string> = {
   meeting_proposal_requested: "Meeting: Proposal Requested",
   meeting_not_a_fit: "Meeting: Not a Fit (Archive / Alternate Service)",
 };
+// Timeline titles the backend writes that read badly as they are.
+const TIMELINE_TITLES: Record<string, string> = {
+  "Absorbed Duplicate Contact": "A duplicate contact was merged into this one",
+  Merged: "Merged into another contact",
+  "Do Not Contact": "Marked Do Not Contact",
+  "Do Not Contact Lifted": "Do Not Contact lifted",
+  "Qualified Handover": "Handed over as a qualified lead",
+  "Contact Assigned": "Contact owner changed",
+  "Deal Assigned": "Deal owner changed",
+  Reopened: "Deal reopened",
+};
+
+/** A backend timeline title in plain sentence case ("Note Added" -> "Note added"). */
+export function timelineTitle(title: string) {
+  if (TIMELINE_TITLES[title]) return TIMELINE_TITLES[title];
+  const lifecycle = /^Lifecycle: (\w+)(?: -> (\w+))?( \(moved back\))?$/.exec(title);
+  if (lifecycle) {
+    const [, from, to, back] = lifecycle;
+    return to
+      ? `Lifecycle stage changed from ${label(from)} to ${label(to)}${back ? " (moved back)" : ""}`
+      : `Lifecycle stage set to ${label(from)}`;
+  }
+  const stage = /^Stage changed to (\w+)$/.exec(title);
+  if (stage) return `Deal stage changed to ${label(stage[1])}`;
+  const channel = /^(\w+) contactability: (\w+)$/.exec(title);
+  if (channel) return `${label(channel[1])} marked ${label(channel[2]).toLowerCase()}`;
+  // Lower-case plain Title Case words after the first; keeps "WhatsApp", "AI", "DNC".
+  return title.replace(/(?<=\S\s+)[A-Z][a-z]+\b/g, (w) => w.toLowerCase());
+}
+
 export function label(value?: string | null) {
   if (!value) return "-";
   return SPECIAL[value] ?? value.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());

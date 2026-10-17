@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { toIsoFromIst } from "./dates";
-import { label, workflowTriggerLabel } from "./labels";
+import { label, timelineTitle, workflowTriggerLabel } from "./labels";
 
 describe("presentation helpers", () => {
   it("transports an IST form value as UTC", () => {
@@ -18,5 +18,26 @@ describe("presentation helpers", () => {
   it("labels meeting-agreed workflow triggers as call outcomes", () => {
     expect(label("meeting_agreed")).toBe("Meeting Agreed");
     expect(workflowTriggerLabel("meeting_agreed")).toBe("Call Outcome = Meeting Agreed");
+  });
+});
+
+describe("timelineTitle", () => {
+  it("rewrites raw backend titles in plain words", () => {
+    expect(timelineTitle("Absorbed Duplicate Contact")).toBe(
+      "A duplicate contact was merged into this one",
+    );
+    expect(timelineTitle("Note Added")).toBe("Note added");
+    expect(timelineTitle("WhatsApp Sent (dry run)")).toBe("WhatsApp sent (dry run)");
+    expect(timelineTitle("Automation Step Failed - Retry Scheduled")).toBe(
+      "Automation step failed - retry scheduled",
+    );
+    expect(timelineTitle("Lifecycle: qualified -> contacted (moved back)")).toBe(
+      "Lifecycle stage changed from Qualified to Contacted (moved back)",
+    );
+    expect(timelineTitle("Lifecycle: engaged")).toBe("Lifecycle stage set to Engaged");
+    expect(timelineTitle("Stage changed to proposal_sent")).toBe(
+      "Deal stage changed to Proposal Sent",
+    );
+    expect(timelineTitle("email contactability: bounced")).toBe("Email marked bounced");
   });
 });

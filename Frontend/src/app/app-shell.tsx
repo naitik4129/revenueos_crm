@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -13,8 +13,8 @@ import {
   Handshake,
   ListChecks,
   LogOut,
+  Menu,
   Plus,
-  Search,
   Settings as SettingsIcon,
   ShieldCheck,
   Users,
@@ -33,18 +33,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
 import { toast } from "sonner";
 import { AddContactContext } from "@/app/add-contact-context";
+import { GlobalSearch } from "@/app/global-search";
 import { ContactFormDialog } from "@/features/contacts/contact-form-dialog";
-import { messageFromError, useContactSearch, useNotifications, useSession } from "@/store";
+import { messageFromError, useNotifications, useSession } from "@/store";
 import { backend } from "@/lib/backend-client";
 import { keys } from "@/store/query";
 import { useWorkspace } from "@/store/workspace-context";
@@ -52,44 +45,44 @@ import { cn } from "@/lib/utils";
 import { relDay } from "@/lib/format";
 import { supabase } from "@/lib/supabase-client";
 
-const NAV = [
-  { to: "/", label: "Dashboard", icon: Gauge },
-  { to: "/contacts", label: "Contacts", icon: Users },
-  { to: "/companies", label: "Companies", icon: Building2 },
-  { to: "/deals", label: "Deals", icon: Handshake },
-  { to: "/tasks", label: "Tasks", icon: ListChecks },
-  { to: "/meetings", label: "Meetings", icon: CalendarDays },
-  { to: "/proposals", label: "Proposals", icon: FileText },
-  { to: "/automations", label: "Automations", icon: Bot },
-  { to: "/settings", label: "Settings", icon: SettingsIcon },
-] as const;
-const ADMIN_NAV = { to: "/admin", label: "Admin", icon: ShieldCheck } as const;
+type NavItem = { to: string; label: string; icon: typeof Gauge };
+
+const NAV_GROUPS: { label?: string; items: NavItem[] }[] = [
+  { items: [{ to: "/", label: "Dashboard", icon: Gauge }] },
+  {
+    label: "CRM",
+    items: [
+      { to: "/contacts", label: "Contacts", icon: Users },
+      { to: "/companies", label: "Companies", icon: Building2 },
+      { to: "/deals", label: "Deals", icon: Handshake },
+    ],
+  },
+  {
+    label: "Sales",
+    items: [
+      { to: "/tasks", label: "Tasks", icon: ListChecks },
+      { to: "/meetings", label: "Meetings", icon: CalendarDays },
+      { to: "/proposals", label: "Proposals", icon: FileText },
+    ],
+  },
+  { label: "Automation", items: [{ to: "/automations", label: "Automations", icon: Bot }] },
+];
+const SETTINGS_NAV: NavItem = { to: "/settings", label: "Settings", icon: SettingsIcon };
+const ADMIN_NAV: NavItem = { to: "/admin", label: "Admin", icon: ShieldCheck };
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [addOpen, setAddOpen] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(-1);
-  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
-  const searchBoxRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const client = useQueryClient();
   const { notifications, markNotificationsRead } = useNotifications();
   const [bellOpen, setBellOpen] = useState(false);
   const { currentUser } = useSession();
-  const {
-    workspaces,
-    currentWorkspaceId,
-    currentWorkspace,
-    setCurrentWorkspaceId,
-    isLoading: workspacesLoading,
-  } = useWorkspace();
+  const { workspaces, setCurrentWorkspaceId, isLoading: workspacesLoading } = useWorkspace();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isAdmin = currentUser?.role === "Admin";
-  const nav = isAdmin ? [...NAV, ADMIN_NAV] : NAV;
   const noWorkspace = !workspacesLoading && workspaces.length === 0;
 
   const createWorkspace = useMutation({
@@ -104,273 +97,37 @@ export function AppShell({ children }: { children: ReactNode }) {
     onError: (error: unknown) => toast.error(messageFromError(error)),
   });
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        setPaletteOpen((o) => !o);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  useEffect(() => {
-    if (!searchOpen) return;
-    const onPointerDown = (e: MouseEvent) => {
-      if (!searchBoxRef.current?.contains(e.target as Node)) {
-        setSearchOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [searchOpen]);
-
   const unread = notifications.filter((n) => !n.read).length;
-  const trimmedQuery = query.trim();
-  // Server-side search (name, email, phone, company); typing pauses before each request.
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(trimmedQuery), 250);
-    return () => clearTimeout(timer);
-  }, [trimmedQuery]);
-  const { results, isFetching } = useContactSearch(debouncedQuery);
-  const showSearchPanel = searchOpen && trimmedQuery.length > 0;
-
-  const resetSearch = () => {
-    setQuery("");
-    setSearchOpen(false);
-    setActiveIndex(-1);
-  };
+  const sidebar = (onNavigate?: () => void) => (
+    <SidebarContent
+      pathname={pathname}
+      isAdmin={isAdmin}
+      onNavigate={onNavigate}
+      onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
+    />
+  );
 
   return (
     <AddContactContext.Provider value={{ open: () => setAddOpen(true) }}>
       <div className="flex min-h-screen bg-background">
-        <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
-          <div className="px-3 py-5">
-            <BrandLogo caption="MOTM Flow · Sales Automation" />
-          </div>
-
-          <div className="px-3 pb-3">
-            <Button
-              className="w-full justify-start gap-2"
-              size="sm"
-              onClick={() => setAddOpen(true)}
-            >
-              <Plus className="size-4" /> Add contact
-            </Button>
-          </div>
-
-          <ScrollArea className="flex-1 px-2">
-            <nav className="space-y-0.5 pb-4">
-              {nav.map((item) => {
-                const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
-                return (
-                  <Link
-                    key={item.to}
-                    to={item.to}
-                    className={cn(
-                      "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-sidebar-foreground transition-colors hover:bg-sidebar-accent",
-                      active && "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
-                    )}
-                  >
-                    <item.icon className="size-4 text-muted-foreground" />
-                    {item.label}
-                  </Link>
-                );
-              })}
-            </nav>
-          </ScrollArea>
-
-          <div className="border-t border-sidebar-border p-3">
-            <Popover open={switcherOpen} onOpenChange={setSwitcherOpen}>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-sidebar-accent"
-                  aria-label="Switch workspace"
-                >
-                  <BrandLogo variant="mark" className="size-6" />
-                  <div className="min-w-0 flex-1 text-xs">
-                    <div className="truncate font-medium">
-                      {currentWorkspace?.name ?? (workspacesLoading ? "Loading…" : "No workspace")}
-                    </div>
-                    <div className="text-muted-foreground">Workspace · IST</div>
-                  </div>
-                  <ChevronsUpDown className="size-3.5 text-muted-foreground" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="w-64 p-1">
-                <div className="max-h-64 overflow-y-auto">
-                  {workspaces.length === 0 && (
-                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                      {workspacesLoading ? "Loading workspaces…" : "You are not in any workspace."}
-                    </div>
-                  )}
-                  {workspaces.map((workspace) => (
-                    <button
-                      key={workspace.id}
-                      type="button"
-                      className={cn(
-                        "flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent",
-                        workspace.id === currentWorkspaceId && "bg-accent",
-                      )}
-                      onClick={() => {
-                        setCurrentWorkspaceId(workspace.id);
-                        setSwitcherOpen(false);
-                      }}
-                    >
-                      <span className="truncate">{workspace.name}</span>
-                      {workspace.id === currentWorkspaceId && (
-                        <Check className="size-3.5 shrink-0" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-                {/* Only admins create workspaces. */}
-                {isAdmin && (
-                  <div className="mt-1 border-t pt-1">
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-primary hover:bg-accent"
-                      onClick={() => {
-                        setSwitcherOpen(false);
-                        setCreateWorkspaceOpen(true);
-                      }}
-                    >
-                      <Plus className="size-3.5" /> Create workspace
-                    </button>
-                  </div>
-                )}
-              </PopoverContent>
-            </Popover>
-            <div className="mt-1 flex items-center gap-2 rounded-md px-2 py-2">
-              <div className="grid size-7 place-items-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
-                {currentUser?.initials ?? "-"}
-              </div>
-              <div className="min-w-0 flex-1 text-xs">
-                <div className="truncate font-medium">{currentUser?.name ?? "Loading…"}</div>
-                <div className="text-muted-foreground">{currentUser?.role ?? "Salesperson"}</div>
-              </div>
-              {supabase && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 shrink-0"
-                  aria-label="Sign out"
-                  onClick={() => void supabase?.auth.signOut()}
-                >
-                  <LogOut className="size-3.5" />
-                </Button>
-              )}
-            </div>
-          </div>
+        <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
+          {sidebar()}
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-card/80 px-4 backdrop-blur">
-            <Link to="/" aria-label="MOTM Flow home" className="shrink-0 lg:hidden">
-              <BrandLogo variant="mark" className="size-8" />
-            </Link>
-            <div ref={searchBoxRef} className="relative w-full max-w-md">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                role="combobox"
-                aria-expanded={showSearchPanel}
-                aria-controls="header-search-results"
-                aria-activedescendant={
-                  activeIndex >= 0 ? `header-search-result-${activeIndex}` : undefined
-                }
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setSearchOpen(true);
-                  setActiveIndex(-1);
-                }}
-                onFocus={() => {
-                  if (trimmedQuery) setSearchOpen(true);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setSearchOpen(false);
-                    e.currentTarget.blur();
-                  } else if (e.key === "ArrowDown") {
-                    if (results.length === 0) return;
-                    e.preventDefault();
-                    setActiveIndex((i) => Math.min(i + 1, results.length - 1));
-                  } else if (e.key === "ArrowUp") {
-                    if (results.length === 0) return;
-                    e.preventDefault();
-                    setActiveIndex((i) => Math.max(i - 1, 0));
-                  } else if (e.key === "Enter") {
-                    const target = activeIndex >= 0 ? results[activeIndex] : results[0];
-                    if (target) {
-                      e.preventDefault();
-                      resetSearch();
-                      void navigate({
-                        to: "/contacts/$contactId",
-                        params: { contactId: target.id },
-                      });
-                    }
-                  }
-                }}
-                placeholder="Search contacts…"
-                className="h-9 pl-8"
-              />
-              {showSearchPanel && (
-                <div
-                  id="header-search-results"
-                  role="listbox"
-                  className="absolute left-0 right-0 top-11 z-40 overflow-hidden rounded-md border bg-popover shadow-lg"
-                >
-                  {results.length > 0 ? (
-                    results.map((c, i) => (
-                      <Link
-                        key={c.id}
-                        id={`header-search-result-${i}`}
-                        role="option"
-                        aria-selected={i === activeIndex}
-                        to="/contacts/$contactId"
-                        params={{ contactId: c.id }}
-                        onClick={resetSearch}
-                        onMouseEnter={() => setActiveIndex(i)}
-                        className={cn(
-                          "flex items-center justify-between px-3 py-2 text-sm hover:bg-accent",
-                          i === activeIndex && "bg-accent",
-                        )}
-                      >
-                        <span>
-                          {c.firstName} {c.lastName}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {c.companyName ?? c.email}
-                        </span>
-                      </Link>
-                    ))
-                  ) : (
-                    <div className="px-3 py-2.5 text-sm text-muted-foreground">
-                      {isFetching || debouncedQuery !== trimmedQuery ? (
-                        "Searching…"
-                      ) : (
-                        <>No contacts match &ldquo;{trimmedQuery}&rdquo;</>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+          <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-card/80 px-4 backdrop-blur">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0 lg:hidden"
+              aria-label="Open navigation"
+              onClick={() => setMobileNavOpen(true)}
+            >
+              <Menu className="size-5" />
+            </Button>
+            <GlobalSearch />
 
-            <div className="ml-auto flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="hidden gap-2 text-muted-foreground md:flex"
-                onClick={() => setPaletteOpen(true)}
-              >
-                <span className="text-xs">Quick actions</span>
-                <kbd className="rounded border bg-muted px-1 text-[10px]">⌘K</kbd>
-              </Button>
-
+            <div className="ml-auto flex items-center gap-1">
               <Popover
                 open={bellOpen}
                 onOpenChange={(o) => {
@@ -441,10 +198,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                   </ScrollArea>
                 </PopoverContent>
               </Popover>
-
-              <Button size="sm" className="gap-1.5" onClick={() => setAddOpen(true)}>
-                <Plus className="size-4" /> Add contact
-              </Button>
             </div>
           </header>
 
@@ -458,6 +211,16 @@ export function AppShell({ children }: { children: ReactNode }) {
           </main>
         </div>
       </div>
+
+      <Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <DialogContent className="left-0 top-0 flex h-full w-64 max-w-[85vw] translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-r bg-sidebar p-0 sm:rounded-none">
+          <DialogTitle className="sr-only">Navigation</DialogTitle>
+          <DialogDescription className="sr-only">
+            Go to a page or switch workspace.
+          </DialogDescription>
+          {sidebar(() => setMobileNavOpen(false))}
+        </DialogContent>
+      </Dialog>
 
       <ContactFormDialog open={addOpen} onOpenChange={setAddOpen} />
 
@@ -492,56 +255,166 @@ export function AppShell({ children }: { children: ReactNode }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <CommandDialog open={paletteOpen} onOpenChange={setPaletteOpen}>
-        <CommandInput placeholder="Type a command or search…" />
-        <CommandList>
-          <CommandEmpty>No results found.</CommandEmpty>
-          <CommandGroup heading="Actions">
-            <CommandItem
-              onSelect={() => {
-                setPaletteOpen(false);
-                setAddOpen(true);
-              }}
-            >
-              Add contact
-            </CommandItem>
-            <CommandItem
-              onSelect={() => {
-                setPaletteOpen(false);
-                void navigate({ to: "/tasks" });
-              }}
-            >
-              Open Tasks
-            </CommandItem>
-            <CommandItem
-              onSelect={() => {
-                setPaletteOpen(false);
-                void navigate({ to: "/meetings" });
-              }}
-            >
-              Schedule Meeting
-            </CommandItem>
-            <CommandItem
-              onSelect={() => {
-                setPaletteOpen(false);
-                void navigate({ to: "/proposals" });
-              }}
-            >
-              Upload Proposal
-            </CommandItem>
-            <CommandItem
-              onSelect={() => {
-                setPaletteOpen(false);
-                void navigate({ to: "/automations" });
-              }}
-            >
-              Open Automations
-            </CommandItem>
-          </CommandGroup>
-        </CommandList>
-      </CommandDialog>
     </AddContactContext.Provider>
+  );
+}
+
+/** Logo, workspace switcher, grouped nav, settings/admin and the signed-in user. */
+function SidebarContent({
+  pathname,
+  isAdmin,
+  onNavigate,
+  onCreateWorkspace,
+}: {
+  pathname: string;
+  isAdmin: boolean;
+  onNavigate?: (() => void) | undefined;
+  onCreateWorkspace: () => void;
+}) {
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const { currentUser } = useSession();
+  const {
+    workspaces,
+    currentWorkspaceId,
+    currentWorkspace,
+    setCurrentWorkspaceId,
+    isLoading: workspacesLoading,
+  } = useWorkspace();
+
+  const link = (item: NavItem) => {
+    const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
+    return (
+      <Link
+        key={item.to}
+        to={item.to}
+        onClick={onNavigate}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm text-sidebar-foreground transition-colors hover:bg-sidebar-accent",
+          active &&
+            "bg-sidebar-accent font-medium text-sidebar-accent-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-sidebar-primary",
+        )}
+      >
+        <item.icon
+          className={cn("size-4", active ? "text-sidebar-primary" : "text-muted-foreground")}
+        />
+        {item.label}
+      </Link>
+    );
+  };
+
+  return (
+    <>
+      <div className="px-3 pb-2 pt-4">
+        <Link to="/" aria-label="MOTM Flow home" onClick={onNavigate}>
+          <BrandLogo caption="MOTM Flow · Sales Automation" />
+        </Link>
+      </div>
+
+      <div className="px-2 pb-2">
+        <Popover open={switcherOpen} onOpenChange={setSwitcherOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md border border-sidebar-border bg-background/60 px-2.5 py-1.5 text-left hover:bg-sidebar-accent"
+              aria-label="Switch workspace"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Workspace
+                </div>
+                <div className="truncate text-sm font-medium">
+                  {currentWorkspace?.name ?? (workspacesLoading ? "Loading…" : "No workspace")}
+                </div>
+              </div>
+              <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-64 p-1">
+            <div className="max-h-64 overflow-y-auto">
+              {workspaces.length === 0 && (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  {workspacesLoading ? "Loading workspaces…" : "You are not in any workspace."}
+                </div>
+              )}
+              {workspaces.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  type="button"
+                  className={cn(
+                    "flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent",
+                    workspace.id === currentWorkspaceId && "bg-accent",
+                  )}
+                  onClick={() => {
+                    setCurrentWorkspaceId(workspace.id);
+                    setSwitcherOpen(false);
+                  }}
+                >
+                  <span className="truncate">{workspace.name}</span>
+                  {workspace.id === currentWorkspaceId && <Check className="size-3.5 shrink-0" />}
+                </button>
+              ))}
+            </div>
+            {/* Only admins create workspaces. */}
+            {isAdmin && (
+              <div className="mt-1 border-t pt-1">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-primary hover:bg-accent"
+                  onClick={() => {
+                    setSwitcherOpen(false);
+                    onNavigate?.();
+                    onCreateWorkspace();
+                  }}
+                >
+                  <Plus className="size-3.5" /> Create workspace
+                </button>
+              </div>
+            )}
+          </PopoverContent>
+        </Popover>
+      </div>
+
+      <ScrollArea className="flex-1 px-2">
+        <nav aria-label="Main" className="space-y-3 pb-4 pt-1">
+          {NAV_GROUPS.map((group) => (
+            <div key={group.label ?? "home"} className="space-y-0.5">
+              {group.label && (
+                <div className="px-2.5 pb-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {group.label}
+                </div>
+              )}
+              {group.items.map(link)}
+            </div>
+          ))}
+        </nav>
+      </ScrollArea>
+
+      <div className="space-y-0.5 border-t border-sidebar-border p-2">
+        {link(SETTINGS_NAV)}
+        {isAdmin && link(ADMIN_NAV)}
+        <div className="mt-1 flex items-center gap-2 rounded-md px-2 py-1.5">
+          <div className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+            {currentUser?.initials ?? "-"}
+          </div>
+          <div className="min-w-0 flex-1 text-xs">
+            <div className="truncate font-medium">{currentUser?.name ?? "Loading…"}</div>
+            <div className="text-muted-foreground">{currentUser?.role ?? "Salesperson"}</div>
+          </div>
+          {supabase && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              aria-label="Sign out"
+              onClick={() => void supabase?.auth.signOut()}
+            >
+              <LogOut className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -571,18 +444,18 @@ export function PageHeader({
   heading,
 }: {
   title: string;
-  description?: string;
+  description?: string | undefined;
   actions?: ReactNode;
   tabs?: ReactNode;
   heading?: ReactNode;
 }) {
   return (
-    <div className="border-b bg-card px-6 pt-5">
-      <div className="flex flex-wrap items-start justify-between gap-3 pb-4">
+    <div className="border-b bg-card px-6 pt-4">
+      <div className="flex flex-wrap items-start justify-between gap-3 pb-3">
         {heading ?? (
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-            {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
+            {description && <p className="text-sm text-muted-foreground">{description}</p>}
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2">{actions}</div>
