@@ -1,7 +1,16 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
-import { Bot, CalendarDays, Mail, RefreshCw } from "lucide-react";
+import {
+  Bot,
+  CalendarDays,
+  Mail,
+  MessageCircle,
+  RefreshCw,
+  UserRound,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/app/app-shell";
 import { backend, type EmailConnection } from "@/lib/backend-client";
@@ -12,34 +21,95 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import { Avatar } from "@/components/common/record-parts";
+import { cn } from "@/lib/utils";
+import { useSession } from "@/store";
 import { useWorkspace } from "@/store/workspace-context";
 import { DefaultsPanel } from "./defaults-panel";
+import {
+  calendarStatus,
+  emailStatus,
+  whatsappStatus,
+  type ConnectionState,
+  type ConnectionSummary,
+} from "./connection-status";
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Something went wrong.";
 
+type Section = "defaults" | "email" | "whatsapp" | "calendar" | "profile";
+const SECTIONS: { id: Section; label: string; icon: LucideIcon }[] = [
+  { id: "defaults", label: "Workspace defaults", icon: Users },
+  { id: "email", label: "Email", icon: Mail },
+  { id: "whatsapp", label: "WhatsApp", icon: MessageCircle },
+  { id: "calendar", label: "Google Calendar", icon: CalendarDays },
+  { id: "profile", label: "Profile", icon: UserRound },
+];
+
 export function WorkspaceSettingsPage() {
   const { currentWorkspace, isLoading } = useWorkspace();
+  // Google's OAuth redirect lands on ?calendar=…: open that section so its toast shows in place.
+  const [section, setSection] = useState<Section>(() =>
+    new URLSearchParams(window.location.search).has("calendar") ? "calendar" : "defaults",
+  );
+  const status = useConnectionDots(currentWorkspace?.id);
 
   return (
-    <div>
+    <div className="pb-10">
       <PageHeader
         title="Settings"
         description={
           currentWorkspace
-            ? `Defaults and email, WhatsApp, and Google Calendar connections for ${currentWorkspace.name}.`
+            ? `Defaults and connections for ${currentWorkspace.name}.`
             : isLoading
               ? "Loading workspace…"
               : "Select a workspace to configure its connections."
         }
       />
-      <div className="p-6">
+      <div className="px-6 py-4">
         {currentWorkspace ? (
-          <div className="space-y-6">
-            <DefaultsPanel workspace={currentWorkspace} />
-            <EmailPanel workspaceId={currentWorkspace.id} />
-            <WhatsAppPanel workspaceId={currentWorkspace.id} />
-            <GoogleCalendarPanel workspaceId={currentWorkspace.id} />
+          <div className="grid items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
+            <nav
+              aria-label="Settings sections"
+              className="flex gap-1 overflow-x-auto md:sticky md:top-20 md:flex-col"
+            >
+              {SECTIONS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-current={section === item.id ? "page" : undefined}
+                  onClick={() => setSection(item.id)}
+                  className={cn(
+                    "flex shrink-0 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground",
+                    section === item.id && "bg-accent font-medium text-foreground",
+                  )}
+                >
+                  <item.icon className="size-4" />
+                  <span className="flex-1">{item.label}</span>
+                  {item.id in status && (
+                    <StatusDot state={status[item.id as keyof typeof status]} />
+                  )}
+                </button>
+              ))}
+            </nav>
+            <div className="min-w-0">
+              {/* Every section stays mounted so unsaved edits and live polling survive a switch. */}
+              <div hidden={section !== "defaults"}>
+                <DefaultsPanel workspace={currentWorkspace} />
+              </div>
+              <div hidden={section !== "email"}>
+                <EmailPanel workspaceId={currentWorkspace.id} />
+              </div>
+              <div hidden={section !== "whatsapp"}>
+                <WhatsAppPanel workspaceId={currentWorkspace.id} />
+              </div>
+              <div hidden={section !== "calendar"}>
+                <GoogleCalendarPanel workspaceId={currentWorkspace.id} />
+              </div>
+              <div hidden={section !== "profile"}>
+                <ProfilePanel />
+              </div>
+            </div>
           </div>
         ) : (
           <Card>
@@ -50,6 +120,112 @@ export function WorkspaceSettingsPage() {
         )}
       </div>
     </div>
+  );
+}
+
+/** The sub-nav dots; same query keys as the panels, so these share their cache. */
+function useConnectionDots(workspaceId: string | undefined) {
+  const enabled = Boolean(workspaceId);
+  const email = useQuery({
+    queryKey: ["connections", "email", workspaceId],
+    queryFn: ({ signal }) => backend.connections.email.get(signal),
+    enabled,
+  });
+  const whatsapp = useQuery({
+    queryKey: ["connections", "whatsapp", workspaceId],
+    queryFn: ({ signal }) => backend.connections.whatsapp.get(signal),
+    enabled,
+  });
+  const calendar = useQuery({
+    queryKey: ["connections", "google-calendar", workspaceId],
+    queryFn: ({ signal }) => backend.connections.googleCalendar.get(signal),
+    enabled,
+  });
+  const state = <T,>(
+    q: { data?: T | undefined; isError: boolean },
+    fn: (d: T) => ConnectionSummary,
+  ) => (q.isError ? "error" : q.data ? fn(q.data).state : undefined);
+  return {
+    email: state(email, emailStatus),
+    whatsapp: state(whatsapp, whatsappStatus),
+    calendar: state(calendar, calendarStatus),
+  };
+}
+
+const STATE_STYLE: Record<ConnectionState, { dot: string; label: string; pill: string }> = {
+  connected: { dot: "bg-success", label: "Connected", pill: "bg-success/10 text-success" },
+  not_connected: {
+    dot: "bg-muted-foreground/40",
+    label: "Not connected",
+    pill: "bg-muted text-muted-foreground",
+  },
+  pending: {
+    dot: "bg-warning",
+    label: "Connecting",
+    pill: "bg-warning/15 text-warning-foreground",
+  },
+  error: { dot: "bg-destructive", label: "Error", pill: "bg-destructive/10 text-destructive" },
+};
+
+function StatusDot({ state }: { state: ConnectionState | undefined }) {
+  if (!state) return null;
+  return (
+    <span
+      className={cn("size-2 shrink-0 rounded-full", STATE_STYLE[state].dot)}
+      title={STATE_STYLE[state].label}
+      aria-label={STATE_STYLE[state].label}
+    />
+  );
+}
+
+/** "● Connected · Sending as … [action]" at the top of a connection card. */
+function ConnectionBar({ status, children }: { status: ConnectionSummary; children?: ReactNode }) {
+  const style = STATE_STYLE[status.state];
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3 py-2">
+      <span
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium",
+          style.pill,
+        )}
+      >
+        <span className={cn("size-1.5 rounded-full", style.dot)} />
+        {style.label}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{status.text}</span>
+      {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+    </div>
+  );
+}
+
+function ProfilePanel() {
+  const { currentUser } = useSession();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <UserRound /> Profile
+        </CardTitle>
+        <CardDescription>
+          Your name, email and password belong to your RevenueOS account and are changed on the
+          platform, not here.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {currentUser ? (
+          <div className="flex items-center gap-4">
+            <Avatar name={currentUser.name} className="size-12 text-base" />
+            <div className="min-w-0 space-y-0.5">
+              <div className="truncate font-medium">{currentUser.name}</div>
+              <div className="truncate text-sm text-muted-foreground">{currentUser.email}</div>
+              <div className="text-xs text-muted-foreground">CRM role: {currentUser.role}</div>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Loading your profile…</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -129,6 +305,24 @@ function EmailPanel({ workspaceId }: { workspaceId: string }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
+        <ConnectionBar status={emailStatus(form)}>
+          <Input
+            type="email"
+            value={testTo}
+            placeholder="Test recipient"
+            aria-label="Test recipient"
+            className="h-8 w-52"
+            onChange={(e) => setTestTo(e.target.value)}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!testTo || test.isPending}
+            onClick={() => test.mutate()}
+          >
+            Send test
+          </Button>
+        </ConnectionBar>
         {form.source === "environment" && (
           <Notice>
             Using the read-only Resend environment fallback until database settings are saved.
@@ -211,21 +405,6 @@ function EmailPanel({ workspaceId }: { workspaceId: string }) {
             Save email settings
           </Button>
         </div>
-        <div className="flex gap-2">
-          <Input
-            type="email"
-            value={testTo}
-            placeholder="Test recipient"
-            onChange={(e) => setTestTo(e.target.value)}
-          />
-          <Button
-            variant="outline"
-            disabled={!testTo || test.isPending}
-            onClick={() => test.mutate()}
-          >
-            Send test
-          </Button>
-        </div>
       </CardContent>
     </Card>
   );
@@ -303,16 +482,30 @@ function WhatsAppPanel({ workspaceId }: { workspaceId: string }) {
           )
         ) : (
           <>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Metric label="Status" value={data.status.replaceAll("_", " ")} />
-              <Metric
-                label="Connected account"
-                value={data.displayName || data.connectedPhone || "Not paired"}
-              />
+            <ConnectionBar status={whatsappStatus(data)}>
+              <Button
+                size="sm"
+                onClick={() => command.mutate("connect")}
+                disabled={command.isPending}
+              >
+                Connect / get QR
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => command.mutate("restart")}
+                disabled={command.isPending}
+              >
+                <RefreshCw /> Restart
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => setLogoutOpen(true)}>
+                Log out session
+              </Button>
+            </ConnectionBar>
+            <div className="grid gap-3 sm:grid-cols-2">
               <Metric label="Sent today" value={`${data.todayCount} / ${data.dailyCap}`} />
               <Metric label="Pending" value={String(data.pendingCount)} />
             </div>
-            {data.lastError && <Notice danger>{data.lastError}</Notice>}
             {data.outboundRestricted && (
               <Notice danger>
                 WhatsApp has reported account reachout or new-chat restrictions. New sends are
@@ -351,23 +544,6 @@ function WhatsAppPanel({ workspaceId }: { workspaceId: string }) {
             <div className="flex flex-wrap gap-2 border-t pt-4">
               <Button onClick={() => save.mutate()} disabled={save.isPending}>
                 Save controls
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => command.mutate("connect")}
-                disabled={command.isPending}
-              >
-                Connect / get QR
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => command.mutate("restart")}
-                disabled={command.isPending}
-              >
-                <RefreshCw /> Restart
-              </Button>
-              <Button variant="destructive" className="ml-auto" onClick={() => setLogoutOpen(true)}>
-                Log out session
               </Button>
             </div>
             <div className="text-xs text-muted-foreground">
@@ -559,6 +735,25 @@ function GoogleCalendarPanel({ workspaceId }: { workspaceId: string }) {
           )
         ) : (
           <>
+            <ConnectionBar status={calendarStatus(data)}>
+              <Button
+                size="sm"
+                variant={data.status === "connected" ? "outline" : "default"}
+                onClick={() => start.mutate()}
+                disabled={!data.configured || start.isPending}
+              >
+                {data.status === "connected"
+                  ? "Reconnect"
+                  : data.status === "error"
+                    ? "Reconnect Google Calendar"
+                    : "Connect Google Calendar"}
+              </Button>
+              {data.status === "connected" && (
+                <Button size="sm" variant="destructive" onClick={() => setDisconnectOpen(true)}>
+                  Disconnect
+                </Button>
+              )}
+            </ConnectionBar>
             {data.platformConfigured ? (
               <details
                 className="rounded-md border px-3 py-2 text-sm"
@@ -585,30 +780,6 @@ function GoogleCalendarPanel({ workspaceId }: { workspaceId: string }) {
                 {credentialsForm}
               </>
             )}
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Metric label="Status" value={data.status.replaceAll("_", " ")} />
-              <Metric label="Connected account" value={data.connectedEmail || "Not connected"} />
-            </div>
-            {data.lastError && <Notice danger>{data.lastError}</Notice>}
-            <div className="flex flex-wrap gap-2 border-t pt-4">
-              <Button onClick={() => start.mutate()} disabled={!data.configured || start.isPending}>
-                {data.status === "connected"
-                  ? "Reconnect"
-                  : data.status === "error"
-                    ? "Reconnect Google Calendar"
-                    : "Connect Google Calendar"}
-              </Button>
-              {data.status === "connected" && (
-                <Button
-                  variant="destructive"
-                  className="ml-auto"
-                  onClick={() => setDisconnectOpen(true)}
-                >
-                  Disconnect
-                </Button>
-              )}
-            </div>
           </>
         )}
       </CardContent>

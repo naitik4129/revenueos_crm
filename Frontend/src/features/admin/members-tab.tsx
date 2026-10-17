@@ -1,11 +1,15 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Users } from "lucide-react";
 import { toast } from "sonner";
 import { backend, type AdminUser } from "@/lib/backend-client";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ListEmptyState, RecordTable } from "@/components/common/list-controls";
+import { Avatar } from "@/components/common/record-parts";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
+import { StatusBadge } from "@/components/common/status-badge";
 import { keys } from "@/store/query";
 import { useWorkspace } from "@/store/workspace-context";
 import { adminKeys, errorText } from "./admin-keys";
@@ -26,34 +30,55 @@ export function MembersTab() {
     enabled: Boolean(workspaceId),
   });
   const salespeople = (users.data?.data ?? []).filter((user) => user.role === "salesperson");
+  const picker = (
+    <WorkspacePicker workspaces={workspaces} value={workspaceId} onChange={setPicked} />
+  );
 
   return (
-    <div className="space-y-4">
-      <WorkspacePicker workspaces={workspaces} value={workspaceId} onChange={setPicked} />
+    <Card className="overflow-hidden p-0">
       {!workspaceId ? (
-        <p className="text-sm text-muted-foreground">Create a workspace first.</p>
+        <ListEmptyState
+          icon={Users}
+          title="No workspaces yet"
+          text="Create a workspace on the Workspaces tab first."
+        />
       ) : users.isLoading || members.isLoading ? (
-        <LoadingBlock label="Loading members…" />
+        <>
+          <Toolbar>{picker}</Toolbar>
+          <LoadingBlock label="Loading members…" />
+        </>
       ) : users.error || members.error ? (
-        <ErrorBlock error={users.error ?? members.error} />
+        <>
+          <Toolbar>{picker}</Toolbar>
+          <ErrorBlock error={users.error ?? members.error} />
+        </>
       ) : (
         <MemberChecklist
           // Starts again from the saved list whenever it changes.
           key={`${workspaceId}:${members.dataUpdatedAt}`}
+          picker={picker}
           workspaceId={workspaceId}
           salespeople={salespeople}
           memberIds={(members.data?.data ?? []).map((member) => member.id)}
         />
       )}
-    </div>
+    </Card>
+  );
+}
+
+function Toolbar({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-14 flex-wrap items-center gap-2 border-b px-3 py-2">{children}</div>
   );
 }
 
 function MemberChecklist({
+  picker,
   workspaceId,
   salespeople,
   memberIds,
 }: {
+  picker: React.ReactNode;
   workspaceId: string;
   salespeople: AdminUser[];
   memberIds: string[];
@@ -80,26 +105,53 @@ function MemberChecklist({
     });
 
   return (
-    <Card>
-      <CardContent className="space-y-3 p-4">
-        {salespeople.length === 0 && (
-          <p className="text-sm text-muted-foreground">No salespeople yet. Add them on Users.</p>
-        )}
-        {salespeople.map((user) => (
-          <label key={user.id} className="flex items-center gap-2 text-sm">
-            <Checkbox
-              checked={selected.has(user.id)}
-              onCheckedChange={(on) => toggle(user.id, on === true)}
-            />
-            <span>{user.name || user.email}</span>
-            <span className="text-xs text-muted-foreground">{user.email}</span>
-            {!user.active && <span className="text-xs text-muted-foreground">(inactive)</span>}
-          </label>
-        ))}
-        <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+    <>
+      <Toolbar>
+        {picker}
+        <span className="text-xs text-muted-foreground">
+          {selected.size} of {salespeople.length} salespeople are members
+          {dirty && " · unsaved changes"}
+        </span>
+        <Button
+          size="sm"
+          className="ml-auto"
+          disabled={!dirty || save.isPending}
+          onClick={() => save.mutate()}
+        >
           {save.isPending ? "Saving…" : "Save members"}
         </Button>
-      </CardContent>
-    </Card>
+      </Toolbar>
+      {salespeople.length === 0 ? (
+        <ListEmptyState
+          icon={Users}
+          title="No salespeople yet"
+          text="Add them on the Users tab, then tick who works on this workspace."
+        />
+      ) : (
+        <RecordTable
+          rows={salespeople}
+          nameHeader="Member"
+          rowLabel={(u) => u.name || u.email}
+          columns={[
+            { id: "email", label: "Email", cell: (u) => u.email },
+            {
+              id: "status",
+              label: "Status",
+              cell: (u) => (u.active ? undefined : <StatusBadge value="inactive" tone="muted" />),
+            },
+          ]}
+          name={(u) => (
+            <label className="flex cursor-pointer items-center gap-2.5">
+              <Checkbox
+                checked={selected.has(u.id)}
+                onCheckedChange={(on) => toggle(u.id, on === true)}
+              />
+              <Avatar name={u.name || u.email} />
+              <span className="font-medium">{u.name || u.email}</span>
+            </label>
+          )}
+        />
+      )}
+    </>
   );
 }

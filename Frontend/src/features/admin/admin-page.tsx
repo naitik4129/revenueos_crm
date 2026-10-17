@@ -21,7 +21,7 @@ export function AdminPage() {
           </TabsList>
         }
       />
-      <div className="p-6">
+      <div className="px-6 py-4">
         <TabsContent value="users">
           <UsersTab />
         </TabsContent>

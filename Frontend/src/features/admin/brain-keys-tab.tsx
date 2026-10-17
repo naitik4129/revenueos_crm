@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy } from "lucide-react";
+import { Copy, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { backend, type BrainKey } from "@/lib/backend-client";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import { ListEmptyState, RecordTable } from "@/components/common/list-controls";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { StatusBadge } from "@/components/common/status-badge";
 import { fmtDate, relDay } from "@/lib/format";
@@ -63,83 +64,82 @@ export function BrainKeysTab() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-end gap-3">
-        <WorkspacePicker workspaces={workspaces} value={workspaceId} onChange={setPicked} />
-        {workspaceId && (
-          <form className="flex gap-2" onSubmit={submit}>
-            <Input
-              required
-              className="w-56"
-              placeholder="Label, e.g. RevenueOS brain"
-              aria-label="Key label"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-            />
-            <Button disabled={create.isPending}>
-              {create.isPending ? "Creating…" : "Create key"}
-            </Button>
-          </form>
-        )}
-      </div>
+    <div>
+      <Card className="overflow-hidden p-0">
+        <div className="flex min-h-14 flex-wrap items-center gap-3 border-b px-3 py-2">
+          <WorkspacePicker workspaces={workspaces} value={workspaceId} onChange={setPicked} />
+          {workspaceId && (
+            <form className="ml-auto flex gap-2" onSubmit={submit}>
+              <Input
+                required
+                className="w-56"
+                placeholder="Label, e.g. RevenueOS brain"
+                aria-label="Key label"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+              />
+              <Button disabled={create.isPending}>
+                {create.isPending ? "Creating…" : "Create key"}
+              </Button>
+            </form>
+          )}
+        </div>
 
-      {!workspaceId ? (
-        <p className="text-sm text-muted-foreground">Create a workspace first.</p>
-      ) : list.isLoading ? (
-        <LoadingBlock label="Loading keys…" />
-      ) : list.error ? (
-        <ErrorBlock error={list.error} />
-      ) : (
-        <Card className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
-                <tr>
-                  {["Label", "Key", "Created", "Last used", "Status", ""].map((heading) => (
-                    <th key={heading} className="px-3 py-2 font-medium">
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {(list.data?.data ?? []).map((key) => (
-                  <tr key={key.id} className="border-t">
-                    <td className="px-3 py-2">{key.label}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{key.prefix}…</td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">
-                      {fmtDate(key.createdAt)}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">
-                      {key.lastUsedAt ? relDay(key.lastUsedAt) : "Never"}
-                    </td>
-                    <td className="px-3 py-2">
-                      <StatusBadge
-                        value={key.revokedAt ? "revoked" : "active"}
-                        tone={key.revokedAt ? "muted" : "success"}
-                      />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {!key.revokedAt && (
-                        <Button size="sm" variant="ghost" onClick={() => setRevoking(key)}>
-                          Revoke
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {list.data?.data.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-3 py-8 text-center text-muted-foreground">
-                      No keys for this workspace.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
+        {!workspaceId ? (
+          <ListEmptyState
+            icon={KeyRound}
+            title="No workspaces yet"
+            text="Create a workspace on the Workspaces tab first."
+          />
+        ) : list.isLoading ? (
+          <LoadingBlock label="Loading keys…" />
+        ) : list.error ? (
+          <ErrorBlock error={list.error} />
+        ) : (list.data?.data ?? []).length === 0 ? (
+          <ListEmptyState
+            icon={KeyRound}
+            title="No keys for this workspace."
+            text="The brain pushes companies, contacts, calls and handovers with a key. Create one above; its full value is shown once."
+          />
+        ) : (
+          <RecordTable
+            rows={list.data?.data ?? []}
+            nameHeader="Label"
+            rowLabel={(key) => key.label}
+            name={(key) => <span className="font-medium">{key.label}</span>}
+            columns={[
+              {
+                id: "key",
+                label: "Key",
+                cell: (key) => <span className="font-mono">{`${key.prefix}…`}</span>,
+              },
+              { id: "created", label: "Created", cell: (key) => fmtDate(key.createdAt) },
+              {
+                id: "used",
+                label: "Last used",
+                cell: (key) => (key.lastUsedAt ? relDay(key.lastUsedAt) : "Never"),
+              },
+              {
+                id: "status",
+                label: "Status",
+                cell: (key) => (
+                  <StatusBadge
+                    value={key.revokedAt ? "revoked" : "active"}
+                    tone={key.revokedAt ? "muted" : "success"}
+                  />
+                ),
+              },
+            ]}
+            actions={(key) =>
+              !key.revokedAt && (
+                <Button size="sm" variant="ghost" onClick={() => setRevoking(key)}>
+                  Revoke
+                </Button>
+              )
+            }
+          />
+        )}
+      </Card>
 
       <Dialog open={newKey !== null} onOpenChange={(open) => !open && setNewKey(null)}>
         <DialogContent className="sm:max-w-lg">

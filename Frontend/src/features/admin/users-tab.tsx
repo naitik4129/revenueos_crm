@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Users } from "lucide-react";
 import { toast } from "sonner";
 import { backend, type AdminUser, type CrmRole } from "@/lib/backend-client";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -13,6 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ListEmptyState, RecordTable, type ListColumn } from "@/components/common/list-controls";
+import { Avatar } from "@/components/common/record-parts";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { fmtDate } from "@/lib/format";
 import { useSession } from "@/store";
@@ -23,6 +26,7 @@ const ROLE_LABEL: Record<CrmRole, string> = { admin: "Admin", salesperson: "Sale
 
 export function UsersTab() {
   const client = useQueryClient();
+  const { currentUser } = useSession();
   const users = useQuery({
     queryKey: adminKeys.users,
     queryFn: ({ signal }) => backend.admin.users.list(signal),
@@ -34,6 +38,7 @@ export function UsersTab() {
     ]);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<CrmRole>("salesperson");
+  const [q, setQ] = useState("");
   const create = useMutation({
     mutationFn: backend.admin.users.create,
     onSuccess: (user) => {
@@ -43,108 +48,121 @@ export function UsersTab() {
     },
     onError: (error) => toast.error(errorText(error)),
   });
+  const update = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: { role?: CrmRole; active?: boolean } }) =>
+      backend.admin.users.update(id, input),
+    onSuccess: () => {
+      void refresh();
+      toast.success("User updated.");
+    },
+    onError: (error) => toast.error(errorText(error)),
+  });
   const submit = (event: FormEvent) => {
     event.preventDefault();
     create.mutate({ email: email.trim(), role });
   };
 
+  // Admins cannot demote or deactivate themselves (the backend refuses it too).
+  const locked = (user: AdminUser) =>
+    currentUser?.id === user.id || (update.isPending && update.variables?.id === user.id);
+  const query = q.trim().toLowerCase();
+  const rows = (users.data?.data ?? []).filter(
+    (u) => !query || `${u.name} ${u.email}`.toLowerCase().includes(query),
+  );
+  const columns: ListColumn<AdminUser>[] = [
+    { id: "email", label: "Email", cell: (u) => u.email },
+    {
+      id: "role",
+      label: "Role",
+      cell: (u) => (
+        <RoleSelect
+          value={u.role}
+          disabled={locked(u)}
+          onChange={(next) => update.mutate({ id: u.id, input: { role: next } })}
+        />
+      ),
+    },
+    {
+      id: "active",
+      label: "Active",
+      cell: (u) => (
+        <Switch
+          checked={u.active}
+          disabled={locked(u)}
+          aria-label={`Active: ${u.name || u.email}`}
+          onCheckedChange={(active) => update.mutate({ id: u.id, input: { active } })}
+        />
+      ),
+    },
+    { id: "added", label: "Added", cell: (u) => fmtDate(u.createdAt) },
+  ];
+
   return (
-    <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
-      <Card className="h-fit">
-        <CardHeader>
-          <CardTitle className="text-base">Add a user</CardTitle>
-          <CardDescription>
-            For people who already have a RevenueOS account. New accounts are created on the
-            platform, not here.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="space-y-4" onSubmit={submit}>
-            <Field label="Email">
-              <Input
-                required
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </Field>
-            <Field label="Role">
-              <RoleSelect value={role} onChange={setRole} />
-            </Field>
-            <Button className="w-full" disabled={create.isPending}>
-              {create.isPending ? "Adding…" : "Give CRM access"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+    <Card className="overflow-hidden p-0">
+      <form
+        className="flex flex-wrap items-end gap-3 border-b bg-muted/30 px-3 py-3"
+        onSubmit={submit}
+      >
+        <div className="w-64">
+          <Field label="Email">
+            <Input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+        </div>
+        <Field label="New user's role">
+          <RoleSelect value={role} onChange={setRole} />
+        </Field>
+        <Button disabled={create.isPending}>
+          {create.isPending ? "Adding…" : "Give CRM access"}
+        </Button>
+        <p className="basis-full text-xs text-muted-foreground">
+          For people who already have a RevenueOS account. New accounts are created on the platform,
+          not here.
+        </p>
+      </form>
+      <div className="flex min-h-14 flex-wrap items-center gap-2 border-b px-3 py-2">
+        <Input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search name or email"
+          aria-label="Search users"
+          className="w-64"
+        />
+        {users.data && (
+          <span className="ml-auto text-xs text-muted-foreground">
+            {users.data.data.length} user{users.data.data.length === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
 
       {users.isLoading ? (
         <LoadingBlock label="Loading users…" />
       ) : users.error ? (
         <ErrorBlock error={users.error} />
+      ) : rows.length === 0 ? (
+        <ListEmptyState
+          icon={Users}
+          title={query ? "No users match." : "No CRM users yet"}
+          text="Give an existing RevenueOS account CRM access with the form above."
+        />
       ) : (
-        <Card className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
-                <tr>
-                  {["Name", "Email", "Role", "Active", "Added"].map((heading) => (
-                    <th key={heading} className="px-3 py-2 font-medium">
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {(users.data?.data ?? []).map((user) => (
-                  <UserRow key={user.id} user={user} onSaved={refresh} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+        <RecordTable
+          rows={rows}
+          columns={columns}
+          rowLabel={(u) => u.name || u.email}
+          name={(u) => (
+            <div className="flex items-center gap-2.5">
+              <Avatar name={u.name || u.email} />
+              <span className="font-medium">
+                {u.name || u.email}
+                {currentUser?.id === u.id && (
+                  <span className="ml-1 text-xs font-normal text-muted-foreground">(you)</span>
+                )}
+              </span>
+            </div>
+          )}
+        />
       )}
-    </div>
-  );
-}
-
-function UserRow({ user, onSaved }: { user: AdminUser; onSaved: () => Promise<unknown> }) {
-  const { currentUser } = useSession();
-  // Admins cannot demote or deactivate themselves (the backend refuses it too).
-  const isSelf = currentUser?.id === user.id;
-  const update = useMutation({
-    mutationFn: (input: { role?: CrmRole; active?: boolean }) =>
-      backend.admin.users.update(user.id, input),
-    onSuccess: () => {
-      void onSaved();
-      toast.success("User updated.");
-    },
-    onError: (error) => toast.error(errorText(error)),
-  });
-  return (
-    <tr className="border-t">
-      <td className="px-3 py-2">
-        {user.name || user.email}
-        {isSelf && <span className="ml-1 text-xs text-muted-foreground">(you)</span>}
-      </td>
-      <td className="px-3 py-2 text-xs text-muted-foreground">{user.email}</td>
-      <td className="px-3 py-2">
-        <RoleSelect
-          value={user.role}
-          disabled={isSelf || update.isPending}
-          onChange={(role) => update.mutate({ role })}
-        />
-      </td>
-      <td className="px-3 py-2">
-        <Switch
-          checked={user.active}
-          disabled={isSelf || update.isPending}
-          aria-label={`Active: ${user.name || user.email}`}
-          onCheckedChange={(active) => update.mutate({ active })}
-        />
-      </td>
-      <td className="px-3 py-2 text-xs text-muted-foreground">{fmtDate(user.createdAt)}</td>
-    </tr>
+    </Card>
   );
 }
 

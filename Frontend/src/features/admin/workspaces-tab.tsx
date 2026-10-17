@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { backend, type UpdateWorkspaceInput, type Workspace } from "@/lib/backend-client";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Building } from "lucide-react";
+import { Card } from "@/components/ui/card";
+import { ListEmptyState } from "@/components/common/list-controls";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { keys } from "@/store/query";
@@ -33,36 +35,46 @@ export function WorkspacesTab() {
   };
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
-      <Card className="h-fit">
-        <CardHeader>
-          <CardTitle className="text-base">Create workspace</CardTitle>
-          <CardDescription>One workspace per client project.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="space-y-4" onSubmit={submit}>
-            <Field label="Name">
-              <Input required value={name} onChange={(e) => setName(e.target.value)} />
-            </Field>
-            <Field label="Platform project id (optional)">
-              <Input value={projectId} onChange={(e) => setProjectId(e.target.value)} />
-            </Field>
-            <Button className="w-full" disabled={create.isPending}>
-              {create.isPending ? "Creating…" : "Create workspace"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-      <div className="space-y-3">
-        {workspaces.length === 0 && (
-          <p className="text-sm text-muted-foreground">No workspaces yet.</p>
-        )}
-        {workspaces.map((workspace) => (
-          // Re-mounts after a save, so the fields show the saved values.
-          <WorkspaceEditor key={`${workspace.id}:${workspace.updatedAt}`} workspace={workspace} />
-        ))}
+    <Card className="overflow-hidden p-0">
+      <form
+        className="flex flex-wrap items-end gap-3 border-b bg-muted/30 px-3 py-3"
+        onSubmit={submit}
+      >
+        <div className="w-56">
+          <Field label="Name">
+            <Input required value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+        </div>
+        <div className="w-72">
+          <Field label="Platform project id (optional)">
+            <Input value={projectId} onChange={(e) => setProjectId(e.target.value)} />
+          </Field>
+        </div>
+        <Button disabled={create.isPending}>
+          {create.isPending ? "Creating…" : "Create workspace"}
+        </Button>
+        <p className="basis-full text-xs text-muted-foreground">
+          One workspace per client project.
+        </p>
+      </form>
+      <div className="flex min-h-11 items-center border-b px-3 py-2 text-xs text-muted-foreground">
+        {workspaces.length} workspace{workspaces.length === 1 ? "" : "s"}
       </div>
-    </div>
+      {workspaces.length === 0 ? (
+        <ListEmptyState
+          icon={Building}
+          title="No workspaces yet"
+          text="Create one per client project with the form above."
+        />
+      ) : (
+        <div className="divide-y">
+          {workspaces.map((workspace) => (
+            // Re-mounts after a save, so the fields show the saved values.
+            <WorkspaceEditor key={`${workspace.id}:${workspace.updatedAt}`} workspace={workspace} />
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -86,47 +98,45 @@ function WorkspaceEditor({ workspace }: { workspace: Workspace }) {
     name.trim() !== workspace.name || projectId.trim() !== (workspace.platformProjectId ?? "");
 
   return (
-    <Card>
-      <CardContent className="grid gap-3 p-4 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
-        <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <Field label="Platform project id">
-          <Input
-            value={projectId}
-            placeholder="Not linked"
-            onChange={(e) => setProjectId(e.target.value)}
+    <div className="grid gap-3 px-3 py-3 hover:bg-accent/30 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
+      <Field label="Name">
+        <Input value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <Field label="Platform project id">
+        <Input
+          value={projectId}
+          placeholder="Not linked"
+          onChange={(e) => setProjectId(e.target.value)}
+        />
+      </Field>
+      <Field label="Default owner">
+        <DefaultOwnerSelect
+          value={workspace.defaultOwnerId}
+          members={members.data?.data ?? []}
+          disabled={update.isPending || members.isLoading}
+          onChange={(defaultOwnerId) => update.mutate({ defaultOwnerId })}
+        />
+      </Field>
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Switch
+            checked={workspace.isActive}
+            disabled={update.isPending}
+            aria-label={`Active: ${workspace.name}`}
+            onCheckedChange={(isActive) => update.mutate({ isActive })}
           />
-        </Field>
-        <Field label="Default owner">
-          <DefaultOwnerSelect
-            value={workspace.defaultOwnerId}
-            members={members.data?.data ?? []}
-            disabled={update.isPending || members.isLoading}
-            onChange={(defaultOwnerId) => update.mutate({ defaultOwnerId })}
-          />
-        </Field>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Switch
-              checked={workspace.isActive}
-              disabled={update.isPending}
-              aria-label={`Active: ${workspace.name}`}
-              onCheckedChange={(isActive) => update.mutate({ isActive })}
-            />
-            Active
-          </label>
-          <Button
-            size="sm"
-            disabled={!dirty || !name.trim() || update.isPending}
-            onClick={() =>
-              update.mutate({ name: name.trim(), platformProjectId: projectId.trim() || null })
-            }
-          >
-            Save
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+          Active
+        </label>
+        <Button
+          size="sm"
+          disabled={!dirty || !name.trim() || update.isPending}
+          onClick={() =>
+            update.mutate({ name: name.trim(), platformProjectId: projectId.trim() || null })
+          }
+        >
+          Save
+        </Button>
+      </div>
+    </div>
   );
 }
