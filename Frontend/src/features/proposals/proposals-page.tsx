@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { Send } from "lucide-react";
+import { FileText } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,11 +11,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Pager } from "@/components/common/list-controls";
+import {
+  ColumnChooser,
+  FilterSelect,
+  ListEmptyState,
+  Pager,
+  RecordTable,
+  ViewTabs,
+  type ListColumn,
+} from "@/components/common/list-controls";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { money, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
+import { useStoredColumns } from "@/lib/use-stored-columns";
 import { messageFromError, useProposalSummary, useProposals, useSession } from "@/store";
 import { PROPOSAL_STATUSES, type Proposal, type ProposalStatus } from "@/types";
 import { DealLink } from "@/features/deals/deal-link";
@@ -26,42 +35,139 @@ import {
 } from "./components/proposal-dialogs";
 
 const PAGE_SIZE = 50;
+const ALL = "all";
+
+// The server filters on one status; tabs cover the common ones, the Status filter all of them.
+const VIEWS = [
+  { id: ALL, label: "All" },
+  ...(["ready_to_send", "sent", "revision_requested", "accepted", "rejected"] as const).map(
+    (s) => ({ id: s, label: label(s) }),
+  ),
+];
 
 export function ProposalsPage() {
+  const [status, setStatus] = useState(ALL);
+  const [owner, setOwner] = useState(ALL);
   const [offset, setOffset] = useState(0);
-  const store = useProposals({ limit: PAGE_SIZE, offset });
+  const store = useProposals({
+    status: status === ALL ? undefined : status,
+    ownerId: owner === ALL ? undefined : owner,
+    limit: PAGE_SIZE,
+    offset,
+  });
   // The stat cards cover the whole workspace, not just this page.
   const summary = useProposalSummary().data;
-  const { userName } = useSession();
+  const { users, userName } = useSession();
   const [newOpen, setNewOpen] = useState(false);
   const [sending, setSending] = useState<Proposal | null>(null);
   // Rejected / expired need a loss reason first.
   const [losing, setLosing] = useState<{ proposal: Proposal; status: ProposalStatus } | null>(null);
-  const setStatus = async (id: string, status: ProposalStatus) => {
-    if (status === "rejected" || status === "expired") {
+  const [visible, setVisible] = useStoredColumns("proposals.columns", DEFAULT_COLUMNS);
+  const filter = (next: { status?: string; owner?: string }) => {
+    if (next.status !== undefined) setStatus(next.status);
+    if (next.owner !== undefined) setOwner(next.owner);
+    setOffset(0);
+  };
+
+  const decide = async (id: string, next: ProposalStatus) => {
+    if (next === "rejected" || next === "expired") {
       const proposal = store.proposals.find((p) => p.id === id);
-      if (proposal) setLosing({ proposal, status });
+      if (proposal) setLosing({ proposal, status: next });
       return;
     }
     try {
-      await store.setProposalStatus(id, status);
-      toast.success(`Proposal marked ${label(status)}`);
+      await store.setProposalStatus(id, next);
+      toast.success(`Proposal marked ${label(next)}`);
     } catch (error) {
       toast.error(messageFromError(error));
     }
   };
+
+  const columns: ListColumn<Proposal>[] = [
+    {
+      id: "deal",
+      label: "Deal",
+      cell: (p) => (
+        <DealLink dealId={p.dealId} contactName={p.contactName} companyName={p.companyName} />
+      ),
+    },
+    { id: "owner", label: "Owner", cell: (p) => p.ownerName ?? userName(p.ownerId) },
+    {
+      id: "amount",
+      label: "Amount",
+      cell: (p) => (p.amount ? <span className="num">{money(p.amount)}</span> : undefined),
+    },
+    { id: "status", label: "Status", cell: (p) => <StatusBadge value={p.status} /> },
+    {
+      id: "channels",
+      label: "Channels",
+      cell: (p) =>
+        p.emailSendStatus === "not_applicable" &&
+        p.whatsappSendStatus === "not_applicable" ? undefined : (
+          <div className="flex flex-col gap-1">
+            {p.emailSendStatus !== "not_applicable" && (
+              <span className="flex items-center gap-1.5">
+                <span className="text-muted-foreground">Email</span>
+                <StatusBadge value={p.emailSendStatus} tone={channelTone(p.emailSendStatus)} />
+              </span>
+            )}
+            {p.whatsappSendStatus !== "not_applicable" && (
+              <span className="flex items-center gap-1.5">
+                <span className="text-muted-foreground">WhatsApp</span>
+                <StatusBadge
+                  value={p.whatsappSendStatus}
+                  tone={channelTone(p.whatsappSendStatus)}
+                />
+              </span>
+            )}
+          </div>
+        ),
+    },
+    { id: "sent", label: "Sent", cell: (p) => p.sentDate && relDay(p.sentDate) },
+    { id: "followUp", label: "Follow-up", cell: (p) => p.followUpDate && relDay(p.followUpDate) },
+    {
+      id: "decision",
+      label: "Decision",
+      cell: (p) => (
+        <Select
+          value={p.status}
+          disabled={store.isPending}
+          onValueChange={(value) => void decide(p.id, value as ProposalStatus)}
+        >
+          <SelectTrigger className="h-7 w-40 text-xs" aria-label={`Decision for ${p.title}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PROPOSAL_STATUSES.map((s) => (
+              <SelectItem key={s} value={s}>
+                {label(s)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ),
+    },
+  ];
+
   return (
     <div className="pb-10">
       <PageHeader
         title="Proposals"
-        description="Every proposal in this workspace. Create one, upload its document, then send it by email and/or WhatsApp."
+        description="Create a proposal, upload its document, then send it by email and/or WhatsApp."
         actions={
           <Button size="sm" onClick={() => setNewOpen(true)}>
-            <Send className="mr-1 size-4" /> New proposal
+            Create proposal
           </Button>
         }
+        tabs={
+          <ViewTabs
+            views={VIEWS}
+            active={VIEWS.some((v) => v.id === status) ? status : null}
+            onSelect={(id) => filter({ status: id })}
+          />
+        }
       />
-      <div className="space-y-4 p-6">
+      <div className="space-y-4 px-6 py-4">
         <div className="grid gap-3 sm:grid-cols-3">
           <Stat label="Open proposals" value={summary ? String(summary.open) : "…"} />
           <Stat
@@ -70,135 +176,83 @@ export function ProposalsPage() {
           />
           <Stat label="Value in play" value={summary ? money(summary.valueInPlay) : "…"} />
         </div>
-        {store.isLoading ? (
-          <LoadingBlock label="Loading proposals…" />
-        ) : store.error ? (
-          <ErrorBlock error={store.error} />
-        ) : (
-          <Card className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[960px] text-sm">
-                <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
-                  <tr>
-                    {[
-                      "Proposal",
-                      "Deal",
-                      "Owner",
-                      "Amount",
-                      "Status",
-                      "Channels",
-                      "Sent",
-                      "Follow-up",
-                      "Decision",
-                    ].map((heading) => (
-                      <th key={heading} className="px-3 py-2 font-medium">
-                        {heading}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {store.proposals.map((proposal) => {
-                    return (
-                      <tr key={proposal.id} className="border-t hover:bg-accent/40">
-                        <td className="px-3 py-2">
-                          <div className="font-medium">{proposal.title}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {proposal.fileName || "No document"}
-                          </div>
-                          {proposal.fileName && (
-                            <button
-                              type="button"
-                              className="text-xs text-primary hover:underline"
-                              onClick={() => setSending(proposal)}
-                            >
-                              Send
-                            </button>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          <DealLink
-                            dealId={proposal.dealId}
-                            contactName={proposal.contactName}
-                            companyName={proposal.companyName}
-                          />
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          {proposal.ownerName ?? userName(proposal.ownerId)}
-                        </td>
-                        <td className="num px-3 py-2">
-                          {proposal.amount ? money(proposal.amount) : "-"}
-                        </td>
-                        <td className="px-3 py-2">
-                          <StatusBadge value={proposal.status} />
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="flex flex-col gap-1 text-xs">
-                            {proposal.emailSendStatus !== "not_applicable" && (
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-muted-foreground">Email</span>
-                                <StatusBadge
-                                  value={proposal.emailSendStatus}
-                                  tone={channelTone(proposal.emailSendStatus)}
-                                />
-                              </div>
-                            )}
-                            {proposal.whatsappSendStatus !== "not_applicable" && (
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-muted-foreground">WhatsApp</span>
-                                <StatusBadge
-                                  value={proposal.whatsappSendStatus}
-                                  tone={channelTone(proposal.whatsappSendStatus)}
-                                />
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {proposal.sentDate ? relDay(proposal.sentDate) : "-"}
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {proposal.followUpDate ? relDay(proposal.followUpDate) : "-"}
-                        </td>
-                        <td className="px-3 py-2">
-                          <Select
-                            value={proposal.status}
-                            disabled={store.isPending}
-                            onValueChange={(value) =>
-                              void setStatus(proposal.id, value as ProposalStatus)
-                            }
-                          >
-                            <SelectTrigger className="h-8 w-44">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {PROPOSAL_STATUSES.map((status) => (
-                                <SelectItem key={status} value={status}>
-                                  {label(status)}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {store.proposals.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={9}
-                        className="px-3 py-10 text-center text-sm text-muted-foreground"
-                      >
-                        No proposals.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+
+        <Card className="overflow-hidden p-0">
+          <div className="flex min-h-14 flex-wrap items-center gap-2 border-b px-3 py-2">
+            <FilterSelect
+              label="Status"
+              value={status}
+              onChange={(v) => filter({ status: v })}
+              options={[
+                [ALL, "All statuses"],
+                ...PROPOSAL_STATUSES.map((s) => [s, label(s)] as const),
+              ]}
+            />
+            <FilterSelect
+              label="Owner"
+              value={owner}
+              onChange={(v) => filter({ owner: v })}
+              options={[[ALL, "All owners"], ...users.map((u) => [u.id, u.name] as const)]}
+            />
+            <div className="ml-auto">
+              <ColumnChooser columns={columns} visible={visible} onChange={setVisible} />
             </div>
-          </Card>
-        )}
-        <Pager offset={offset} pageSize={PAGE_SIZE} total={store.total} onOffset={setOffset} />
+          </div>
+
+          {store.isLoading ? (
+            <LoadingBlock label="Loading proposals…" />
+          ) : store.error ? (
+            <ErrorBlock error={store.error} />
+          ) : store.proposals.length === 0 ? (
+            <ListEmptyState
+              icon={FileText}
+              title={status === ALL && owner === ALL ? "No proposals yet" : "No proposals here."}
+              text="A proposal belongs to a deal. Create one here or from the deal page."
+            >
+              <Button size="sm" onClick={() => setNewOpen(true)}>
+                Create proposal
+              </Button>
+            </ListEmptyState>
+          ) : (
+            <RecordTable
+              rows={store.proposals}
+              columns={columns.filter((c) => visible.includes(c.id))}
+              nameHeader="Proposal"
+              rowLabel={(p) => p.title}
+              name={(p) => (
+                <div>
+                  <div className="font-medium">{p.title}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {p.fileName || "No document"}
+                    {p.fileName && (
+                      <>
+                        {" · "}
+                        <button
+                          type="button"
+                          className="text-primary hover:underline"
+                          onClick={() => setSending(p)}
+                        >
+                          Send
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            />
+          )}
+
+          {store.total > 0 && (
+            <div className="border-t px-3 py-2">
+              <Pager
+                offset={offset}
+                pageSize={PAGE_SIZE}
+                total={store.total}
+                onOffset={setOffset}
+              />
+            </div>
+          )}
+        </Card>
       </div>
       {newOpen && <NewProposalDialog onOpenChange={setNewOpen} />}
       {sending && <SendProposalDialog proposal={sending} onOpenChange={() => setSending(null)} />}
@@ -216,6 +270,8 @@ export function ProposalsPage() {
   );
 }
 
+const DEFAULT_COLUMNS = ["deal", "owner", "amount", "status", "channels", "sent", "decision"];
+
 function channelTone(status: string): "success" | "danger" | "muted" | "info" {
   if (status === "sent") return "success";
   if (status === "failed") return "danger";
@@ -226,9 +282,9 @@ function channelTone(status: string): "success" | "danger" | "muted" | "info" {
 function Stat({ label: name, value }: { label: string; value: string }) {
   return (
     <Card>
-      <CardContent className="py-4">
-        <div className="num text-2xl font-semibold leading-none">{value}</div>
-        <div className="pt-1 text-xs text-muted-foreground">{name}</div>
+      <CardContent className="px-4 py-3">
+        <div className="text-xs text-muted-foreground">{name}</div>
+        <div className="num pt-1 text-xl font-semibold leading-none">{value}</div>
       </CardContent>
     </Card>
   );

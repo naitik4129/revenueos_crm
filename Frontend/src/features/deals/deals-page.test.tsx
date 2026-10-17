@@ -20,18 +20,21 @@ vi.mock("@/lib/backend-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/backend-client")>();
   return { ...actual, backend: { ...actual.backend, deals: { ...actual.backend.deals, ...api } } };
 });
-const deals = vi.hoisted(() => ({ list: [] as Deal[] }));
+const deals = vi.hoisted(() => ({ list: [] as Deal[], calls: [] as Record<string, unknown>[] }));
 vi.mock("@/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/store")>()),
   useSession: () => ({ users: [], currentUser: null }),
-  useDeals: (filters: { outcome?: string }) => ({
-    data: {
-      data: deals.list.filter((d) => !filters.outcome || d.outcome === filters.outcome),
-      total: deals.list.length,
-    },
-    isLoading: false,
-    error: null,
-  }),
+  useDeals: (filters: { outcome?: string }) => {
+    deals.calls.push(filters);
+    return {
+      data: {
+        data: deals.list.filter((d) => !filters.outcome || d.outcome === filters.outcome),
+        total: deals.list.length,
+      },
+      isLoading: false,
+      error: null,
+    };
+  },
 }));
 vi.mock("@/features/contacts/pickers", () => ({
   ContactPicker: ({ onChange }: { onChange: (o: { id: string; label: string }) => void }) => (
@@ -144,6 +147,27 @@ describe("deals board", () => {
     );
   });
 
+  it("the No next action view asks for deals missing a next action", async () => {
+    deals.list = [deal("d1", "Ann", "new")];
+    await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "No next action" }));
+    await vi.waitFor(() =>
+      expect(deals.calls.at(-1)).toMatchObject({ outcome: "open", missingNextAction: true }),
+    );
+  });
+
+  it("list view assigns an owner to the ticked deals", async () => {
+    deals.list = [deal("d1", "Ann", "new"), deal("d2", "Bob", "new")];
+    api.update.mockResolvedValue(deal("d1", "Ann", "new"));
+    await renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Bob" }));
+    fireEvent.click(screen.getByRole("button", { name: /Assign owner/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Unassigned" }));
+    await vi.waitFor(() => expect(api.update).toHaveBeenCalledWith("d2", { ownerId: null }));
+    expect(api.update).toHaveBeenCalledTimes(1);
+  });
+
   it("list view shows every outcome", async () => {
     deals.list = [deal("d1", "Ann", "new"), deal("d3", "Cy", "new", "won")];
     await renderPage();
@@ -163,7 +187,7 @@ describe("new deal dialog", () => {
       }),
     );
     await renderPage();
-    fireEvent.click(screen.getByRole("button", { name: "New deal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
     fireEvent.click(screen.getByText("pick contact"));
     fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("already has an open deal");

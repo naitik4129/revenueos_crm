@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { AlertTriangle, Video } from "lucide-react";
+import { AlertTriangle, CalendarDays, Video } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -20,11 +20,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Pager } from "@/components/common/list-controls";
-import { StatusBadge } from "@/components/common/status-badge";
+import {
+  FilterSelect,
+  ListEmptyState,
+  Pager,
+  RecordTable,
+  ViewTabs,
+  type ListColumn,
+} from "@/components/common/list-controls";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
-import { fmtDateTime, relDay } from "@/lib/format";
+import { fmtDateTime, fmtTime } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { messageFromError, useMeetings, useSession } from "@/store";
 import { DealLink } from "@/features/deals/deal-link";
@@ -38,14 +43,33 @@ import {
 } from "@/types";
 
 const PAGE_SIZE = 50;
+const ALL = "all";
+
+// Server filters on India-time days: today, from the start of today (soonest first), before it
+// (latest first).
+type View = "today" | "upcoming" | "past";
+const VIEWS: { id: View; label: string }[] = [
+  { id: "today", label: "Today" },
+  { id: "upcoming", label: "Upcoming" },
+  { id: "past", label: "Past" },
+];
+const EMPTY: Record<View, string> = {
+  today: "No meetings today.",
+  upcoming: "No upcoming meetings.",
+  past: "No past meetings.",
+};
 
 export function MeetingsPage() {
-  // Upcoming = from the start of today (soonest first), Past = before it (latest first); IST days.
-  const [view, setView] = useState<"upcoming" | "past">("upcoming");
+  const [view, setView] = useState<View>("today");
+  const [owner, setOwner] = useState(ALL);
   const [offset, setOffset] = useState(0);
-  const store = useMeetings({ when: view, limit: PAGE_SIZE, offset });
-  const today = useMeetings({ when: "today", limit: PAGE_SIZE }).meetings;
-  const { userName } = useSession();
+  const store = useMeetings({
+    when: view,
+    ownerId: owner === ALL ? undefined : owner,
+    limit: PAGE_SIZE,
+    offset,
+  });
+  const { users, userName } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Meeting | null>(null);
   const [outcomeFor, setOutcomeFor] = useState<string | null>(null);
@@ -64,24 +88,66 @@ export function MeetingsPage() {
   const setStatus = (meeting: Meeting, status: MeetingStatus) =>
     void mutate(() => store.updateMeeting(meeting.id, { status }), `Meeting ${label(status)}`);
 
+  const columns: ListColumn<Meeting>[] = [
+    {
+      id: "deal",
+      label: "Deal",
+      cell: (m) => (
+        <DealLink dealId={m.dealId} contactName={m.contactName} companyName={m.companyName} />
+      ),
+    },
+    {
+      id: "when",
+      label: "When",
+      cell: (m) => (view === "today" ? fmtTime(m.at) : fmtDateTime(m.at)),
+    },
+    { id: "owner", label: "Owner", cell: (m) => m.ownerName ?? userName(m.ownerId) },
+    {
+      id: "status",
+      label: "Status",
+      cell: (m) => (
+        <Select
+          value={m.status}
+          disabled={m.status === "completed" || store.isPending}
+          onValueChange={(value) => setStatus(m, value as MeetingStatus)}
+        >
+          <SelectTrigger className="h-7 w-36 text-xs" aria-label={`Status of ${m.title}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {/* "completed" is not pickable: it goes through "Record outcome" so an outcome is
+                always captured. It only shows (disabled) as the current value. */}
+            {MEETING_STATUSES.filter((value) => value !== "completed").map((value) => (
+              <SelectItem key={value} value={value}>
+                {label(value)}
+              </SelectItem>
+            ))}
+            {m.status === "completed" && (
+              <SelectItem value="completed" disabled>
+                {label("completed")}
+              </SelectItem>
+            )}
+          </SelectContent>
+        </Select>
+      ),
+    },
+    { id: "outcome", label: "Outcome", cell: (m) => m.outcome && label(m.outcome) },
+  ];
+
   return (
     <div className="pb-10">
       <PageHeader
         title="Meetings"
-        description="Every meeting booked from the CRM, with backend-owned outcome routing."
+        description="Every meeting booked from the CRM. Recording an outcome moves the deal on."
         tabs={
-          <Tabs
-            value={view}
-            onValueChange={(value) => {
-              setView(value as "upcoming" | "past");
+          <ViewTabs
+            views={VIEWS}
+            active={view}
+            onSelect={(id) => {
+              setView(id as View);
               setOffset(0);
             }}
-          >
-            <TabsList>
-              <TabsTrigger value="upcoming">Upcoming</TabsTrigger>
-              <TabsTrigger value="past">Past</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          />
         }
         actions={
           <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -89,132 +155,93 @@ export function MeetingsPage() {
           </Button>
         }
       />
-      <div className="grid gap-4 p-6 lg:grid-cols-[1fr_300px]">
-        {store.isLoading ? (
-          <LoadingBlock label="Loading meetings…" />
-        ) : store.error ? (
-          <ErrorBlock error={store.error} />
-        ) : (
-          <Card className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-sm">
-                <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
-                  <tr>
-                    {["Meeting", "Deal", "When", "Owner", "Status", "Outcome", ""].map(
-                      (heading) => (
-                        <th key={heading} className="px-3 py-2 font-medium">
-                          {heading}
-                        </th>
-                      ),
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {store.meetings.map((meeting) => {
-                    return (
-                      <tr key={meeting.id} className="border-t hover:bg-accent/40">
-                        <td className="px-3 py-2">
-                          <div>{meeting.title}</div>
-                          {meeting.meetLink && (
-                            <a
-                              href={meeting.meetLink}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="mt-0.5 flex items-center gap-1 text-xs text-primary hover:underline"
-                            >
-                              <Video className="size-3" /> Join Meet
-                            </a>
-                          )}
-                          {meeting.calendarSyncStatus === "failed" && (
-                            <div
-                              className="mt-0.5 flex items-center gap-1 text-xs text-destructive"
-                              title={meeting.calendarSyncError}
-                            >
-                              <AlertTriangle className="size-3" /> Calendar sync failed
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          <DealLink
-                            dealId={meeting.dealId}
-                            contactName={meeting.contactName}
-                            companyName={meeting.companyName}
-                          />
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
-                          {fmtDateTime(meeting.at)}
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          {meeting.ownerName ?? userName(meeting.ownerId)}
-                        </td>
-                        <td className="px-3 py-2">
-                          <Select
-                            value={meeting.status}
-                            disabled={meeting.status === "completed" || store.isPending}
-                            onValueChange={(value) => setStatus(meeting, value as MeetingStatus)}
-                          >
-                            <SelectTrigger className="h-8 w-36">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {/* "completed" is deliberately excluded from the pickable list —
-                                  it must go through "Record outcome" so an outcome is always
-                                  captured. It's only ever shown (disabled) as the current value,
-                                  so the trigger still displays "Completed" instead of blank. */}
-                              {MEETING_STATUSES.filter((value) => value !== "completed").map(
-                                (value) => (
-                                  <SelectItem key={value} value={value}>
-                                    {label(value)}
-                                  </SelectItem>
-                                ),
-                              )}
-                              {meeting.status === "completed" && (
-                                <SelectItem value="completed" disabled>
-                                  {label("completed")}
-                                </SelectItem>
-                              )}
-                            </SelectContent>
-                          </Select>
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {label(meeting.outcome)}
-                        </td>
-                        <td className="space-x-1 px-3 py-2 text-right">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={meeting.status === "completed"}
-                            onClick={() => setEditing(meeting)}
-                          >
-                            Reschedule
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={
-                              meeting.status === "completed" || meeting.status === "cancelled"
-                            }
-                            onClick={() => setOutcomeFor(meeting.id)}
-                          >
-                            Record outcome
-                          </Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {store.meetings.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={7}
-                        className="px-3 py-10 text-center text-sm text-muted-foreground"
-                      >
-                        {view === "upcoming" ? "No upcoming meetings." : "No past meetings."}
-                      </td>
-                    </tr>
+
+      <div className="px-6 py-4">
+        <Card className="overflow-hidden p-0">
+          <div className="flex min-h-14 flex-wrap items-center gap-2 border-b px-3 py-2">
+            <FilterSelect
+              label="Owner"
+              value={owner}
+              onChange={(v) => {
+                setOwner(v);
+                setOffset(0);
+              }}
+              options={[[ALL, "All owners"], ...users.map((u) => [u.id, u.name] as const)]}
+            />
+            {!store.isLoading && (
+              <span className="ml-auto text-xs text-muted-foreground">
+                {store.total.toLocaleString()} meeting{store.total === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+
+          {store.isLoading ? (
+            <LoadingBlock label="Loading meetings…" />
+          ) : store.error ? (
+            <ErrorBlock error={store.error} />
+          ) : store.meetings.length === 0 ? (
+            <ListEmptyState
+              icon={CalendarDays}
+              title={EMPTY[view]}
+              text="Meetings are booked on a deal: from the deal page, a call outcome, or here."
+            >
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
+                Schedule meeting
+              </Button>
+            </ListEmptyState>
+          ) : (
+            <RecordTable
+              rows={store.meetings}
+              columns={columns}
+              nameHeader="Meeting"
+              rowLabel={(m) => m.title}
+              name={(m) => (
+                <div>
+                  <div className="font-medium">{m.title}</div>
+                  {m.meetLink && (
+                    <a
+                      href={m.meetLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-1 text-xs text-primary hover:underline"
+                    >
+                      <Video className="size-3" /> Join Meet
+                    </a>
                   )}
-                </tbody>
-              </table>
-            </div>
+                  {m.calendarSyncStatus === "failed" && (
+                    <div
+                      className="flex items-center gap-1 text-xs text-destructive"
+                      title={m.calendarSyncError}
+                    >
+                      <AlertTriangle className="size-3" /> Calendar sync failed
+                    </div>
+                  )}
+                </div>
+              )}
+              actions={(m) => (
+                <span className="flex justify-end gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={m.status === "completed"}
+                    onClick={() => setEditing(m)}
+                  >
+                    Reschedule
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={m.status === "completed" || m.status === "cancelled"}
+                    onClick={() => setOutcomeFor(m.id)}
+                  >
+                    Record outcome
+                  </Button>
+                </span>
+              )}
+            />
+          )}
+
+          {store.total > 0 && (
             <div className="border-t px-3 py-2">
               <Pager
                 offset={offset}
@@ -223,24 +250,7 @@ export function MeetingsPage() {
                 onOffset={setOffset}
               />
             </div>
-          </Card>
-        )}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Today</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {today.length === 0 && (
-              <p className="text-sm text-muted-foreground">No meetings today.</p>
-            )}
-            {today.map((meeting) => (
-              <div key={meeting.id} className="rounded-md border px-3 py-2">
-                <div className="text-sm font-medium">{meeting.title}</div>
-                <div className="text-xs text-muted-foreground">{relDay(meeting.at)}</div>
-                <StatusBadge value={meeting.status} />
-              </div>
-            ))}
-          </CardContent>
+          )}
         </Card>
       </div>
       <ScheduleMeetingDialog

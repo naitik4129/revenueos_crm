@@ -145,7 +145,11 @@ export function useDeals(filters: DealFilters) {
 }
 
 /** One deal and everything shown on its page (notes are the contact's, filtered to the deal). */
-export function useDealDetail(id: string, contactId: string | undefined) {
+export function useDealDetail(
+  id: string,
+  contactId: string | undefined,
+  companyId?: string | undefined,
+) {
   const { currentWorkspaceId: ws } = useWorkspace();
   const opts = <T>(part: string, fn: (signal: AbortSignal) => Promise<T>, enabled = true) => ({
     queryKey: keys.deal(ws, id, part),
@@ -174,6 +178,9 @@ export function useDealDetail(id: string, contactId: string | undefined) {
     ),
     notes: useQuery(
       opts("notes", (s) => backend.contacts.notes(contactId!, s), Boolean(contactId)),
+    ),
+    company: useQuery(
+      opts(`company:${companyId}`, (s) => backend.companies.get(companyId!, s), Boolean(companyId)),
     ),
   };
 }

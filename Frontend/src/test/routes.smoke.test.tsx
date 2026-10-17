@@ -144,9 +144,9 @@ describe("zero-record route states", () => {
     [ContactsPage, "No contacts yet"],
     [CompaniesPage, "No companies yet"],
     [DealsPage, "New"],
-    [TasksPage, "Nothing here."],
-    [MeetingsPage, "No upcoming meetings."],
-    [ProposalsPage, "No proposals."],
+    [TasksPage, "Nothing due today."],
+    [MeetingsPage, "No meetings today."],
+    [ProposalsPage, "No proposals yet"],
   ])("renders an empty backend dataset", async (Screen, expectedText) => {
     const view = await renderScreen(Screen);
     expect(view.container).toHaveTextContent(expectedText);

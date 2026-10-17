@@ -186,7 +186,7 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
   2. Contacts list: "has open deal" filter.
   3. Contacts list: `sort` parameter (column sorting).
   4. Bulk endpoints for contacts: owner, lifecycle, DNC, delete.
-  5. Assigning an owner must not move `last_activity_at` (today `PATCH /contacts/:id` always sets it to now).
+  5. Assigning an owner must not move `last_activity_at` (today `PATCH /contacts/:id` and `PATCH /deals/:id` always set it to now).
   6. Send or log a one-off email from a record (the record page uses `mailto:` until then).
   7. Meetings by contact (meetings filter only by deal).
   8. Saved views stored on the server (custom or shared per team).
@@ -194,6 +194,8 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
   10. Tasks by company (the company page collects open tasks from its first 10 open deals; tasks on a contact with no deal are missed).
   11. Notes on a company (notes exist only on contacts and deals).
   12. Companies list: the same "Unassigned" filter and `sort` parameter as contacts (gaps 1 and 3).
+  13. A deal amount (deals have no value field), so the board can show totals per stage.
+  14. Proposals list: counts per status and a multi-status filter (e.g. "in progress" = draft + uploaded + ready to send + revised); today it filters one status at a time, so the tabs show no counts.
 
 ## Demo mode (2026-10-16)
 `cd Backend && npm run demo` -> http://127.0.0.1:8080, users admin@/sam@/priya@demo.local (password `demo`). Local PGlite + seed + fake Supabase Auth/Storage + API + dry-run worker + Vite, all in one process. Code lives in `Backend/demo/` (never built or shipped); guards and tests are described in `Backend/README.md`. No demo code in `Backend/src`.

@@ -18,12 +18,15 @@ export function SearchBox({
   placeholder,
   label,
   onSearch,
+  initial = "",
 }: {
   placeholder: string;
   label: string;
   onSearch: (text: string) => void;
+  /** Text to start with, e.g. when the box remounts on a view switch. */
+  initial?: string;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initial);
   useEffect(() => {
     const timer = setTimeout(() => onSearch(text.trim()), 300);
     return () => clearTimeout(timer);
@@ -213,22 +216,29 @@ export function SelectAll({
 
 export type ListColumn<T> = { id: string; label: string; cell: (row: T) => ReactNode };
 
-/** Dense list table: tick boxes, a fixed name column, then the chosen columns. */
+/**
+ * Dense list table: optional tick boxes (pass `onSelect`), a fixed name column, the chosen
+ * columns, then optional row actions.
+ */
 export function RecordTable<T extends { id: string }>({
   rows,
   columns,
   name,
+  nameHeader = "Name",
   rowLabel,
-  selected,
+  selected = [],
   onSelect,
+  actions,
   dimmed,
 }: {
   rows: T[];
   columns: ListColumn<T>[];
   name: (row: T) => ReactNode;
+  nameHeader?: string;
   rowLabel: (row: T) => string;
-  selected: string[];
-  onSelect: (ids: string[]) => void;
+  selected?: string[];
+  onSelect?: (ids: string[]) => void;
+  actions?: (row: T) => ReactNode;
   dimmed?: boolean;
 }) {
   return (
@@ -236,15 +246,22 @@ export function RecordTable<T extends { id: string }>({
       <table className="w-full text-sm">
         <thead className="sticky top-0 z-10 bg-muted text-left text-xs text-muted-foreground">
           <tr>
-            <th className="w-10 px-3 py-2">
-              <SelectAll ids={rows.map((r) => r.id)} selected={selected} onChange={onSelect} />
-            </th>
-            <th className="px-3 py-2 font-medium">Name</th>
+            {onSelect && (
+              <th className="w-10 px-3 py-2">
+                <SelectAll ids={rows.map((r) => r.id)} selected={selected} onChange={onSelect} />
+              </th>
+            )}
+            <th className="px-3 py-2 font-medium">{nameHeader}</th>
             {columns.map((c) => (
               <th key={c.id} className="whitespace-nowrap px-3 py-2 font-medium">
                 {c.label}
               </th>
             ))}
+            {actions && (
+              <th className="px-3 py-2">
+                <span className="sr-only">Actions</span>
+              </th>
+            )}
           </tr>
         </thead>
         <tbody className={dimmed ? "opacity-60" : undefined}>
@@ -255,17 +272,19 @@ export function RecordTable<T extends { id: string }>({
                 key={row.id}
                 className={cn("border-t hover:bg-accent/40", checked && "bg-accent/60")}
               >
-                <td className="px-3 py-1.5">
-                  <Checkbox
-                    aria-label={`Select ${rowLabel(row)}`}
-                    checked={checked}
-                    onCheckedChange={() =>
-                      onSelect(
-                        checked ? selected.filter((id) => id !== row.id) : [...selected, row.id],
-                      )
-                    }
-                  />
-                </td>
+                {onSelect && (
+                  <td className="px-3 py-1.5">
+                    <Checkbox
+                      aria-label={`Select ${rowLabel(row)}`}
+                      checked={checked}
+                      onCheckedChange={() =>
+                        onSelect(
+                          checked ? selected.filter((id) => id !== row.id) : [...selected, row.id],
+                        )
+                      }
+                    />
+                  </td>
+                )}
                 <td className="px-3 py-1.5">{name(row)}</td>
                 {columns.map((col) => (
                   <td
@@ -275,6 +294,9 @@ export function RecordTable<T extends { id: string }>({
                     {col.cell(row) ?? <span className="text-muted-foreground">-</span>}
                   </td>
                 ))}
+                {actions && (
+                  <td className="whitespace-nowrap px-3 py-1 text-right">{actions(row)}</td>
+                )}
               </tr>
             );
           })}

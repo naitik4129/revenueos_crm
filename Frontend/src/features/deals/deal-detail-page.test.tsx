@@ -38,6 +38,7 @@ vi.mock("@/store", async (importOriginal) => ({
     scheduledActions: loaded({ data: [] }),
     timeline: loaded({ data: [] }),
     notes: loaded({ data: [] }),
+    company: loaded(undefined),
     contact: loaded({
       id: "c1",
       firstName: "Ann",
@@ -120,6 +121,16 @@ describe("deal page", () => {
     expect(screen.getByText(/Closed 10 Oct 2026/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reopen" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Won" })).not.toBeInTheDocument();
+  });
+
+  it("shows the contact, meetings, proposals and runs in the right column", async () => {
+    const run = { id: "r1", workflowId: "w1", version: 2, dealId: "d1", status: "waiting" };
+    await renderDeal({ email: "ann@acme.test" }, [], [run as unknown as Run]);
+    expect(screen.getByRole("button", { name: "Copy ann@acme.test" })).toBeInTheDocument();
+    expect(screen.getByText("Meetings (0)")).toBeInTheDocument();
+    expect(screen.getByText("Proposals (0)")).toBeInTheDocument();
+    expect(screen.getByText("Automation runs (1)")).toBeInTheDocument();
+    expect(screen.getByText("Later nurture V2")).toBeInTheDocument();
   });
 
   it("marking lost needs a loss reason", async () => {

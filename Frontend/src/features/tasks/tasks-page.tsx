@@ -1,27 +1,30 @@
 import { useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
+import { ListChecks } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/app/app-shell";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/status-badge";
-import { Pager } from "@/components/common/list-controls";
-import { isOverdue, relDay } from "@/lib/format";
-import type { TaskListParams } from "@/lib/backend-client";
-import { useSession, useTasks, useTaskTotals } from "@/store";
-import { messageFromError } from "@/store";
+import {
+  FilterSelect,
+  ListEmptyState,
+  Pager,
+  RecordTable,
+  ViewTabs,
+  type ListColumn,
+} from "@/components/common/list-controls";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
+import { isOverdue, relDay } from "@/lib/format";
+import { label } from "@/lib/labels";
+import type { TaskListParams } from "@/lib/backend-client";
+import { messageFromError, useSession, useTasks, useTaskTotals } from "@/store";
+import { TASK_TYPES, type Task } from "@/types";
 import { DealLink } from "@/features/deals/deal-link";
+import { TaskDialog } from "@/features/deals/deal-dialogs";
 
 const PAGE_SIZE = 50;
+const ALL = "all";
 
 // The tabs are server filters (Asia/Kolkata days), so they agree with the dashboard.
 const VIEWS = {
@@ -32,168 +35,187 @@ const VIEWS = {
 } satisfies Record<string, TaskListParams>;
 type View = keyof typeof VIEWS;
 const VIEW_NAMES = Object.keys(VIEWS) as View[];
+const VIEW_LABELS: Record<View, string> = {
+  today: "Today",
+  overdue: "Overdue",
+  upcoming: "Upcoming",
+  done: "Done",
+};
+const EMPTY: Record<View, string> = {
+  today: "Nothing due today.",
+  overdue: "Nothing overdue.",
+  upcoming: "Nothing coming up.",
+  done: "No completed tasks yet.",
+};
+
+// Call and meeting tasks are done on their deal page, by logging the call or booking it.
+const doneOnDeal = (t: Task) => (t.type === "call" || t.type === "schedule_meeting") && t.dealId;
 
 export function TasksPage() {
   const { users, userName } = useSession();
-  const navigate = useNavigate();
   const [view, setView] = useState<View>("today");
-  const [owner, setOwner] = useState("all");
+  const [owner, setOwner] = useState(ALL);
+  const [type, setType] = useState(ALL);
   const [offset, setOffset] = useState(0);
-  const ownerId = owner === "all" ? undefined : owner;
+  const [rescheduling, setRescheduling] = useState<Task | null>(null);
+  const filters = {
+    ownerId: owner === ALL ? undefined : owner,
+    type: type === ALL ? undefined : type,
+  };
   const { tasks, total, completeTask, isLoading, error, isPending } = useTasks({
     ...VIEWS[view],
-    ownerId,
+    ...filters,
     limit: PAGE_SIZE,
     offset,
   });
-  const totals = useTaskTotals(VIEW_NAMES.map((name) => ({ ...VIEWS[name], ownerId })));
-  const count = (name: View) => totals[VIEW_NAMES.indexOf(name)] ?? "�";
+  const totals = useTaskTotals(VIEW_NAMES.map((name) => ({ ...VIEWS[name], ...filters })));
+  const count = (name: View) => totals[VIEW_NAMES.indexOf(name)];
+
+  const columns: ListColumn<Task>[] = [
+    {
+      id: "deal",
+      label: "Deal / contact",
+      cell: (t) =>
+        (t.dealId ?? t.contactId) && (
+          <DealLink
+            dealId={t.dealId}
+            contactId={t.contactId}
+            contactName={t.contactName}
+            companyName={t.companyName}
+          />
+        ),
+    },
+    { id: "type", label: "Type", cell: (t) => <StatusBadge value={t.type} tone="neutral" /> },
+    {
+      id: "due",
+      label: view === "done" ? "Completed" : "Due",
+      cell: (t) =>
+        view === "done" ? (
+          relDay(t.completedAt ?? t.dueAt)
+        ) : (
+          <span className={isOverdue(t.dueAt) ? "text-destructive" : undefined}>
+            {relDay(t.dueAt)}
+          </span>
+        ),
+    },
+    { id: "owner", label: "Owner", cell: (t) => userName(t.ownerId) },
+    {
+      id: "origin",
+      label: "Origin",
+      cell: (t) => (
+        <StatusBadge value={t.origin} tone={t.origin === "automation" ? "primary" : "muted"} />
+      ),
+    },
+  ];
+
+  const complete = (t: Task) =>
+    completeTask(t.id).then(
+      () => toast.success("Task completed"),
+      (reason: unknown) => toast.error(messageFromError(reason)),
+    );
 
   return (
     <div className="pb-10">
       <PageHeader
         title="Tasks"
-        description="Manual and automation-created actions. Call and meeting tasks open their deal, where you log the call or schedule the meeting."
+        description="Manual and automation tasks. Call and meeting tasks open their deal, where you log the call or book the meeting."
         tabs={
-          <Tabs
-            value={view}
-            onValueChange={(v) => {
-              setView(v as View);
+          <ViewTabs
+            views={VIEW_NAMES.map((id) => ({
+              id,
+              label: `${VIEW_LABELS[id]}${count(id) === undefined ? "" : ` (${count(id)})`}`,
+            }))}
+            active={view}
+            onSelect={(id) => {
+              setView(id as View);
               setOffset(0);
             }}
-          >
-            <TabsList>
-              <TabsTrigger value="today">Today ({count("today")})</TabsTrigger>
-              <TabsTrigger value="overdue">Overdue ({count("overdue")})</TabsTrigger>
-              <TabsTrigger value="upcoming">Upcoming ({count("upcoming")})</TabsTrigger>
-              <TabsTrigger value="done">Completed ({count("done")})</TabsTrigger>
-            </TabsList>
-          </Tabs>
-        }
-        actions={
-          <Select
-            value={owner}
-            onValueChange={(value) => {
-              setOwner(value);
-              setOffset(0);
-            }}
-          >
-            <SelectTrigger className="w-44">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All owners</SelectItem>
-              {users.map((u) => (
-                <SelectItem key={u.id} value={u.id}>
-                  {u.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          />
         }
       />
+      {rescheduling && (
+        <TaskDialog task={rescheduling} onOpenChange={(open) => !open && setRescheduling(null)} />
+      )}
 
-      <div className="space-y-3 p-6">
-        {isLoading ? (
-          <LoadingBlock label="Loading tasks…" />
-        ) : error ? (
-          <ErrorBlock error={error} />
-        ) : (
-          <Card className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[820px] text-sm">
-                <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
-                  <tr>
-                    {["", "Task", "Deal / contact", "Type", "Due", "Owner", "Origin"].map(
-                      (h, i) => (
-                        <th key={i} className="px-3 py-2 font-medium">
-                          {h}
-                        </th>
-                      ),
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {tasks.map((t) => {
-                    return (
-                      <tr key={t.id} className="border-t hover:bg-accent/40">
-                        <td className="px-3 py-2">
-                          <Checkbox
-                            checked={t.done}
-                            disabled={t.status !== "open" || isPending}
-                            onCheckedChange={() => {
-                              if (t.status !== "open") return;
-                              // These are done by logging the call / scheduling on the deal page.
-                              if (
-                                (t.type === "call" || t.type === "schedule_meeting") &&
-                                t.dealId
-                              ) {
-                                void navigate({
-                                  to: "/deals/$dealId",
-                                  params: { dealId: t.dealId },
-                                });
-                                return;
-                              }
-                              void completeTask(t.id).catch((reason) => toastError(reason));
-                            }}
-                          />
-                        </td>
-                        <td
-                          className={`px-3 py-2 ${t.done ? "text-muted-foreground line-through" : ""}`}
-                        >
-                          {t.title}
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          <DealLink
-                            dealId={t.dealId}
-                            contactId={t.contactId}
-                            contactName={t.contactName}
-                            companyName={t.companyName}
-                          />
-                        </td>
-                        <td className="px-3 py-2">
-                          <StatusBadge value={t.type} tone="neutral" />
-                        </td>
-                        <td
-                          className={`whitespace-nowrap px-3 py-2 text-xs ${
-                            !t.done && isOverdue(t.dueAt)
-                              ? "text-destructive"
-                              : "text-muted-foreground"
-                          }`}
-                        >
-                          {relDay(t.dueAt)}
-                        </td>
-                        <td className="px-3 py-2 text-xs">{userName(t.ownerId)}</td>
-                        <td className="px-3 py-2">
-                          <StatusBadge
-                            value={t.origin}
-                            tone={t.origin === "automation" ? "primary" : "muted"}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {tasks.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={7}
-                        className="px-3 py-10 text-center text-sm text-muted-foreground"
+      <div className="px-6 py-4">
+        <Card className="overflow-hidden p-0">
+          <div className="flex min-h-14 flex-wrap items-center gap-2 border-b px-3 py-2">
+            <FilterSelect
+              label="Owner"
+              value={owner}
+              onChange={(v) => {
+                setOwner(v);
+                setOffset(0);
+              }}
+              options={[[ALL, "All owners"], ...users.map((u) => [u.id, u.name] as const)]}
+            />
+            <FilterSelect
+              label="Task type"
+              value={type}
+              onChange={(v) => {
+                setType(v);
+                setOffset(0);
+              }}
+              options={[[ALL, "All types"], ...TASK_TYPES.map((t) => [t, label(t)] as const)]}
+            />
+          </div>
+
+          {isLoading ? (
+            <LoadingBlock label="Loading tasks…" />
+          ) : error ? (
+            <ErrorBlock error={error} />
+          ) : tasks.length === 0 ? (
+            <ListEmptyState
+              icon={ListChecks}
+              title={EMPTY[view]}
+              text="Tasks come from deals, contacts and automation steps."
+            />
+          ) : (
+            <RecordTable
+              rows={tasks}
+              columns={columns}
+              nameHeader="Task"
+              rowLabel={(t) => t.title}
+              name={(t) => (
+                <span className={t.done ? "text-muted-foreground line-through" : "font-medium"}>
+                  {t.title}
+                </span>
+              )}
+              actions={(t) =>
+                t.status === "open" && (
+                  <span className="flex justify-end gap-1">
+                    {doneOnDeal(t) ? (
+                      <Button size="sm" variant="ghost" asChild>
+                        <Link to="/deals/$dealId" params={{ dealId: t.dealId! }}>
+                          {t.type === "call" ? "Log call" : "Book meeting"}
+                        </Link>
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={isPending}
+                        onClick={() => void complete(t)}
                       >
-                        Nothing here.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                        Complete
+                      </Button>
+                    )}
+                    <Button size="sm" variant="ghost" onClick={() => setRescheduling(t)}>
+                      Reschedule
+                    </Button>
+                  </span>
+                )
+              }
+            />
+          )}
+
+          {total > 0 && (
+            <div className="border-t px-3 py-2">
+              <Pager offset={offset} pageSize={PAGE_SIZE} total={total} onOffset={setOffset} />
             </div>
-          </Card>
-        )}
-        <Pager offset={offset} pageSize={PAGE_SIZE} total={total} onOffset={setOffset} />
+          )}
+        </Card>
       </div>
     </div>
   );
-}
-
-function toastError(error: unknown) {
-  toast.error(messageFromError(error));
 }

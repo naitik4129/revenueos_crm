@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle } from "lucide-react";
+import { Avatar } from "@/components/common/record-parts";
 import { isOverdue, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { cn } from "@/lib/utils";
@@ -32,7 +33,7 @@ export function DealCard({
       }}
       aria-label={`Deal: ${deal.contactName}`}
       className={cn(
-        "cursor-grab space-y-1.5 rounded-md border bg-card p-2.5 text-xs shadow-sm active:cursor-grabbing",
+        "cursor-grab space-y-1.5 rounded-md border bg-card p-2.5 text-xs shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing",
         pending && "opacity-60",
         deal.doNotContact && "border-destructive/50",
       )}
@@ -58,7 +59,10 @@ export function DealCard({
         )}
       </div>
       <div className="flex justify-between gap-2 text-muted-foreground">
-        <span className="truncate">{deal.ownerName ?? "Unassigned"}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Avatar name={deal.ownerName ?? "?"} className="size-5 text-[9px]" />
+          <span className="truncate">{deal.ownerName ?? "Unassigned"}</span>
+        </span>
         <span className="shrink-0">{relDay(deal.lastActivityAt)}</span>
       </div>
       <select

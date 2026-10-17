@@ -117,29 +117,31 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("server-paged lists", () => {
-  it("meetings: Upcoming/Past tabs filter on the server, Today has its own query", async () => {
+  it("meetings: Today / Upcoming / Past tabs filter and page on the server", async () => {
     await renderScreen(MeetingsPage);
-    expect(calls.meetings).toContainEqual({ when: "today", limit: 50 });
-    expect(last(calls.meetings.filter((p) => p.when !== "today"))).toEqual({
-      when: "upcoming",
-      limit: 50,
-      offset: 0,
-    });
+    expect(last(calls.meetings)).toEqual({ when: "today", limit: 50, offset: 0 });
     expect(screen.getByText("Today call")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Upcoming" }));
+    await waitFor(() =>
+      expect(last(calls.meetings)).toEqual({ when: "upcoming", limit: 50, offset: 0 }),
+    );
     expect(screen.getByText("1-50 of 120")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() =>
-      expect(last(calls.meetings.filter((p) => p.when !== "today"))).toMatchObject({ offset: 50 }),
-    );
+    await waitFor(() => expect(last(calls.meetings)).toMatchObject({ offset: 50 }));
 
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Past" }), { button: 0 });
+    fireEvent.click(screen.getByRole("tab", { name: "Past" }));
     await waitFor(() =>
-      expect(last(calls.meetings.filter((p) => p.when !== "today"))).toEqual({
-        when: "past",
-        limit: 50,
-        offset: 0,
-      }),
+      expect(last(calls.meetings)).toEqual({ when: "past", limit: 50, offset: 0 }),
+    );
+  });
+
+  it("proposals: a status tab filters on the server and starts at page one", async () => {
+    await renderScreen(ProposalsPage);
+    fireEvent.click(screen.getByRole("tab", { name: "Sent" }));
+    await waitFor(() =>
+      expect(last(calls.proposals)).toEqual({ status: "sent", limit: 50, offset: 0 }),
     );
   });
 
