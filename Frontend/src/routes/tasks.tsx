@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { viewSearch } from "@/lib/view-search";
 import { TasksPage } from "@/features/tasks/tasks-page";
 
 export const Route = createFileRoute("/tasks")({
@@ -16,5 +17,8 @@ export const Route = createFileRoute("/tasks")({
       },
     ],
   }),
-  component: TasksPage,
+  validateSearch: viewSearch,
+  component: function TasksRoute() {
+    return <TasksPage initialView={Route.useSearch().view} />;
+  },
 });

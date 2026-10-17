@@ -51,11 +51,13 @@ const VIEWS: { id: string; label: string; filters: (me?: string) => Filters }[] 
   },
 ];
 
-export function DealsPage() {
+export function DealsPage({ initialView }: { initialView?: string | undefined } = {}) {
   const { users, currentUser } = useSession();
   const [view, setView] = useState<"board" | "list">("board");
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [filters, setFilters] = useState<Filters>(
+    () => VIEWS.find((v) => v.id === initialView)?.filters(currentUser?.id) ?? NO_FILTERS,
+  );
   const [newOpen, setNewOpen] = useState(false);
   const query: DealFilters = {
     search: search || undefined,

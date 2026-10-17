@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { viewSearch } from "@/lib/view-search";
 import { ProposalsPage } from "@/features/proposals/proposals-page";
 
 export const Route = createFileRoute("/proposals/")({
@@ -13,5 +14,8 @@ export const Route = createFileRoute("/proposals/")({
       { property: "og:description", content: "Simple proposal tracking with follow-up dates." },
     ],
   }),
-  component: ProposalsPage,
+  validateSearch: viewSearch,
+  component: function ProposalsRoute() {
+    return <ProposalsPage initialView={Route.useSearch().view} />;
+  },
 });

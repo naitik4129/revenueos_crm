@@ -51,9 +51,11 @@ const EMPTY: Record<View, string> = {
 // Call and meeting tasks are done on their deal page, by logging the call or booking it.
 const doneOnDeal = (t: Task) => (t.type === "call" || t.type === "schedule_meeting") && t.dealId;
 
-export function TasksPage() {
+export function TasksPage({ initialView }: { initialView?: string | undefined } = {}) {
   const { users, userName } = useSession();
-  const [view, setView] = useState<View>("today");
+  const [view, setView] = useState<View>(
+    VIEW_NAMES.includes(initialView as View) ? (initialView as View) : "today",
+  );
   const [owner, setOwner] = useState(ALL);
   const [type, setType] = useState(ALL);
   const [offset, setOffset] = useState(0);

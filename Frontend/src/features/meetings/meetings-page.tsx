@@ -59,8 +59,10 @@ const EMPTY: Record<View, string> = {
   past: "No past meetings.",
 };
 
-export function MeetingsPage() {
-  const [view, setView] = useState<View>("today");
+export function MeetingsPage({ initialView }: { initialView?: string | undefined } = {}) {
+  const [view, setView] = useState<View>(
+    VIEWS.some((v) => v.id === initialView) ? (initialView as View) : "today",
+  );
   const [owner, setOwner] = useState(ALL);
   const [offset, setOffset] = useState(0);
   const store = useMeetings({

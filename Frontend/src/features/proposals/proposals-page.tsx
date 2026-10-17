@@ -45,8 +45,10 @@ const VIEWS = [
   ),
 ];
 
-export function ProposalsPage() {
-  const [status, setStatus] = useState(ALL);
+export function ProposalsPage({ initialView }: { initialView?: string | undefined } = {}) {
+  const [status, setStatus] = useState<string>(
+    PROPOSAL_STATUSES.includes(initialView as ProposalStatus) ? initialView! : ALL,
+  );
   const [owner, setOwner] = useState(ALL);
   const [offset, setOffset] = useState(0);
   const store = useProposals({

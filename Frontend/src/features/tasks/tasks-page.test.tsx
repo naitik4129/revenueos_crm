@@ -55,11 +55,15 @@ afterEach(() => {
   calls.complete.mockClear();
 });
 
-async function renderPage() {
+async function renderPage(initialView?: string) {
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const router = createRouter({
     routeTree: rootRoute.addChildren([
-      createRoute({ getParentRoute: () => rootRoute, path: "/", component: TasksPage }),
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path: "/",
+        component: () => <TasksPage initialView={initialView} />,
+      }),
     ]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
@@ -75,6 +79,15 @@ describe("TasksPage", () => {
       expect(screen.getByRole("tab", { name })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Overdue (5)" }));
     await waitFor(() => expect(calls.list.at(-1)).toMatchObject({ overdueOnly: true, offset: 0 }));
+  });
+
+  it("opens on the tab the dashboard linked to", async () => {
+    await renderPage("overdue");
+    expect(calls.list[0]).toMatchObject({ overdueOnly: true });
+    expect(screen.getByRole("tab", { name: "Overdue (5)" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("completes a task inline; a call task links to its deal instead", async () => {

@@ -108,11 +108,15 @@ const DEFAULT_COLUMNS = [
 
 const contactName = (c: Contact) => `${c.firstName} ${c.lastName}`.trim() || c.email || "(no name)";
 
-export function ContactsPage() {
+export function ContactsPage({ initialView }: { initialView?: string | undefined } = {}) {
   const { users, currentUser } = useSession();
   const addContact = useAddContact();
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [filters, setFilters] = useState<Filters>(() =>
+    LIFECYCLE_STAGES.includes(initialView as LifecycleStage)
+      ? { ...NO_FILTERS, lifecycle: initialView! }
+      : (VIEWS.find((v) => v.id === initialView)?.filters(currentUser?.id) ?? NO_FILTERS),
+  );
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
   const [importOpen, setImportOpen] = useState(false);

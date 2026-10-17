@@ -62,3 +62,10 @@ export function initials(name: string) {
     .slice(0, 2)
     .join("");
 }
+
+/** "12%" of `total`; "<1%" for a non-zero count that rounds down to nothing. */
+export function percent(count: number, total: number) {
+  if (total === 0 || count === 0) return "0%";
+  const pct = Math.round((count / total) * 100);
+  return pct === 0 ? "<1%" : `${pct}%`;
+}
