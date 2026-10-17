@@ -1,7 +1,7 @@
 import { convertToVisualHtml } from "@/lib/template-editor-schema";
 import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
-import { Paperclip, Plus, Search, Trash2, X } from "lucide-react";
+import { FileText, Mail, MessageCircle, Paperclip, Plus, Search, Trash2, X } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { AutomationTabs } from "@/features/automations/automation-tabs";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import {
+  ListEmptyState,
+  RecordTable,
+  ViewTabs,
+  type ListColumn,
+} from "@/components/common/list-controls";
 import { messageFromError, useAutomations, useTemplateVariables } from "@/store";
 import type { Template, TemplateAttachment, TemplateType } from "@/types";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
@@ -63,109 +69,168 @@ export function TemplatesPage() {
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Template | null>(null);
   const [q, setQ] = useState("");
+  const [channel, setChannel] = useState<"all" | TemplateType>("all");
 
   const filteredTemplates = useMemo(() => {
     const query = q.trim().toLowerCase();
-    if (!query) return templates;
-    return templates.filter((t) =>
-      `${t.name} ${t.subject ?? ""} ${t.type}`.toLowerCase().includes(query),
+    return templates.filter(
+      (t) =>
+        (channel === "all" || t.type === channel) &&
+        (!query || `${t.name} ${t.subject ?? ""} ${t.type}`.toLowerCase().includes(query)),
     );
-  }, [templates, q]);
+  }, [templates, q, channel]);
+  const count = (type: TemplateType) => templates.filter((t) => t.type === type).length;
+
+  const columns: ListColumn<Template>[] = [
+    {
+      id: "channel",
+      label: "Channel",
+      cell: (t) => (
+        <span className="flex items-center gap-1.5">
+          {t.type === "email" ? (
+            <Mail className="size-3.5 text-info" />
+          ) : (
+            <MessageCircle className="size-3.5 text-success" />
+          )}
+          {t.type === "email" ? "Email" : "WhatsApp"}
+        </span>
+      ),
+    },
+    {
+      id: "preview",
+      label: "Preview",
+      cell: (t) => (
+        <span className="block max-w-72 truncate text-muted-foreground">
+          {templateSummary(t.body)}
+        </span>
+      ),
+    },
+    {
+      id: "attachments",
+      label: "Attachments",
+      cell: (t) =>
+        t.attachments.length > 0 ? (
+          <span className="flex items-center gap-1">
+            <Paperclip className="size-3" /> {t.attachments.length}
+          </span>
+        ) : undefined,
+    },
+    {
+      id: "active",
+      label: "Active",
+      cell: (t) => (
+        <Switch
+          checked={t.active}
+          disabled={isPending}
+          aria-label={`${t.active ? "Disable" : "Enable"} ${t.name}`}
+          onCheckedChange={(v) => {
+            void updateTemplate(t.id, { active: v })
+              .then(() => toast.success(v ? "Template active" : "Template disabled"))
+              .catch((failure) => toast.error(messageFromError(failure)));
+          }}
+        />
+      ),
+    },
+  ];
 
   return (
     <div className="pb-10">
       <PageHeader
         title="Automations"
-        description="Templates are referenced by workflow steps. Editing a template changes what the next send says."
+        description="Templates are used by workflow steps. Editing one changes what the next send says."
         tabs={<AutomationTabs />}
         actions={
           <Button size="sm" onClick={() => setCreating(true)}>
-            <Plus className="mr-1 size-4" /> New template
+            Create template
           </Button>
         }
       />
 
-      <div className="px-6 pt-6">
-        <div className="relative w-64">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search templates"
-            className="pl-8"
-          />
-        </div>
-      </div>
+      <div className="px-6 py-4">
+        <Card className="overflow-hidden p-0">
+          <div className="border-b px-3">
+            <ViewTabs
+              views={[
+                { id: "all", label: `All (${templates.length})` },
+                { id: "email", label: `Email (${count("email")})` },
+                { id: "whatsapp", label: `WhatsApp (${count("whatsapp")})` },
+              ]}
+              active={channel}
+              onSelect={(id) => setChannel(id as typeof channel)}
+            />
+          </div>
+          <div className="flex min-h-14 flex-wrap items-center gap-2 border-b px-3 py-2">
+            <div className="relative w-64">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search templates"
+                aria-label="Search templates"
+                className="pl-8"
+              />
+            </div>
+          </div>
 
-      <div className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-3">
-        {isLoading ? (
-          <LoadingBlock label="Loading templates…" />
-        ) : error ? (
-          <ErrorBlock error={error} />
-        ) : filteredTemplates.length === 0 ? (
-          <p className="col-span-full py-8 text-center text-sm text-muted-foreground">
-            No templates match &quot;{q}&quot;.
-          </p>
-        ) : (
-          <>
-            {filteredTemplates.map((t) => (
-              <Card key={t.id} className="flex min-w-0 flex-col [overflow-wrap:anywhere]">
-                <CardHeader className="pb-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <CardTitle className="text-sm">{t.name}</CardTitle>
-                    <StatusBadge value={t.type} tone={t.type === "email" ? "info" : "success"} />
-                  </div>
-                </CardHeader>
-                <CardContent className="flex flex-1 flex-col gap-3">
-                  {t.subject && <div className="text-xs font-medium">{t.subject}</div>}
+          {isLoading ? (
+            <LoadingBlock label="Loading templates…" />
+          ) : error ? (
+            <ErrorBlock error={error} />
+          ) : filteredTemplates.length === 0 ? (
+            <ListEmptyState
+              icon={FileText}
+              title={templates.length === 0 ? "No templates yet" : "No templates match."}
+              text="An email or WhatsApp template is what a workflow step sends, with {{contact.*}}, {{company.*}} and {{deal.*}} filled in."
+            >
+              {templates.length === 0 && (
+                <Button size="sm" onClick={() => setCreating(true)}>
+                  Create your first template
+                </Button>
+              )}
+            </ListEmptyState>
+          ) : (
+            <RecordTable
+              rows={filteredTemplates}
+              columns={columns}
+              nameHeader="Template"
+              rowLabel={(t) => t.name}
+              name={(t) => (
+                <div className="min-w-48 max-w-80">
+                  <button
+                    type="button"
+                    className="text-left font-medium hover:underline"
+                    onClick={() => setEditing(t)}
+                  >
+                    {t.name}
+                  </button>
+                  {t.subject && (
+                    <div className="truncate text-xs text-muted-foreground">{t.subject}</div>
+                  )}
                   {t.isDefaultMeetingScheduled && (
-                    <div className="w-fit rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                    <div className="mt-0.5 w-fit rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
                       Default: Meeting Scheduled
                     </div>
                   )}
-                  <p className="line-clamp-4 text-xs text-muted-foreground">
-                    {templateSummary(t.body)}
-                  </p>
-                  {t.attachments.length > 0 && (
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Paperclip className="size-3" />
-                      {t.attachments.length} attachment{t.attachments.length > 1 ? "s" : ""}
-                    </div>
-                  )}
-                  <div className="mt-auto flex flex-wrap items-center justify-between gap-2 pt-1">
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={t.active}
-                        disabled={isPending}
-                        onCheckedChange={(v) => {
-                          void updateTemplate(t.id, { active: v })
-                            .then(() => toast.success(v ? "Template active" : "Template disabled"))
-                            .catch((failure) => toast.error(messageFromError(failure)));
-                        }}
-                      />
-                      <span className="text-xs text-muted-foreground">
-                        {t.active ? "Active" : "Disabled"}
-                      </span>
-                    </div>
-                    <div className="flex gap-1">
-                      <Button size="sm" variant="outline" onClick={() => setEditing(t)}>
-                        Edit
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setDeleteTarget(t)}
-                        aria-label="Delete template"
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </>
-        )}
+                </div>
+              )}
+              actions={(t) => (
+                <span className="flex justify-end gap-1">
+                  <Button size="sm" variant="outline" onClick={() => setEditing(t)}>
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setDeleteTarget(t)}
+                    aria-label="Delete template"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </span>
+              )}
+            />
+          )}
+        </Card>
       </div>
 
       <TemplateDialog

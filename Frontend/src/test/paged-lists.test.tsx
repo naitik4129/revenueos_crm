@@ -164,4 +164,14 @@ describe("server-paged lists", () => {
     await waitFor(() => expect(last(calls.runs)).toEqual({ search: "Acme", limit: 50, offset: 0 }));
     expect(last(calls.actions)).toEqual({ search: "Acme", limit: 50, offset: 0 });
   });
+
+  it("runs: a status tab filters on the server and starts at page one", async () => {
+    await renderScreen(RunsPage);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(last(calls.runs)).toMatchObject({ offset: 50 }));
+    fireEvent.click(screen.getByRole("tab", { name: "Failed" }));
+    await waitFor(() =>
+      expect(last(calls.runs)).toEqual({ status: "failed", limit: 50, offset: 0 }),
+    );
+  });
 });

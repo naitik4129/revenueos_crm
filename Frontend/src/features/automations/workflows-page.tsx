@@ -1,14 +1,20 @@
 import { Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Bot, Copy, Plus, Search, Trash2 } from "lucide-react";
+import { Bot, Copy, Search, Trash2 } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { AutomationTabs } from "@/features/automations/automation-tabs";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import {
+  ListEmptyState,
+  RecordTable,
+  ViewTabs,
+  type ListColumn,
+} from "@/components/common/list-controls";
 import { relDay } from "@/lib/format";
 import { useAutomations, useSession } from "@/store";
 import { messageFromError } from "@/store";
@@ -58,141 +64,182 @@ export function WorkflowsPage() {
     }
   };
 
+  const [status, setStatus] = useState<"all" | "active" | "paused">("all");
   const filteredWorkflows = useMemo(() => {
     const query = q.trim().toLowerCase();
-    if (!query) return workflows;
-    return workflows.filter((w) =>
-      `${w.name} ${w.description ?? ""} ${workflowTriggerLabel(w.trigger)}`
-        .toLowerCase()
-        .includes(query),
+    return workflows.filter(
+      (w) =>
+        (status === "all" || w.status === status) &&
+        (!query ||
+          `${w.name} ${w.description ?? ""} ${workflowTriggerLabel(w.trigger)}`
+            .toLowerCase()
+            .includes(query)),
     );
-  }, [workflows, q]);
+  }, [workflows, q, status]);
+  const count = (s: "active" | "paused") => workflows.filter((w) => w.status === s).length;
+
+  const columns: ListColumn<Workflow>[] = [
+    {
+      id: "status",
+      label: "Status",
+      cell: (w) => (
+        <span className="flex items-center gap-2">
+          <Switch
+            checked={w.status === "active"}
+            disabled={isPending}
+            aria-label={`${w.status === "active" ? "Pause" : "Activate"} ${w.name}`}
+            onCheckedChange={(v) => {
+              void mutate(
+                () => updateWorkflow(w.id, { status: v ? "active" : "paused" }),
+                v ? "Workflow activated" : "Workflow paused",
+              );
+            }}
+          />
+          <StatusBadge value={w.status} dot />
+        </span>
+      ),
+    },
+    { id: "trigger", label: "Trigger", cell: (w) => workflowTriggerLabel(w.trigger) },
+    {
+      id: "version",
+      label: "Version",
+      cell: (w) => {
+        const draft = w.versions.find((v) => v.status === "draft");
+        return (
+          <span className="flex items-center gap-1">
+            {w.currentVersion > 0 ? (
+              <StatusBadge value={`V${w.currentVersion} live`} tone="success" />
+            ) : (
+              <StatusBadge value="Not published" tone="muted" />
+            )}
+            {draft && <StatusBadge value={`V${draft.version} draft`} tone="warning" />}
+          </span>
+        );
+      },
+    },
+    {
+      id: "steps",
+      label: "Steps",
+      cell: (w) => w.versions.find((v) => v.version === w.currentVersion)?.steps.length ?? 0,
+    },
+    { id: "runs", label: "Active runs", cell: (w) => w.activeLeads },
+    {
+      id: "failures",
+      label: "Failures",
+      cell: (w) => (w.failures > 0 ? <span className="text-destructive">{w.failures}</span> : 0),
+    },
+    {
+      id: "edited",
+      label: "Last edited",
+      cell: (w) => `${relDay(w.updatedAt)} · ${userName(w.ownerId)}`,
+    },
+  ];
 
   return (
     <div className="pb-10">
       <PageHeader
         title="Automations"
-        description="Workflows are defined here and executed by the backend automation worker. Publishing a version changes live behaviour."
+        description="Workflows run on the backend worker. Publishing a version changes live behaviour."
         tabs={<AutomationTabs />}
         actions={
           <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-1 size-4" /> New workflow
+            Create workflow
           </Button>
         }
       />
 
-      <div className="px-6 pt-6">
-        <div className="relative w-64">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search workflows"
-            className="pl-8"
-          />
-        </div>
-      </div>
+      <div className="px-6 py-4">
+        <Card className="overflow-hidden p-0">
+          <div className="border-b px-3">
+            <ViewTabs
+              views={[
+                { id: "all", label: `All (${workflows.length})` },
+                { id: "active", label: `Active (${count("active")})` },
+                { id: "paused", label: `Paused (${count("paused")})` },
+              ]}
+              active={status}
+              onSelect={(id) => setStatus(id as typeof status)}
+            />
+          </div>
+          <div className="flex min-h-14 flex-wrap items-center gap-2 border-b px-3 py-2">
+            <div className="relative w-64">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search workflows"
+                aria-label="Search workflows"
+                className="pl-8"
+              />
+            </div>
+          </div>
 
-      <div className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-3">
-        {isLoading ? (
-          <LoadingBlock label="Loading workflows…" />
-        ) : error ? (
-          <ErrorBlock error={error} />
-        ) : filteredWorkflows.length === 0 ? (
-          <p className="col-span-full py-8 text-center text-sm text-muted-foreground">
-            No workflows match &quot;{q}&quot;.
-          </p>
-        ) : (
-          <>
-            {filteredWorkflows.map((w) => {
-              const draft = w.versions.find((v) => v.status === "draft");
-              const published = w.versions.find((v) => v.version === w.currentVersion);
-              return (
-                <Card key={w.id} className="flex flex-col">
-                  <CardHeader className="pb-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <CardTitle className="text-sm">{w.name}</CardTitle>
-                      <Switch
-                        checked={w.status === "active"}
-                        disabled={isPending}
-                        onCheckedChange={(v) => {
-                          void mutate(
-                            () => updateWorkflow(w.id, { status: v ? "active" : "paused" }),
-                            v ? "Workflow activated" : "Workflow paused",
-                          );
-                        }}
-                      />
-                    </div>
-                    <p className="pt-1 text-xs text-muted-foreground">{w.description}</p>
-                  </CardHeader>
-                  <CardContent className="flex flex-1 flex-col gap-3">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <StatusBadge value={w.status} dot />
-                      <StatusBadge value={`V${w.currentVersion} published`} tone="info" />
-                      {draft && <StatusBadge value={`V${draft.version} draft`} tone="warning" />}
-                    </div>
-
-                    <div className="rounded-md border px-3 py-2 text-xs">
-                      <div className="text-muted-foreground">Trigger</div>
-                      <div className="pt-0.5 font-medium">{workflowTriggerLabel(w.trigger)}</div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                      <Metric label="Steps" value={String(published?.steps.length ?? 0)} />
-                      <Metric label="Active leads" value={String(w.activeLeads)} />
-                      <Metric label="Failures" value={String(w.failures)} />
-                    </div>
-
-                    <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-                      <span className="text-[11px] text-muted-foreground">
-                        {userName(w.ownerId)} · {relDay(w.updatedAt)}
-                      </span>
-                      <div className="flex gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            void mutate(() => duplicateWorkflow(w.id), "Workflow duplicated");
-                          }}
-                          aria-label="Duplicate workflow"
-                        >
-                          <Copy className="size-4" />
-                        </Button>
-                        <Button asChild size="sm" variant="outline">
-                          <Link
-                            to="/automations/workflows/$workflowId"
-                            params={{ workflowId: w.id }}
-                          >
-                            Edit steps
-                          </Link>
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setDeleteTarget(w)}
-                          aria-label="Delete workflow"
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-
-            <Card className="border-dashed">
-              <CardContent className="flex h-full flex-col justify-center gap-2 py-8 text-center">
-                <Bot className="mx-auto size-5 text-muted-foreground" />
-                <p className="text-sm font-medium">Managers own the automation</p>
-                <p className="text-xs text-muted-foreground">
-                  Add or reorder steps, change delays and swap templates here - no developer needs
-                  to touch code.
-                </p>
-              </CardContent>
-            </Card>
-          </>
-        )}
+          {isLoading ? (
+            <LoadingBlock label="Loading workflows…" />
+          ) : error ? (
+            <ErrorBlock error={error} />
+          ) : filteredWorkflows.length === 0 ? (
+            <ListEmptyState
+              icon={Bot}
+              title={workflows.length === 0 ? "No workflows yet" : "No workflows match."}
+              text="A workflow sends emails and WhatsApps, creates tasks and moves stages on a schedule, with no code."
+            >
+              {workflows.length === 0 && (
+                <Button size="sm" onClick={() => setCreateOpen(true)}>
+                  Create your first workflow
+                </Button>
+              )}
+            </ListEmptyState>
+          ) : (
+            <RecordTable
+              rows={filteredWorkflows}
+              columns={columns}
+              nameHeader="Workflow"
+              rowLabel={(w) => w.name}
+              name={(w) => (
+                <div className="min-w-48 max-w-80">
+                  <Link
+                    to="/automations/workflows/$workflowId"
+                    params={{ workflowId: w.id }}
+                    className="font-medium hover:underline"
+                  >
+                    {w.name}
+                  </Link>
+                  {w.description && (
+                    <div className="truncate text-xs text-muted-foreground">{w.description}</div>
+                  )}
+                </div>
+              )}
+              actions={(w) => (
+                <span className="flex justify-end gap-1">
+                  <Button asChild size="sm" variant="outline">
+                    <Link to="/automations/workflows/$workflowId" params={{ workflowId: w.id }}>
+                      Edit steps
+                    </Link>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      void mutate(() => duplicateWorkflow(w.id), "Workflow duplicated");
+                    }}
+                    aria-label="Duplicate workflow"
+                  >
+                    <Copy className="size-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setDeleteTarget(w)}
+                    aria-label="Delete workflow"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </span>
+              )}
+            />
+          )}
+        </Card>
       </div>
       <NewWorkflowDialog
         open={createOpen}
@@ -314,14 +361,5 @@ function NewWorkflowDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border py-2">
-      <div className="num text-sm font-semibold">{value}</div>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-    </div>
   );
 }

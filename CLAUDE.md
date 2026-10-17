@@ -198,6 +198,7 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
   14. Proposals list: counts per status and a multi-status filter (e.g. "in progress" = draft + uploaded + ready to send + revised); today it filters one status at a time, so the tabs show no counts.
   15. "Proposals awaiting decision" means two things: the dashboard counts sent + revision requested + revised, `GET /proposals/summary` counts sent only. The dashboard card opens the Sent tab, so its list can be shorter than the card.
   16. "Meetings today" on the dashboard leaves out cancelled/failed meetings; `GET /meetings?when=today` lists every status. A status filter on the meetings list (or one shared definition) would make the card and the Today tab agree.
+  17. Runs: no per-status counts (`GET /runs` filters one status at a time and returns only that total), so the Runs status tabs show no counts.
 
 ## Demo mode (2026-10-16)
 `cd Backend && npm run demo` -> http://127.0.0.1:8080, users admin@/sam@/priya@demo.local (password `demo`). Local PGlite + seed + fake Supabase Auth/Storage + API + dry-run worker + Vite, all in one process. Code lives in `Backend/demo/` (never built or shipped); guards and tests are described in `Backend/README.md`. No demo code in `Backend/src`.

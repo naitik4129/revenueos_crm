@@ -150,3 +150,37 @@ describe("WorkflowBuilderPage details editor", () => {
     expect(updateWorkflowMock).not.toHaveBeenCalled();
   });
 });
+
+describe("WorkflowBuilderPage step flow", () => {
+  const steps = [
+    { id: "s1", order: 0, delayDays: 0, action: "send_email", templateId: "t1", enabled: true },
+    { id: "s2", order: 1, delayDays: 2, action: "send_whatsapp", enabled: true },
+  ] as Workflow["versions"][number]["steps"];
+
+  it("marks a draft as not live, reads waits in words and offers add-step between steps", async () => {
+    storeState.current = {
+      ...(storeState.current as object),
+      workflows: [{ ...workflow, versions: [{ ...workflow.versions[0]!, steps }] }],
+    };
+    await renderBuilder();
+    expect(screen.getByRole("status")).toHaveTextContent("Draft V1 is not live");
+    expect(screen.getByText("Right after enrollment")).toBeInTheDocument();
+    expect(screen.getByText("Wait 2 days")).toBeInTheDocument();
+    expect(screen.getByText("Day 2")).toBeInTheDocument();
+    expect(screen.getByText("No Template")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Insert step before step 2" })).toBeInTheDocument();
+  });
+
+  it("marks the live version read-only, without insert buttons", async () => {
+    storeState.current = {
+      ...(storeState.current as object),
+      workflows: [
+        { ...workflow, versions: [{ ...workflow.versions[0]!, status: "published", steps }] },
+      ],
+    };
+    await renderBuilder();
+    expect(screen.getByRole("status")).toHaveTextContent("V1 is live");
+    expect(screen.queryByRole("button", { name: /Insert step/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit as new draft" })).toBeInTheDocument();
+  });
+});

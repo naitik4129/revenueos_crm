@@ -101,7 +101,7 @@ afterAll(() => {
 describe("TemplatesPage", () => {
   it("groups the variable picker as Contact / Company / Deal / Meeting / Date", async () => {
     await renderTemplatesPage();
-    fireEvent.click(screen.getByRole("button", { name: /new template/i }));
+    fireEvent.click(screen.getByRole("button", { name: /create template/i }));
     fireEvent.keyDown(screen.getByLabelText("Insert subject variable"), { key: "ArrowDown" });
     await screen.findByRole("option", { name: "First name" });
     const headings = [
@@ -126,7 +126,7 @@ describe("TemplatesPage", () => {
   ])("inserts %s into the email subject", async (label, token) => {
     await renderTemplatesPage();
 
-    fireEvent.click(screen.getByRole("button", { name: /new template/i }));
+    fireEvent.click(screen.getByRole("button", { name: /create template/i }));
 
     const subjectInput = screen.getByLabelText("Subject") as HTMLInputElement;
     fireEvent.change(subjectInput, { target: { value: "Hi " } });
@@ -223,7 +223,7 @@ it("converts HTML only after confirmation", async () => {
 
 it("inserts HTML variables at the cursor and confirms conversion when switching to WhatsApp", async () => {
   await renderTemplatesPage();
-  fireEvent.click(screen.getByRole("button", { name: /new template/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create template/i }));
   expect(screen.getByRole("tab", { name: "Visual" })).toHaveAttribute("aria-selected", "true");
   selectTab("HTML");
   const source = screen.getByLabelText("HTML source") as HTMLTextAreaElement;

@@ -1,7 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { ArrowDown, ArrowLeft, ArrowUp, Check, Pencil, Plus, Trash2, X, Zap } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRightLeft,
+  ArrowUp,
+  Check,
+  Clock,
+  ListChecks,
+  Mail,
+  MessageCircle,
+  OctagonX,
+  Pencil,
+  Phone,
+  Plus,
+  Trash2,
+  X,
+  Zap,
+  type LucideIcon,
+} from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +50,7 @@ import { label, workflowTriggerLabel } from "@/lib/labels";
 import { BackendError } from "@/lib/backend-client";
 import { messageFromError, useAutomations, useSession } from "@/store";
 import { stepsWithCumulativeDay } from "@/lib/workflow-timeline";
+import { cn } from "@/lib/utils";
 import {
   PIPELINE_STAGES,
   STEP_ACTIONS,
@@ -398,11 +417,17 @@ function Builder({ workflow }: { workflow: Workflow }) {
           </>
         }
       />
-      <div className="grid gap-4 p-6 lg:grid-cols-[1fr_300px]">
-        <div className="min-w-0 space-y-3">
+      <VersionBanner
+        version={version.version}
+        status={version.status}
+        live={version.version === workflow.currentVersion}
+        saving={editable && buffer.key === bufferKey && buffer.dirty}
+      />
+      <div className="grid gap-4 px-6 pb-6 lg:grid-cols-[1fr_300px]">
+        <div className="min-w-0">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Trigger</CardTitle>
+              <CardTitle className="text-sm">Starts when</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-wrap items-center gap-3">
               <div className="grid size-8 place-items-center rounded-md bg-primary/10 text-primary">
@@ -434,43 +459,59 @@ function Builder({ workflow }: { workflow: Workflow }) {
               </span>
             </CardContent>
           </Card>
-          {steps.map((step, index) => (
-            <div key={step.id} className="space-y-1">
-              {editable && (
-                <div className="flex justify-center">
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="size-6 rounded-full text-muted-foreground hover:text-foreground"
-                    aria-label={`Insert step before step ${index + 1}`}
-                    onClick={() => insertStepAt(index)}
-                  >
-                    <Plus className="size-3.5" />
-                  </Button>
-                </div>
-              )}
-              <Card className={step.enabled ? "" : "opacity-60"}>
-                <CardContent className="space-y-3 py-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="num grid size-6 place-items-center rounded-full bg-secondary text-xs font-semibold">
+          {steps.map((step, index) => {
+            const Icon = ACTION_ICON[step.action];
+            return (
+              <div key={step.id}>
+                <StepConnector
+                  first={index === 0}
+                  delayDays={step.delayDays}
+                  {...(editable
+                    ? {
+                        insertLabel: `Insert step before step ${index + 1}`,
+                        onInsert: () => insertStepAt(index),
+                      }
+                    : {})}
+                />
+                <Card className={cn("overflow-hidden", !step.enabled && "opacity-60")}>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-4 py-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="num grid size-6 shrink-0 place-items-center rounded-full bg-background text-xs font-semibold">
                         {index + 1}
+                      </span>
+                      <span
+                        className={cn(
+                          "grid size-7 shrink-0 place-items-center rounded-md",
+                          ACTION_TONE[step.action],
+                        )}
+                      >
+                        <Icon className="size-4" />
                       </span>
                       <span className="text-sm font-medium">{label(step.action)}</span>
                       {["send_email", "send_whatsapp"].includes(step.action) && (
-                        <StatusBadge value={store.templateName(step.templateId)} tone="muted" />
+                        <StatusBadge
+                          value={
+                            step.templateId ? store.templateName(step.templateId) : "No template"
+                          }
+                          tone={step.templateId ? "muted" : "danger"}
+                        />
                       )}
+                      <span className="text-xs text-muted-foreground">
+                        Day {dayByStepId.get(step.id) ?? 0}
+                      </span>
+                      {!step.enabled && <StatusBadge value="Skipped" tone="muted" />}
                     </div>
                     <div className="flex items-center gap-1">
                       <Switch
                         checked={step.enabled}
                         disabled={!editable}
+                        aria-label={`Step ${index + 1} enabled`}
                         onCheckedChange={(value) => updateStep(step.id, { enabled: value }, true)}
                       />
                       <Button
                         size="icon"
                         variant="ghost"
+                        aria-label={`Move step ${index + 1} up`}
                         disabled={!editable || index === 0}
                         onClick={() => move(index, -1)}
                       >
@@ -479,6 +520,7 @@ function Builder({ workflow }: { workflow: Workflow }) {
                       <Button
                         size="icon"
                         variant="ghost"
+                        aria-label={`Move step ${index + 1} down`}
                         disabled={!editable || index === steps.length - 1}
                         onClick={() => move(index, 1)}
                       >
@@ -487,6 +529,7 @@ function Builder({ workflow }: { workflow: Workflow }) {
                       <Button
                         size="icon"
                         variant="ghost"
+                        aria-label={`Delete step ${index + 1}`}
                         disabled={!editable}
                         onClick={() =>
                           setSteps(
@@ -499,9 +542,9 @@ function Builder({ workflow }: { workflow: Workflow }) {
                       </Button>
                     </div>
                   </div>
-                  <div className="grid gap-3 md:grid-cols-3">
+                  <CardContent className="grid gap-3 py-4 md:grid-cols-3">
                     <div>
-                      <Label className="mb-1.5 block text-xs">Day</Label>
+                      <Label className="mb-1.5 block text-xs">Day (from enrollment)</Label>
                       <Input
                         type="number"
                         min={0}
@@ -553,11 +596,12 @@ function Builder({ workflow }: { workflow: Workflow }) {
                       templates={store.templates}
                       onChange={(patch, immediate) => updateStep(step.id, patch, immediate)}
                     />
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          ))}
+                  </CardContent>
+                </Card>
+              </div>
+            );
+          })}
+          <div className="mx-auto h-4 w-px bg-border" />
           {editable ? (
             <Button variant="outline" className="w-full border-dashed" onClick={addStep}>
               <Plus className="mr-1 size-4" /> Add step
@@ -670,6 +714,110 @@ function Builder({ workflow }: { workflow: Workflow }) {
         disabled={store.isPending}
         onConfirm={forceDeleteWorkflow}
       />
+    </div>
+  );
+}
+
+const ACTION_ICON: Record<StepAction, LucideIcon> = {
+  send_email: Mail,
+  send_whatsapp: MessageCircle,
+  create_call_task: Phone,
+  create_follow_up_task: ListChecks,
+  change_lead_stage: ArrowRightLeft,
+  stop_workflow: OctagonX,
+};
+const ACTION_TONE: Record<StepAction, string> = {
+  send_email: "bg-info/10 text-info",
+  send_whatsapp: "bg-success/10 text-success",
+  create_call_task: "bg-primary/10 text-primary",
+  create_follow_up_task: "bg-primary/10 text-primary",
+  change_lead_stage: "bg-warning/15 text-warning-foreground",
+  stop_workflow: "bg-destructive/10 text-destructive",
+};
+
+/** "Wait 2 days" between two steps, with the insert button when the draft is editable. */
+function StepConnector({
+  first,
+  delayDays,
+  insertLabel,
+  onInsert,
+}: {
+  first: boolean;
+  delayDays: number;
+  insertLabel?: string;
+  onInsert?: () => void;
+}) {
+  const wait =
+    delayDays === 0
+      ? first
+        ? "Right after enrollment"
+        : "Straight after the previous step"
+      : `Wait ${delayDays} day${delayDays === 1 ? "" : "s"}`;
+  return (
+    <div className="flex flex-col items-center py-1">
+      <div className="h-3 w-px bg-border" />
+      <div className="flex items-center gap-1.5 rounded-full border bg-background px-2.5 py-0.5 text-xs text-muted-foreground">
+        <Clock className="size-3" /> {wait}
+        {onInsert && (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="-mr-1.5 size-5 rounded-full text-muted-foreground hover:text-foreground"
+            aria-label={insertLabel}
+            title="Add a step here"
+            onClick={onInsert}
+          >
+            <Plus className="size-3.5" />
+          </Button>
+        )}
+      </div>
+      <div className="h-3 w-px bg-border" />
+    </div>
+  );
+}
+
+/** Which version is on screen and whether it is live, a draft (autosaving) or an old one. */
+function VersionBanner({
+  version,
+  status,
+  live,
+  saving,
+}: {
+  version: number;
+  status: "draft" | "published" | "previous";
+  live: boolean;
+  saving: boolean;
+}) {
+  const [tone, text] =
+    status === "draft"
+      ? [
+          "border-warning/40 bg-warning/10",
+          `Draft V${version} is not live. Edits save automatically; publish to use them for new enrollments.`,
+        ]
+      : live
+        ? [
+            "border-success/40 bg-success/10",
+            `V${version} is live. Published versions are read-only; edit as a new draft to change it.`,
+          ]
+        : ["bg-muted", `V${version} is an older version (read-only).`];
+  return (
+    <div className="px-6 py-3">
+      <div
+        role="status"
+        className={cn(
+          "flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-sm",
+          tone,
+        )}
+      >
+        <StatusBadge value={status === "draft" ? "Draft" : live ? "Live" : "Previous"} />
+        <span className="min-w-0 flex-1">{text}</span>
+        {status === "draft" && (
+          <span className="text-xs text-muted-foreground">
+            {saving ? "Saving…" : "All changes saved"}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
