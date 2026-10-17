@@ -1,11 +1,12 @@
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle } from "lucide-react";
 import { Avatar } from "@/components/common/record-parts";
-import { isOverdue, relDay } from "@/lib/format";
+import { isOverdue } from "@/lib/format";
 import { label } from "@/lib/labels";
-import { cn } from "@/lib/utils";
+import { NATIVE_SELECT, cn } from "@/lib/utils";
 import { PIPELINE_STAGES, type Deal, type PipelineStage } from "@/types";
 import { DEAL_DRAG_TYPE } from "./board";
+import { RelTime } from "@/components/common/list-controls";
 
 /**
  * One open deal on the board. Moves by drag and drop onto another column, or with the stage
@@ -50,7 +51,7 @@ export function DealCard({
       <div className={next && isOverdue(next.dueAt) ? "text-destructive" : undefined}>
         {next ? (
           <>
-            {next.title} · {relDay(next.dueAt)}
+            {next.title} · <RelTime iso={next.dueAt} />
           </>
         ) : (
           <span className="inline-flex items-center gap-1 text-warning-foreground">
@@ -63,14 +64,16 @@ export function DealCard({
           <Avatar name={deal.ownerName ?? "?"} className="size-5 text-[9px]" />
           <span className="truncate">{deal.ownerName ?? "Unassigned"}</span>
         </span>
-        <span className="shrink-0">{relDay(deal.lastActivityAt)}</span>
+        <span className="shrink-0">
+          <RelTime iso={deal.lastActivityAt} />
+        </span>
       </div>
       <select
         aria-label={`Stage for ${deal.contactName}`}
         value={stage}
         disabled={pending}
         onChange={(e) => onMove(e.target.value as PipelineStage)}
-        className="h-7 w-full rounded border bg-background px-1.5 text-xs"
+        className={cn(NATIVE_SELECT, "h-7 w-full px-1.5 text-xs")}
       >
         {PIPELINE_STAGES.map((s) => (
           <option key={s} value={s}>

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { fmtDateTime, relShort } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
   Select,
@@ -285,7 +286,9 @@ export function RecordTable<T extends { id: string }>({
                     />
                   </td>
                 )}
-                <td className="px-3 py-1.5">{name(row)}</td>
+                <td className="px-3 py-1.5">
+                  <div className="min-w-40">{name(row)}</div>
+                </td>
                 {columns.map((col) => (
                   <td
                     key={col.id}
@@ -311,17 +314,25 @@ export function ListEmptyState({
   icon: Icon,
   title,
   text,
+  compact,
   children,
 }: {
   icon: LucideIcon;
   title: string;
   text: string;
+  /** Smaller, for cards (dashboard) instead of whole lists. */
+  compact?: boolean;
   children?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center px-6 py-16 text-center">
-      <div className="grid size-12 place-items-center rounded-full bg-primary/10 text-primary">
-        <Icon className="size-6" />
+    <div className={cn("flex flex-col items-center px-6 text-center", compact ? "py-6" : "py-16")}>
+      <div
+        className={cn(
+          "grid place-items-center rounded-full bg-primary/10 text-primary",
+          compact ? "size-9" : "size-12",
+        )}
+      >
+        <Icon className={compact ? "size-4" : "size-6"} />
       </div>
       <h2 className="mt-3 text-base font-semibold">{title}</h2>
       <p className="mt-1 max-w-sm text-sm text-muted-foreground">{text}</p>
@@ -365,4 +376,10 @@ export function Pager({
       </Button>
     </div>
   );
+}
+
+/** "Today, 11:33 am" / "3d ago", with the full date and time on hover. */
+export function RelTime({ iso }: { iso?: string | undefined }) {
+  if (!iso) return null;
+  return <span title={fmtDateTime(iso)}>{relShort(iso)}</span>;
 }

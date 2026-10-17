@@ -457,7 +457,7 @@ function TemplateDialog({
     >
       <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
         <DialogHeader className="shrink-0 border-b px-6 py-4">
-          <DialogTitle>{template ? "Edit template" : "New template"}</DialogTitle>
+          <DialogTitle>{template ? "Edit template" : "Create template"}</DialogTitle>
         </DialogHeader>
         {/* A regular block owns scrolling: fieldset's anonymous layout box does not
             reliably shrink/scroll as a flex child. Keep it inside for disabled semantics. */}

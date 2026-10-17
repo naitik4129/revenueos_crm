@@ -3,7 +3,6 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   ArrowDown,
-  ArrowLeft,
   ArrowRightLeft,
   ArrowUp,
   Check,
@@ -22,7 +21,8 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { BackLink, PanelHeader } from "@/components/common/record-parts";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -65,13 +65,13 @@ export function WorkflowBuilderPage({ workflowId }: { workflowId: string }) {
   const store = useAutomations();
   if (store.isLoading)
     return (
-      <div className="p-6">
+      <div className="px-6 py-4">
         <LoadingBlock label="Loading workflow…" />
       </div>
     );
   if (store.error)
     return (
-      <div className="p-6">
+      <div className="px-6 py-4">
         <ErrorBlock error={store.error} />
       </div>
     );
@@ -160,6 +160,8 @@ function Builder({ workflow }: { workflow: Workflow }) {
   // switched to another version and edited that one too.
   const latestSnapshotByKeyRef = useRef(new Map<string, StepSaveSnapshot>());
   const skipNextDebounceRef = useRef(false);
+  // The last failed save's message, shown in the version banner until a save succeeds.
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const enqueueSave = (snapshot: StepSaveSnapshot): Promise<void> => {
     const key = `${snapshot.workflowId}:${snapshot.versionNumber}`;
@@ -174,8 +176,10 @@ function Builder({ workflow }: { workflow: Workflow }) {
         );
       } catch (error) {
         toast.error(messageFromError(error));
+        setSaveError(messageFromError(error));
         return;
       }
+      setSaveError(null);
       setBuffer((current) =>
         current.key === key && latestSnapshotByKeyRef.current.get(key) === snapshot
           ? { ...current, dirty: false }
@@ -369,6 +373,7 @@ function Builder({ workflow }: { workflow: Workflow }) {
 
   return (
     <div className="pb-10">
+      <BackLink to="/automations">Automations</BackLink>
       <PageHeader
         title={workflow.name}
         heading={
@@ -388,11 +393,6 @@ function Builder({ workflow }: { workflow: Workflow }) {
         }
         actions={
           <>
-            <Button asChild size="sm" variant="ghost">
-              <Link to="/automations">
-                <ArrowLeft className="mr-1 size-4" /> Automations
-              </Link>
-            </Button>
             {editable ? (
               <>
                 <Button
@@ -422,14 +422,13 @@ function Builder({ workflow }: { workflow: Workflow }) {
         status={version.status}
         live={version.version === workflow.currentVersion}
         saving={editable && buffer.key === bufferKey && buffer.dirty}
+        error={editable ? saveError : null}
       />
       <div className="grid gap-4 px-6 pb-6 lg:grid-cols-[1fr_300px]">
         <div className="min-w-0">
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Starts when</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-3">
+            <PanelHeader title="Starts when" />
+            <CardContent className="flex flex-wrap items-center gap-3 p-4">
               <div className="grid size-8 place-items-center rounded-md bg-primary/10 text-primary">
                 <Zap className="size-4" />
               </div>
@@ -614,10 +613,8 @@ function Builder({ workflow }: { workflow: Workflow }) {
         </div>
         <div className="space-y-4">
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Versions</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
+            <PanelHeader title="Versions" />
+            <CardContent className="space-y-2 p-4">
               {workflow.versions
                 .slice()
                 .sort((a, b) => b.version - a.version)
@@ -639,10 +636,8 @@ function Builder({ workflow }: { workflow: Workflow }) {
             </CardContent>
           </Card>
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Workflow</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
+            <PanelHeader title="Workflow" />
+            <CardContent className="space-y-2 p-4">
               <Row label="Status" value={label(workflow.status)} />
               <Row label="Owner" value={userName(workflow.ownerId)} />
               <Row label="Active leads" value={String(workflow.activeLeads)} />
@@ -783,11 +778,13 @@ function VersionBanner({
   status,
   live,
   saving,
+  error,
 }: {
   version: number;
   status: "draft" | "published" | "previous";
   live: boolean;
   saving: boolean;
+  error: string | null;
 }) {
   const [tone, text] =
     status === "draft"
@@ -813,8 +810,13 @@ function VersionBanner({
         <StatusBadge value={status === "draft" ? "Draft" : live ? "Live" : "Previous"} />
         <span className="min-w-0 flex-1">{text}</span>
         {status === "draft" && (
-          <span className="text-xs text-muted-foreground">
-            {saving ? "Saving…" : "All changes saved"}
+          <span
+            className={cn(
+              "basis-full text-xs sm:basis-auto",
+              error ? "font-medium text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {error ? `Not saved: ${error}` : saving ? "Saving…" : "All changes saved"}
           </span>
         )}
       </div>

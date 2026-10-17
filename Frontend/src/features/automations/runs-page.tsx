@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Search, Workflow } from "lucide-react";
+import { CalendarClock, Search, Workflow } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { AutomationTabs } from "@/features/automations/automation-tabs";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
+  RelTime,
   ListEmptyState,
   Pager,
   RecordTable,
@@ -15,12 +16,12 @@ import {
 } from "@/components/common/list-controls";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
-import { relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { findCurrentStep } from "@/lib/workflow-timeline";
 import { messageFromError, useAutomations, useRuns, useScheduledActions } from "@/store";
 import { DealLink } from "@/features/deals/deal-link";
 import { RUN_STATUSES, type Run, type ScheduledAction } from "@/types";
+import { countLabel } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 const ALL = "all";
@@ -84,16 +85,16 @@ export function RunsPage() {
       },
     },
     { id: "status", label: "Status", cell: (run) => <StatusBadge value={run.status} /> },
-    { id: "started", label: "Started", cell: (run) => relDay(run.startedAt) },
+    { id: "started", label: "Started", cell: (run) => <RelTime iso={run.startedAt} /> },
     {
       id: "next",
       label: "Next action",
-      cell: (run) => (run.nextRunAt ? relDay(run.nextRunAt) : undefined),
+      cell: (run) => (run.nextRunAt ? <RelTime iso={run.nextRunAt} /> : undefined),
     },
   ];
   const actionColumns: ListColumn<ScheduledAction>[] = [
     { id: "action", label: "Action", cell: (a) => label(a.actionType) },
-    { id: "when", label: "Scheduled for", cell: (a) => relDay(a.scheduledFor) },
+    { id: "when", label: "Scheduled for", cell: (a) => <RelTime iso={a.scheduledFor} /> },
     { id: "status", label: "Status", cell: (a) => <StatusBadge value={a.status} /> },
     {
       id: "attempts",
@@ -110,6 +111,7 @@ export function RunsPage() {
       <PageHeader
         title="Automations"
         description="Runs and scheduled actions are the backend worker's live state."
+        count={runs.isLoading ? undefined : countLabel(runTotal, "run")}
         tabs={<AutomationTabs />}
       />
 
@@ -119,7 +121,7 @@ export function RunsPage() {
             <ViewTabs
               views={[
                 { id: ALL, label: "All runs" },
-                ...RUN_STATUSES.map((s) => ({ id: s, label: label(s) })),
+                ...RUN_STATUSES.map((s) => ({ id: s, label: s[0]!.toUpperCase() + s.slice(1) })),
               ]}
               active={status}
               onSelect={(id) => {
@@ -143,9 +145,6 @@ export function RunsPage() {
                 className="pl-8"
               />
             </div>
-            <span className="ml-auto text-xs text-muted-foreground">
-              {runTotal} {search || status !== ALL ? "matching " : ""}run{runTotal === 1 ? "" : "s"}
-            </span>
           </div>
 
           {runs.isLoading ? (
@@ -218,9 +217,12 @@ export function RunsPage() {
           ) : actions.error ? (
             <ErrorBlock error={actions.error} />
           ) : actionRows.length === 0 ? (
-            <p className="px-3 py-8 text-center text-sm text-muted-foreground">
-              {search ? `No scheduled actions match "${search}".` : "No scheduled actions."}
-            </p>
+            <ListEmptyState
+              compact
+              icon={CalendarClock}
+              title={search ? `No scheduled actions match "${search}".` : "No scheduled actions."}
+              text="Sends and tasks a workflow has queued for later show here."
+            />
           ) : (
             <RecordTable
               rows={actionRows}

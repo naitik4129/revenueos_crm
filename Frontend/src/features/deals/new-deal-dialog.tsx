@@ -42,7 +42,7 @@ export function NewDealDialog({ onOpenChange }: { onOpenChange: (open: boolean) 
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>New deal</DialogTitle>
+          <DialogTitle>Create deal</DialogTitle>
           <DialogDescription>
             A contact can have one open deal at a time. The deal starts in New with a first call as
             its next action, and the contact becomes Qualified.

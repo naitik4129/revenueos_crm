@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { toIsoFromIst } from "./dates";
+import { countLabel, relShort } from "./format";
 import { label, timelineTitle, workflowTriggerLabel } from "./labels";
 
 describe("presentation helpers", () => {
@@ -39,5 +40,19 @@ describe("timelineTitle", () => {
       "Deal stage changed to Proposal Sent",
     );
     expect(timelineTitle("email contactability: bounced")).toBe("Email marked bounced");
+  });
+});
+
+describe("list labels", () => {
+  it("counts with the right plural", () => {
+    expect(countLabel(1, "contact")).toBe("1 contact");
+    expect(countLabel(1200, "company", "companies")).toBe("1,200 companies");
+  });
+
+  it("shortens older dates to days ago and keeps today/tomorrow wording", () => {
+    const day = 86_400_000;
+    expect(relShort(new Date(Date.now() - 5 * day).toISOString())).toBe("5d ago");
+    expect(relShort(new Date().toISOString())).toMatch(/^Today, /);
+    expect(relShort(undefined)).toBe("-");
   });
 });

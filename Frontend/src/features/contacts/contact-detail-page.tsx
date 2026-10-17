@@ -48,13 +48,13 @@ export function ContactDetailPage({ contactId }: { contactId: string }) {
   const contact = detail.contact.data;
   if (detail.contact.isLoading)
     return (
-      <div className="p-6">
+      <div className="px-6 py-4">
         <LoadingBlock label="Loading contact…" />
       </div>
     );
   if (!contact)
     return (
-      <div className="p-6">
+      <div className="px-6 py-4">
         <ErrorBlock error={detail.contact.error ?? new Error("Contact not found.")} />
       </div>
     );
@@ -135,7 +135,7 @@ export function ContactDetailPage({ contactId }: { contactId: string }) {
                 </div>
               </div>
               <div className="mt-3 flex flex-wrap gap-1.5">
-                <StatusBadge value={contact.lifecycleStage} tone="primary" />
+                <StatusBadge value={contact.lifecycleStage} tone="neutral" />
                 <StatusBadge value={contact.status} />
               </div>
 

@@ -131,7 +131,7 @@ export function DealJourneyCard({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm">Prepare, send, or track the proposal.</p>
             <Button size="sm" variant="outline" onClick={onProposalClick}>
-              <FileText className="mr-1 size-4" /> New proposal
+              <FileText className="mr-1 size-4" /> Create proposal
             </Button>
           </div>
         )}

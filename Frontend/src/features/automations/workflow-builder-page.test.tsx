@@ -171,6 +171,23 @@ describe("WorkflowBuilderPage step flow", () => {
     expect(screen.getByRole("button", { name: "Insert step before step 2" })).toBeInTheDocument();
   });
 
+  it("says the draft is not saved when the server refuses the steps", async () => {
+    storeState.current = {
+      ...(storeState.current as object),
+      workflows: [{ ...workflow, versions: [{ ...workflow.versions[0]!, steps }] }],
+      updateDraftSteps: vi
+        .fn()
+        .mockRejectedValue(new Error("Step 3 (send_email) requires a template.")),
+    };
+    await renderBuilder();
+    fireEvent.click(screen.getByRole("button", { name: "Insert step before step 2" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Not saved: Step 3 (send_email) requires a template.",
+      ),
+    );
+  });
+
   it("marks the live version read-only, without insert buttons", async () => {
     storeState.current = {
       ...(storeState.current as object),

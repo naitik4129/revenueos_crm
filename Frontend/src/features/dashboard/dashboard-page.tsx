@@ -4,17 +4,18 @@ import {
   AlertTriangle,
   CalendarDays,
   CheckCircle2,
-  ChevronRight,
   FileText,
   ListChecks,
   Target,
-  type LucideIcon,
+  Handshake,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Panel } from "@/components/common/record-parts";
+import { Panel, StatCard } from "@/components/common/record-parts";
+import { ListEmptyState } from "@/components/common/list-controls";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { backend } from "@/lib/backend-client";
@@ -31,13 +32,13 @@ export function DashboardPage() {
   const { currentUser } = useSession();
   if (isLoading)
     return (
-      <div className="p-6">
+      <div className="px-6 py-4">
         <LoadingBlock label="Loading dashboard…" />
       </div>
     );
   if (error || !summary)
     return (
-      <div className="p-6">
+      <div className="px-6 py-4">
         <ErrorBlock error={error ?? new Error("Dashboard data is unavailable.")} />
       </div>
     );
@@ -56,12 +57,18 @@ export function DashboardPage() {
         description={`Workspace totals for ${currentWorkspace?.name ?? "this workspace"} · today, this week and this month (India time).`}
       />
       <div className="space-y-4 px-6 py-4">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
           <Link to="/tasks" search={{ view: "today" }} className={CARD_LINK}>
-            <StatCard icon={ListChecks} value={summary.tasks.dueToday} label="Tasks due today" />
+            <StatCard
+              linked
+              icon={ListChecks}
+              value={summary.tasks.dueToday}
+              label="Tasks due today"
+            />
           </Link>
           <Link to="/tasks" search={{ view: "overdue" }} className={CARD_LINK}>
             <StatCard
+              linked
               icon={AlertTriangle}
               value={summary.tasks.overdue}
               label="Overdue tasks"
@@ -69,10 +76,16 @@ export function DashboardPage() {
             />
           </Link>
           <Link to="/meetings" search={{ view: "today" }} className={CARD_LINK}>
-            <StatCard icon={CalendarDays} value={summary.meetingsToday} label="Meetings today" />
+            <StatCard
+              linked
+              icon={CalendarDays}
+              value={summary.meetingsToday}
+              label="Meetings today"
+            />
           </Link>
           <Link to="/proposals" search={{ view: "sent" }} className={CARD_LINK}>
             <StatCard
+              linked
               icon={FileText}
               value={summary.proposalsAwaitingDecision}
               label="Proposals awaiting decision"
@@ -80,6 +93,7 @@ export function DashboardPage() {
           </Link>
           <Link to="/deals" search={{ view: "noNext" }} className={CARD_LINK}>
             <StatCard
+              linked
               icon={Target}
               value={summary.openDealsMissingNextAction}
               label="Open deals with no next action"
@@ -155,44 +169,6 @@ export function DashboardPage() {
 const CARD_LINK =
   "group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-/** A KPI tile; the caller wraps it in a link to the filtered list. */
-function StatCard({
-  icon: Icon,
-  value,
-  label: text,
-  alert,
-}: {
-  icon: LucideIcon;
-  value: number;
-  label: string;
-  alert?: boolean;
-}) {
-  return (
-    <Card
-      className={cn(
-        "h-full transition-colors group-hover:border-primary/50",
-        alert && "border-destructive/40",
-      )}
-    >
-      <CardContent className="flex items-center gap-3 px-4 py-3">
-        <div
-          className={cn(
-            "grid size-9 shrink-0 place-items-center rounded-md",
-            alert ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary",
-          )}
-        >
-          <Icon className="size-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="num text-2xl font-semibold leading-none">{value}</div>
-          <div className="pt-1 text-xs text-muted-foreground">{text}</div>
-        </div>
-        <ChevronRight className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-      </CardContent>
-    </Card>
-  );
-}
-
 /** Horizontal bars as a share of `total` (not of the largest bar), with count and percent. */
 function Bars({
   items,
@@ -255,12 +231,11 @@ function Stats({ heading, items }: { heading: string; items: [string, number][] 
 
 function Empty({ text, to, cta }: { text: string; to: "/contacts" | "/deals"; cta: string }) {
   return (
-    <div className="py-6 text-center text-sm text-muted-foreground">
-      <p>{text}</p>
-      <Link to={to} className="mt-1 inline-block text-primary hover:underline">
+    <ListEmptyState compact icon={to === "/contacts" ? Users : Handshake} title={text} text="">
+      <Link to={to} className="text-sm text-primary hover:underline">
         {cta}
       </Link>
-    </div>
+    </ListEmptyState>
   );
 }
 
@@ -305,7 +280,7 @@ function Queue({ queue }: { queue: DashboardSummary["todaysQueue"] }) {
       ) : (
         <ul className="-my-2 divide-y">
           {queue.map((task) => (
-            <li key={task.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+            <li key={task.id} className="flex items-center gap-3 py-2">
               <span className="num w-16 shrink-0 text-xs text-muted-foreground">
                 {fmtTime(task.dueAt)}
               </span>
@@ -333,7 +308,9 @@ function Queue({ queue }: { queue: DashboardSummary["todaysQueue"] }) {
                   )}
                 </div>
               </div>
-              <StatusBadge value={task.type} tone="neutral" />
+              <span className="hidden sm:inline-flex">
+                <StatusBadge value={task.type} tone="neutral" />
+              </span>
               {doneOnDeal(task) ? (
                 <Button size="sm" variant="outline" asChild>
                   <Link to="/deals/$dealId" params={{ dealId: task.dealId! }}>

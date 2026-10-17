@@ -26,6 +26,7 @@ import { messageFromError, useAutomations, useCrmMutation } from "@/store";
 import { LEAD_LOSS_REASONS, type LeadLossReason, type Proposal } from "@/types";
 import { ErrorNotice } from "@/features/contacts/contact-dialogs";
 import { DealPicker } from "@/features/contacts/pickers";
+import { NATIVE_SELECT, cn } from "@/lib/utils";
 
 const DOCUMENT_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp";
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
@@ -107,7 +108,7 @@ export function NewProposalDialog({
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>New proposal</DialogTitle>
+          <DialogTitle>Create proposal</DialogTitle>
           <DialogDescription>
             Upload the document now or later. Send it once it has a document.
           </DialogDescription>
@@ -328,7 +329,7 @@ export function LossReasonDialog({
               aria-label="Loss reason"
               value={reason}
               onChange={(e) => setReason(e.target.value as LeadLossReason)}
-              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+              className={cn(NATIVE_SELECT, "h-9 w-full px-2 text-sm")}
             >
               <option value="">Choose a reason</option>
               {LEAD_LOSS_REASONS.map((r) => (

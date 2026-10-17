@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { ChevronLeft, Copy, type LucideIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { initials } from "@/lib/format";
@@ -13,7 +13,7 @@ export function BackLink({
   to,
   children,
 }: {
-  to: "/contacts" | "/companies" | "/deals";
+  to: "/contacts" | "/companies" | "/deals" | "/automations";
   children: ReactNode;
 }) {
   return (
@@ -54,20 +54,85 @@ export function Avatar({
 /** A titled card in the record page's side columns. */
 export function Panel({
   title,
+  icon,
   action,
   children,
 }: {
   title: string;
+  icon?: LucideIcon;
   action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <Card>
-      <div className="flex min-h-11 items-center justify-between border-b px-4 py-1.5">
-        <h2 className="text-sm font-semibold">{title}</h2>
-        {action}
-      </div>
+      <PanelHeader title={title} icon={icon} action={action} />
       <CardContent className="p-4">{children}</CardContent>
+    </Card>
+  );
+}
+
+/** The compact card header: title (with an optional icon) and an action on the right. */
+export function PanelHeader({
+  title,
+  icon: Icon,
+  action,
+}: {
+  title: string;
+  icon?: LucideIcon | undefined;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex min-h-11 items-center justify-between gap-2 border-b px-4 py-1.5">
+      <h2 className="flex items-center gap-2 text-sm font-semibold">
+        {Icon && <Icon className="size-4 text-muted-foreground" />}
+        {title}
+      </h2>
+      {action}
+    </div>
+  );
+}
+
+/** KPI tile: icon, big number, label. Wrap it in a link to make it open a list. */
+export function StatCard({
+  icon: Icon,
+  value,
+  label: text,
+  alert,
+  linked,
+}: {
+  icon: LucideIcon;
+  value: ReactNode;
+  label: string;
+  alert?: boolean;
+  /** Shows the hover arrow; set when the card is inside a link. */
+  linked?: boolean;
+}) {
+  return (
+    <Card
+      className={cn(
+        "h-full transition-colors",
+        linked && "group-hover:border-primary/50",
+        alert && "border-destructive/40",
+      )}
+    >
+      <CardContent className="flex items-center gap-3 px-4 py-3">
+        <div
+          className={cn(
+            // Hidden on phones, where two cards share a row and the label needs the width.
+            "hidden size-9 shrink-0 place-items-center rounded-md sm:grid",
+            alert ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary",
+          )}
+        >
+          <Icon className="size-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="num text-2xl font-semibold leading-none">{value}</div>
+          <div className="pt-1 text-xs text-muted-foreground">{text}</div>
+        </div>
+        {linked && (
+          <ChevronRight className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        )}
+      </CardContent>
     </Card>
   );
 }

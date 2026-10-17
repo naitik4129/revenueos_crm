@@ -34,13 +34,13 @@ export function CompanyDetailPage({ companyId }: { companyId: string }) {
   const company = detail.company.data;
   if (detail.company.isLoading)
     return (
-      <div className="p-6">
+      <div className="px-6 py-4">
         <LoadingBlock label="Loading company…" />
       </div>
     );
   if (!company)
     return (
-      <div className="p-6">
+      <div className="px-6 py-4">
         <ErrorBlock error={detail.company.error ?? new Error("Company not found.")} />
       </div>
     );

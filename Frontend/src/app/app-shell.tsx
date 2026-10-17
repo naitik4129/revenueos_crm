@@ -438,12 +438,16 @@ function NoWorkspace({ isAdmin, onCreate }: { isAdmin: boolean; onCreate: () => 
 
 export function PageHeader({
   title,
+  count,
   description,
   actions,
   tabs,
   heading,
 }: {
   title: string;
+  /** "29 contacts" under a list page's title; always shown. */
+  count?: string | undefined;
+  /** Help text; hidden on phones, where it pushes the content down. */
   description?: string | undefined;
   actions?: ReactNode;
   tabs?: ReactNode;
@@ -455,7 +459,10 @@ export function PageHeader({
         {heading ?? (
           <div className="min-w-0">
             <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-            {description && <p className="text-sm text-muted-foreground">{description}</p>}
+            {count && <p className="text-sm text-muted-foreground">{count}</p>}
+            {description && (
+              <p className="hidden text-sm text-muted-foreground sm:block">{description}</p>
+            )}
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2">{actions}</div>

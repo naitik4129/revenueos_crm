@@ -6,6 +6,7 @@ import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
+  RelTime,
   BulkBar,
   ColumnChooser,
   FilterSelect,
@@ -21,7 +22,7 @@ import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { StatusBadge } from "@/components/common/status-badge";
 import { backend, type DealFilters } from "@/lib/backend-client";
 import { downloadCsv } from "@/lib/csv";
-import { fmtDate, isOverdue, relDay } from "@/lib/format";
+import { fmtDate, isOverdue } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { useBulkAssignOwner } from "@/lib/use-bulk-assign";
 import { useStoredColumns } from "@/lib/use-stored-columns";
@@ -31,6 +32,7 @@ import { DEAL_OUTCOMES, type Deal, type DealOutcome, type PipelineStage } from "
 import { DEAL_DRAG_TYPE, groupDealsByStage } from "./board";
 import { DealCard } from "./deal-card";
 import { NewDealDialog } from "./new-deal-dialog";
+import { countLabel } from "@/lib/format";
 
 const ALL = "all";
 // The backend's page limit; the board shows open deals only (a few hundred per client).
@@ -59,6 +61,8 @@ export function DealsPage({ initialView }: { initialView?: string | undefined } 
     () => VIEWS.find((v) => v.id === initialView)?.filters(currentUser?.id) ?? NO_FILTERS,
   );
   const [newOpen, setNewOpen] = useState(false);
+  // The board and the list each load their own page; they report its total for the header.
+  const [total, setTotal] = useState<number>();
   const query: DealFilters = {
     search: search || undefined,
     ownerId: filters.owner === ALL ? undefined : filters.owner,
@@ -92,10 +96,10 @@ export function DealsPage({ initialView }: { initialView?: string | undefined } 
     <div className="pb-10">
       <PageHeader
         title="Deals"
-        description={
-          view === "board"
-            ? "Open deals by stage. Drag a card, or use its stage menu, to move it."
-            : "Every deal, any outcome."
+        count={
+          total === undefined
+            ? undefined
+            : countLabel(total, view === "board" ? "open deal" : "deal")
         }
         actions={
           <>
@@ -132,9 +136,9 @@ export function DealsPage({ initialView }: { initialView?: string | undefined } 
 
       <div className="px-6 py-4">
         {view === "board" ? (
-          <Board query={query} toolbar={sharedFilters} />
+          <Board query={query} toolbar={sharedFilters} onTotal={setTotal} />
         ) : (
-          <DealList query={query} toolbar={sharedFilters} />
+          <DealList query={query} toolbar={sharedFilters} onTotal={setTotal} />
         )}
       </div>
     </div>
@@ -147,8 +151,17 @@ function Toolbar({ children }: { children: ReactNode }) {
   );
 }
 
-function Board({ query, toolbar }: { query: DealFilters; toolbar: ReactNode }) {
+function Board({
+  query,
+  toolbar,
+  onTotal,
+}: {
+  query: DealFilters;
+  toolbar: ReactNode;
+  onTotal: (total: number | undefined) => void;
+}) {
   const { data, isLoading, error } = useDeals({ ...query, outcome: "open", limit: BOARD_LIMIT });
+  useEffect(() => onTotal(data?.total), [data?.total, onTotal]);
   const [pending, setPending] = useState<Partial<Record<string, PipelineStage>>>({});
   const [dropTarget, setDropTarget] = useState<PipelineStage | null>(null);
   const update = useCrmMutation(({ id, stage }: { id: string; stage: PipelineStage }) =>
@@ -176,12 +189,11 @@ function Board({ query, toolbar }: { query: DealFilters; toolbar: ReactNode }) {
       <Card className="overflow-hidden p-0">
         <Toolbar>
           {toolbar}
-          {data && (
-            <span className="ml-auto text-xs text-muted-foreground">
-              {data.total.toLocaleString()} open deal{data.total === 1 ? "" : "s"}
-              {data.total > BOARD_LIMIT && ` (showing ${BOARD_LIMIT}; narrow with search)`}
-            </span>
-          )}
+          <span className="ml-auto text-xs text-muted-foreground">
+            {data && data.total > BOARD_LIMIT
+              ? `Showing ${BOARD_LIMIT} of ${data.total}; narrow with search.`
+              : "Drag a card, or use its stage menu, to move it."}
+          </span>
         </Toolbar>
       </Card>
 
@@ -265,11 +277,11 @@ const COLUMNS: ListColumn<Deal>[] = [
     cell: (d) =>
       d.nextAction && (
         <span className={isOverdue(d.nextAction.dueAt) ? "text-destructive" : undefined}>
-          {d.nextAction.title} · {relDay(d.nextAction.dueAt)}
+          {d.nextAction.title} · <RelTime iso={d.nextAction.dueAt} />
         </span>
       ),
   },
-  { id: "lastActivity", label: "Last activity", cell: (d) => relDay(d.lastActivityAt) },
+  { id: "lastActivity", label: "Last activity", cell: (d) => <RelTime iso={d.lastActivityAt} /> },
   { id: "service", label: "Service interest", cell: (d) => d.serviceInterest },
   { id: "automation", label: "Automation", cell: (d) => label(d.automationMode) },
   {
@@ -282,7 +294,15 @@ const COLUMNS: ListColumn<Deal>[] = [
 ];
 const DEFAULT_COLUMNS = ["company", "stage", "outcome", "owner", "nextAction", "lastActivity"];
 
-function DealList({ query, toolbar }: { query: DealFilters; toolbar: ReactNode }) {
+function DealList({
+  query,
+  toolbar,
+  onTotal,
+}: {
+  query: DealFilters;
+  toolbar: ReactNode;
+  onTotal: (total: number | undefined) => void;
+}) {
   const { users } = useSession();
   const [outcome, setOutcome] = useState(ALL);
   const [offset, setOffset] = useState(0);
@@ -305,6 +325,7 @@ function DealList({ query, toolbar }: { query: DealFilters; toolbar: ReactNode }
   });
   const deals = data?.data ?? [];
   const total = data?.total ?? 0;
+  useEffect(() => onTotal(data?.total), [data?.total, onTotal]);
 
   const exportSelected = () =>
     downloadCsv("deals.csv", [

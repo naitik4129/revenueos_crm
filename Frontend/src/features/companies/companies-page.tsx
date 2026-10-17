@@ -26,6 +26,7 @@ import { useStoredColumns } from "@/lib/use-stored-columns";
 import { useCompanies, useIndustries, useSession } from "@/store";
 import type { Company } from "@/types";
 import { CompanyFormDialog } from "./company-form-dialog";
+import { countLabel } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 const ALL = "all";
@@ -134,9 +135,7 @@ export function CompaniesPage() {
     <div className="pb-10">
       <PageHeader
         title="Companies"
-        description={
-          isLoading ? undefined : `${total.toLocaleString()} compan${total === 1 ? "y" : "ies"}`
-        }
+        count={isLoading ? undefined : countLabel(total, "company", "companies")}
         actions={
           <Button size="sm" onClick={() => setAddOpen(true)}>
             Create company

@@ -23,6 +23,7 @@ export function GlobalSearch() {
   const boxRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  const narrow = useNarrowScreen();
 
   const trimmed = query.trim();
   // Typing pauses before each request.
@@ -163,7 +164,7 @@ export function GlobalSearch() {
             }
           }
         }}
-        placeholder="Search contacts and companies"
+        placeholder={narrow ? "Search" : "Search contacts and companies"}
         className="h-9 bg-background pl-8 pr-16"
       />
       <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border bg-muted px-1.5 text-[10px] text-muted-foreground sm:block">
@@ -194,4 +195,20 @@ export function GlobalSearch() {
       )}
     </div>
   );
+}
+
+/** Below Tailwind's `sm` (640px); false where matchMedia is missing (tests). */
+function useNarrowScreen() {
+  const query = "(max-width: 639px)";
+  const [narrow, setNarrow] = useState(
+    () => typeof window.matchMedia === "function" && window.matchMedia(query).matches,
+  );
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const list = window.matchMedia(query);
+    const onChange = () => setNarrow(list.matches);
+    list.addEventListener("change", onChange);
+    return () => list.removeEventListener("change", onChange);
+  }, []);
+  return narrow;
 }

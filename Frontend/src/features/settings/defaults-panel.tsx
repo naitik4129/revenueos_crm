@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Users } from "lucide-react";
 import { toast } from "sonner";
 import { backend, type Workspace } from "@/lib/backend-client";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -16,6 +16,7 @@ import { adminKeys, errorText } from "@/features/admin/admin-keys";
 import { messageFromError, useSession } from "@/store";
 import { keys } from "@/store/query";
 import type { TemplateType } from "@/types";
+import { PanelHeader } from "@/components/common/record-parts";
 
 const NONE = "none";
 
@@ -91,16 +92,12 @@ export function DefaultsPanel({ workspace }: { workspace: Workspace }) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Users className="size-4" /> Defaults
-        </CardTitle>
-        <CardDescription>
+      <PanelHeader icon={Users} title="Defaults" />
+      <CardContent className="grid gap-4 md:grid-cols-3 p-4">
+        <p className="text-sm text-muted-foreground md:col-span-full">
           Who owns a brain handover that names no owner, and what is sent when a meeting is
           scheduled.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4 md:grid-cols-3">
+        </p>
         <div>
           <Label className="mb-1.5 block text-xs">Default owner</Label>
           {isAdmin ? (

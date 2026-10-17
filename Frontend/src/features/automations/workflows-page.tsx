@@ -316,7 +316,7 @@ function NewWorkflowDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>New workflow</DialogTitle>
+          <DialogTitle>Create workflow</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <div>

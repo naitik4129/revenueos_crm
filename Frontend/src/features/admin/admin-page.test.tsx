@@ -39,6 +39,7 @@ import { MembersTab } from "./members-tab";
 import { BrainKeysTab } from "./brain-keys-tab";
 import { WorkspacesTab } from "./workspaces-tab";
 import { DefaultsPanel } from "@/features/settings/defaults-panel";
+import { AdminPage } from "./admin-page";
 
 const WORKSPACE = {
   id: "ws-1",
@@ -214,5 +215,16 @@ describe("settings defaults", () => {
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Meeting scheduled: email" })).toBeEnabled(),
     );
+  });
+});
+
+describe("admin page tabs", () => {
+  it("shows one tab at a time, starting on Users", async () => {
+    renderWithClient(<AdminPage />);
+    expect(screen.getByRole("tab", { name: "Users" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("Ravi Former")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Brain API keys" }));
+    expect(await screen.findByText("nbk_abcdefgh…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Give CRM access" })).toBeNull();
   });
 });

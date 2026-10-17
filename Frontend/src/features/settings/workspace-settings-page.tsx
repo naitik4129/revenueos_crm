@@ -19,10 +19,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Avatar } from "@/components/common/record-parts";
-import { cn } from "@/lib/utils";
+import { NATIVE_SELECT, cn } from "@/lib/utils";
 import { useSession } from "@/store";
 import { useWorkspace } from "@/store/workspace-context";
 import { DefaultsPanel } from "./defaults-panel";
@@ -33,6 +33,8 @@ import {
   type ConnectionState,
   type ConnectionSummary,
 } from "./connection-status";
+import { fmtDateTime } from "@/lib/format";
+import { PanelHeader } from "@/components/common/record-parts";
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Something went wrong.";
@@ -71,7 +73,7 @@ export function WorkspaceSettingsPage() {
           <div className="grid items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
             <nav
               aria-label="Settings sections"
-              className="flex gap-1 overflow-x-auto md:sticky md:top-20 md:flex-col"
+              className="flex flex-wrap gap-1 md:sticky md:top-20 md:flex-col md:flex-nowrap"
             >
               {SECTIONS.map((item) => (
                 <button
@@ -202,16 +204,12 @@ function ProfilePanel() {
   const { currentUser } = useSession();
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <UserRound /> Profile
-        </CardTitle>
-        <CardDescription>
+      <PanelHeader icon={UserRound} title="Profile" />
+      <CardContent className="space-y-4 p-4">
+        <p className="text-sm text-muted-foreground md:col-span-full">
           Your name, email and password belong to your RevenueOS account and are changed on the
           platform, not here.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+        </p>
         {currentUser ? (
           <div className="flex items-center gap-4">
             <Avatar name={currentUser.name} className="size-12 text-base" />
@@ -296,15 +294,11 @@ function EmailPanel({ workspaceId }: { workspaceId: string }) {
     setForm({ ...form, [key]: value });
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Mail /> Email
-        </CardTitle>
-        <CardDescription>
+      <PanelHeader icon={Mail} title="Email" />
+      <CardContent className="space-y-5 p-4">
+        <p className="text-sm text-muted-foreground md:col-span-full">
           Secrets are write-only and encrypted. Empty secret fields retain saved values.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
+        </p>
         <ConnectionBar status={emailStatus(form)}>
           <Input
             type="email"
@@ -331,7 +325,7 @@ function EmailPanel({ workspaceId }: { workspaceId: string }) {
         <div className="grid gap-4 md:grid-cols-3">
           <Field label="Active provider">
             <select
-              className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+              className={cn(NATIVE_SELECT, "h-9 w-full px-3 text-sm")}
               value={form.provider ?? "resend"}
               onChange={(e) => update("provider", e.target.value as "resend" | "smtp")}
             >
@@ -373,7 +367,7 @@ function EmailPanel({ workspaceId }: { workspaceId: string }) {
             </Field>
             <Field label="Encryption">
               <select
-                className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                className={cn(NATIVE_SELECT, "h-9 w-full px-3 text-sm")}
                 value={form.smtpSecurity}
                 onChange={(e) => update("smtpSecurity", e.target.value as "tls" | "starttls")}
               >
@@ -457,16 +451,12 @@ function WhatsAppPanel({ workspaceId }: { workspaceId: string }) {
   const data = query.data;
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Bot /> WhatsApp · Baileys
-        </CardTitle>
-        <CardDescription>
+      <PanelHeader icon={Bot} title="WhatsApp · Baileys" />
+      <CardContent className="space-y-5 p-4">
+        <p className="text-sm text-muted-foreground md:col-span-full">
           Unofficial WhatsApp Web connection. Use an opted-in, dedicated business account for this
           workspace.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
+        </p>
         {!data ? (
           query.isError ? (
             <div className="space-y-2">
@@ -548,8 +538,8 @@ function WhatsAppPanel({ workspaceId }: { workspaceId: string }) {
             </div>
             <div className="text-xs text-muted-foreground">
               Worker heartbeat:{" "}
-              {data.workerHeartbeatAt ? new Date(data.workerHeartbeatAt).toLocaleString() : "Never"}{" "}
-              · Invalid existing phone values: {data.invalidPhoneCount}
+              {data.workerHeartbeatAt ? fmtDateTime(data.workerHeartbeatAt) : "Never"} · Invalid
+              existing phone values: {data.invalidPhoneCount}
             </div>
             {data.inboundReview.length > 0 && (
               <div className="space-y-2 rounded-lg border p-3">
@@ -562,7 +552,7 @@ function WhatsAppPanel({ workspaceId }: { workspaceId: string }) {
                     <span>{event.senderPhoneE164 ?? "Unknown direct sender"}</span>
                     <span className="capitalize text-muted-foreground">
                       {event.disposition} · {event.messageType} · {event.matchCount} matches ·{" "}
-                      {new Date(event.receivedAt).toLocaleString()}
+                      {fmtDateTime(event.receivedAt)}
                     </span>
                   </div>
                 ))}
@@ -710,16 +700,12 @@ function GoogleCalendarPanel({ workspaceId }: { workspaceId: string }) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <CalendarDays /> Google Calendar
-        </CardTitle>
-        <CardDescription>
+      <PanelHeader icon={CalendarDays} title="Google Calendar" />
+      <CardContent className="space-y-5 p-4">
+        <p className="text-sm text-muted-foreground md:col-span-full">
           A meeting scheduled in the CRM creates an event with an auto-generated Meet link on this
           workspace's calendar and invites its participants.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
+        </p>
         {!data ? (
           query.isError ? (
             <div className="space-y-2">

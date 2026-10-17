@@ -69,3 +69,15 @@ export function percent(count: number, total: number) {
   const pct = Math.round((count / total) * 100);
   return pct === 0 ? "<1%" : `${pct}%`;
 }
+
+/** relDay, but older dates read "3d ago" (tables and cards; the full date goes in a tooltip). */
+export function relShort(iso?: string) {
+  if (!iso) return "-";
+  const diff = dayDiff(dayOf(iso), dateInputValue());
+  return diff < -1 ? `${Math.abs(diff)}d ago` : relDay(iso);
+}
+
+/** "1 contact" / "29 contacts" for page headers. */
+export function countLabel(n: number, one: string, many = `${one}s`) {
+  return `${n.toLocaleString()} ${n === 1 ? one : many}`;
+}

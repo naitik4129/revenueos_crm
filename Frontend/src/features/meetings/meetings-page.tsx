@@ -41,6 +41,7 @@ import {
   type MeetingOutcome,
   type MeetingStatus,
 } from "@/types";
+import { countLabel } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 const ALL = "all";
@@ -140,7 +141,7 @@ export function MeetingsPage({ initialView }: { initialView?: string | undefined
     <div className="pb-10">
       <PageHeader
         title="Meetings"
-        description="Every meeting booked from the CRM. Recording an outcome moves the deal on."
+        count={store.isLoading ? undefined : countLabel(store.total, "meeting")}
         tabs={
           <ViewTabs
             views={VIEWS}
@@ -170,11 +171,6 @@ export function MeetingsPage({ initialView }: { initialView?: string | undefined
               }}
               options={[[ALL, "All owners"], ...users.map((u) => [u.id, u.name] as const)]}
             />
-            {!store.isLoading && (
-              <span className="ml-auto text-xs text-muted-foreground">
-                {store.total.toLocaleString()} meeting{store.total === 1 ? "" : "s"}
-              </span>
-            )}
           </div>
 
           {store.isLoading ? (
@@ -185,7 +181,7 @@ export function MeetingsPage({ initialView }: { initialView?: string | undefined
             <ListEmptyState
               icon={CalendarDays}
               title={EMPTY[view]}
-              text="Meetings are booked on a deal: from the deal page, a call outcome, or here."
+              text="Meetings are booked on a deal: from the deal page, a call outcome, or here. Recording an outcome moves the deal on."
             >
               <Button size="sm" onClick={() => setCreateOpen(true)}>
                 Schedule meeting

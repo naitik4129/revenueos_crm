@@ -18,6 +18,7 @@ import { label } from "@/lib/labels";
 import { useCrmMutation, useSession } from "@/store";
 import { TASK_TYPES, type Deal, type Task, type TaskType } from "@/types";
 import { ErrorNotice } from "@/features/contacts/contact-dialogs";
+import { NATIVE_SELECT, cn } from "@/lib/utils";
 
 export type OutcomeAction = "won" | "discard" | "nurture" | "reopen";
 
@@ -159,7 +160,7 @@ export function TaskDialog({
               aria-label="Task type"
               value={type}
               onChange={(e) => setType(e.target.value as TaskType)}
-              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+              className={cn(NATIVE_SELECT, "h-9 w-full px-2 text-sm")}
             >
               {TASK_TYPES.map((t) => (
                 <option key={t} value={t}>
@@ -188,7 +189,7 @@ export function TaskDialog({
               aria-label="Task owner"
               value={ownerId}
               onChange={(e) => setOwnerId(e.target.value)}
-              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+              className={cn(NATIVE_SELECT, "h-9 w-full px-2 text-sm")}
             >
               <option value="">Me</option>
               {users.map((u) => (

@@ -14,7 +14,7 @@ import { backend } from "@/lib/backend-client";
 import { fmtDate, fmtDateTime, isOverdue, money, relDay } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { nurtureTriggerForStage } from "@/lib/pipeline";
-import { cn } from "@/lib/utils";
+import { NATIVE_SELECT, cn } from "@/lib/utils";
 import {
   messageFromError,
   useAutomations,
@@ -128,13 +128,13 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
 
   if (dealQuery.isLoading)
     return (
-      <div className="p-6">
+      <div className="px-6 py-4">
         <LoadingBlock label="Loading deal…" />
       </div>
     );
   if (!deal)
     return (
-      <div className="p-6">
+      <div className="px-6 py-4">
         <ErrorBlock error={dealQuery.error ?? new Error("Deal not found.")} />
       </div>
     );
@@ -226,7 +226,7 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
                       { onSuccess: () => toast.success("Stage changed"), onError: toastError },
                     )
                   }
-                  className="h-8 w-full rounded-md border bg-background px-2 text-sm"
+                  className={cn(NATIVE_SELECT, "h-8 w-full px-2 text-sm")}
                 >
                   {PIPELINE_STAGES.map((s) => (
                     <option key={s} value={s}>
@@ -297,7 +297,7 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
                       { onSuccess: () => toast.success("Owner changed"), onError: toastError },
                     )
                   }
-                  className="h-8 w-full rounded-md border bg-background px-2 text-sm"
+                  className={cn(NATIVE_SELECT, "h-8 w-full px-2 text-sm")}
                 >
                   <option value="">Unassigned</option>
                   {users.map((u) => (
@@ -319,7 +319,7 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
                         onError: toastError,
                       })
                     }
-                    className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-sm"
+                    className={cn(NATIVE_SELECT, "h-8 min-w-0 flex-1 px-2 text-sm")}
                   >
                     {AUTOMATION_MODES.map((m) => (
                       <option key={m} value={m}>
@@ -720,7 +720,7 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
                             },
                           );
                         }}
-                        className="h-7 w-full rounded-md border bg-background px-2 text-xs"
+                        className={cn(NATIVE_SELECT, "h-7 w-full px-2 text-xs")}
                       >
                         {PROPOSAL_STATUSES.map((s) => (
                           <option key={s} value={s}>

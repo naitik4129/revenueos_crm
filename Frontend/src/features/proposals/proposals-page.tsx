@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { FileText } from "lucide-react";
+import { FileText, Hourglass, IndianRupee } from "lucide-react";
 import { PageHeader } from "@/app/app-shell";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  RelTime,
   ColumnChooser,
   FilterSelect,
   ListEmptyState,
@@ -22,7 +23,7 @@ import {
 } from "@/components/common/list-controls";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
-import { money, relDay } from "@/lib/format";
+import { money } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { useStoredColumns } from "@/lib/use-stored-columns";
 import { messageFromError, useProposalSummary, useProposals, useSession } from "@/store";
@@ -33,6 +34,8 @@ import {
   NewProposalDialog,
   SendProposalDialog,
 } from "./components/proposal-dialogs";
+import { countLabel } from "@/lib/format";
+import { StatCard } from "@/components/common/record-parts";
 
 const PAGE_SIZE = 50;
 const ALL = "all";
@@ -40,9 +43,11 @@ const ALL = "all";
 // The server filters on one status; tabs cover the common ones, the Status filter all of them.
 const VIEWS = [
   { id: ALL, label: "All" },
-  ...(["ready_to_send", "sent", "revision_requested", "accepted", "rejected"] as const).map(
-    (s) => ({ id: s, label: label(s) }),
-  ),
+  { id: "ready_to_send", label: "Ready to send" },
+  { id: "sent", label: "Sent" },
+  { id: "revision_requested", label: "Revision requested" },
+  { id: "accepted", label: "Accepted" },
+  { id: "rejected", label: "Rejected" },
 ];
 
 export function ProposalsPage({ initialView }: { initialView?: string | undefined } = {}) {
@@ -125,8 +130,12 @@ export function ProposalsPage({ initialView }: { initialView?: string | undefine
           </div>
         ),
     },
-    { id: "sent", label: "Sent", cell: (p) => p.sentDate && relDay(p.sentDate) },
-    { id: "followUp", label: "Follow-up", cell: (p) => p.followUpDate && relDay(p.followUpDate) },
+    { id: "sent", label: "Sent", cell: (p) => p.sentDate && <RelTime iso={p.sentDate} /> },
+    {
+      id: "followUp",
+      label: "Follow-up",
+      cell: (p) => p.followUpDate && <RelTime iso={p.followUpDate} />,
+    },
     {
       id: "decision",
       label: "Decision",
@@ -155,7 +164,7 @@ export function ProposalsPage({ initialView }: { initialView?: string | undefine
     <div className="pb-10">
       <PageHeader
         title="Proposals"
-        description="Create a proposal, upload its document, then send it by email and/or WhatsApp."
+        count={store.isLoading ? undefined : countLabel(store.total, "proposal")}
         actions={
           <Button size="sm" onClick={() => setNewOpen(true)}>
             Create proposal
@@ -171,12 +180,17 @@ export function ProposalsPage({ initialView }: { initialView?: string | undefine
       />
       <div className="space-y-4 px-6 py-4">
         <div className="grid gap-3 sm:grid-cols-3">
-          <Stat label="Open proposals" value={summary ? String(summary.open) : "…"} />
-          <Stat
+          <StatCard icon={FileText} label="Open proposals" value={summary ? summary.open : "…"} />
+          <StatCard
+            icon={Hourglass}
             label="Awaiting decision"
-            value={summary ? String(summary.awaitingDecision) : "…"}
+            value={summary ? summary.awaitingDecision : "…"}
           />
-          <Stat label="Value in play" value={summary ? money(summary.valueInPlay) : "…"} />
+          <StatCard
+            icon={IndianRupee}
+            label="Value in play"
+            value={summary ? money(summary.valueInPlay) : "…"}
+          />
         </div>
 
         <Card className="overflow-hidden p-0">
@@ -209,7 +223,7 @@ export function ProposalsPage({ initialView }: { initialView?: string | undefine
             <ListEmptyState
               icon={FileText}
               title={status === ALL && owner === ALL ? "No proposals yet" : "No proposals here."}
-              text="A proposal belongs to a deal. Create one here or from the deal page."
+              text="A proposal belongs to a deal: create it, upload its document, then send it by email and/or WhatsApp."
             >
               <Button size="sm" onClick={() => setNewOpen(true)}>
                 Create proposal
@@ -279,15 +293,4 @@ function channelTone(status: string): "success" | "danger" | "muted" | "info" {
   if (status === "failed") return "danger";
   if (status === "skipped") return "muted";
   return "info";
-}
-
-function Stat({ label: name, value }: { label: string; value: string }) {
-  return (
-    <Card>
-      <CardContent className="px-4 py-3">
-        <div className="text-xs text-muted-foreground">{name}</div>
-        <div className="num pt-1 text-xl font-semibold leading-none">{value}</div>
-      </CardContent>
-    </Card>
-  );
 }

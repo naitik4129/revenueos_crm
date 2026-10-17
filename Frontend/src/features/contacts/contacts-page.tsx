@@ -6,6 +6,7 @@ import { useAddContact } from "@/app/add-contact-context";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
+  RelTime,
   BulkBar,
   ColumnChooser,
   FilterSelect,
@@ -21,7 +22,7 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { backend } from "@/lib/backend-client";
 import { downloadCsv } from "@/lib/csv";
-import { fmtDate, relDay } from "@/lib/format";
+import { fmtDate } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { useBulkAssignOwner } from "@/lib/use-bulk-assign";
 import { useStoredColumns } from "@/lib/use-stored-columns";
@@ -35,6 +36,7 @@ import {
 } from "@/types";
 import { CompanyLink } from "@/features/companies/company-link";
 import { ImportContactsDialog } from "./import-contacts-dialog";
+import { countLabel } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 const ALL = "all";
@@ -92,7 +94,7 @@ const COLUMNS: ListColumn<Contact>[] = [
         </Link>
       ),
   },
-  { id: "lastActivity", label: "Last activity", cell: (c) => relDay(c.lastActivityAt) },
+  { id: "lastActivity", label: "Last activity", cell: (c) => <RelTime iso={c.lastActivityAt} /> },
   { id: "source", label: "Source", cell: (c) => label(c.source) },
   { id: "created", label: "Created", cell: (c) => fmtDate(c.createdAt) },
 ];
@@ -187,9 +189,7 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
     <div className="pb-10">
       <PageHeader
         title="Contacts"
-        description={
-          isLoading ? undefined : `${total.toLocaleString()} contact${total === 1 ? "" : "s"}`
-        }
+        count={isLoading ? undefined : countLabel(total, "contact")}
         actions={
           <>
             <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>

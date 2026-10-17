@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/common/status-badge";
 import {
+  RelTime,
   FilterSelect,
   ListEmptyState,
   Pager,
@@ -15,13 +16,14 @@ import {
   type ListColumn,
 } from "@/components/common/list-controls";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
-import { isOverdue, relDay } from "@/lib/format";
+import { isOverdue } from "@/lib/format";
 import { label } from "@/lib/labels";
 import type { TaskListParams } from "@/lib/backend-client";
 import { messageFromError, useSession, useTasks, useTaskTotals } from "@/store";
 import { TASK_TYPES, type Task } from "@/types";
 import { DealLink } from "@/features/deals/deal-link";
 import { TaskDialog } from "@/features/deals/deal-dialogs";
+import { countLabel } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 const ALL = "all";
@@ -93,10 +95,10 @@ export function TasksPage({ initialView }: { initialView?: string | undefined } 
       label: view === "done" ? "Completed" : "Due",
       cell: (t) =>
         view === "done" ? (
-          relDay(t.completedAt ?? t.dueAt)
+          <RelTime iso={t.completedAt ?? t.dueAt} />
         ) : (
           <span className={isOverdue(t.dueAt) ? "text-destructive" : undefined}>
-            {relDay(t.dueAt)}
+            <RelTime iso={t.dueAt} />
           </span>
         ),
     },
@@ -120,7 +122,7 @@ export function TasksPage({ initialView }: { initialView?: string | undefined } 
     <div className="pb-10">
       <PageHeader
         title="Tasks"
-        description="Manual and automation tasks. Call and meeting tasks open their deal, where you log the call or book the meeting."
+        count={isLoading ? undefined : countLabel(total, "task")}
         tabs={
           <ViewTabs
             views={VIEW_NAMES.map((id) => ({
