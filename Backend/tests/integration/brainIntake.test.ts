@@ -169,6 +169,17 @@ describe("brain intake API (PGlite)", () => {
     expect(await one(`select count(*)::int n from crm.deals where contact_id = $1`, [id])).toEqual({ n: 1 });
   });
 
+  it("handover amount fills an empty deal amount and never overwrites one", async () => {
+    const contact = { source: "quickicp", externalId: "p-30", fullName: "Amount Person", email: "p30@x.com" };
+    const first = await brain("/handovers", [{ source: "quickicp", externalId: "h-30", contact, summary: "Fit", amount: 250000 }]);
+    const dealId = first.body.results[0].id;
+    expect((await user("get", `/deals/${dealId}`, sam)).body).toMatchObject({ amount: 250000, currency: "INR" });
+
+    await brain("/handovers", [{ source: "quickicp", externalId: "h-31", contact, summary: "Bigger", amount: 999999 }]);
+    expect((await user("get", `/deals/${dealId}`, sam)).body.amount).toBe(250000);
+    expect((await brain("/handovers", [{ source: "quickicp", externalId: "h-32", contact, summary: "Bad", amount: -5 }])).body.results[0]).toMatchObject({ status: "error" });
+  });
+
   it("handover owner: member ownerEmail, else the workspace default owner, else unassigned + notify all members", async () => {
     const person = (n: number) => ({ source: "quickicp", externalId: `p-${n}`, fullName: `Person ${n}`, email: `p${n}@x.com` });
     await seed.query(`update crm.workspaces set default_owner_id = $1 where id = $2`, [sue, ws]);

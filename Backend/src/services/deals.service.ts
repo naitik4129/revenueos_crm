@@ -44,6 +44,9 @@ export interface DealRow {
   loss_notes: string | null;
   last_activity_at: Date;
   closed_at: Date | null;
+  /** numeric comes back from pg as a string. */
+  amount: string | null;
+  currency: string;
   created_at: Date;
   updated_at: Date;
   // contact
@@ -124,6 +127,8 @@ export function dealToDto(row: DealRow) {
       : null,
     lastActivityAt: row.last_activity_at.toISOString(),
     closedAt: row.closed_at?.toISOString() ?? null,
+    amount: row.amount === null ? null : Number(row.amount),
+    currency: row.currency,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -250,6 +255,8 @@ export interface UpdateDealInput {
   stage?: PipelineStage;
   responseState?: ResponseState;
   serviceInterest?: string;
+  /** INR; null clears it. */
+  amount?: number | null;
   /** Set alongside stage = 'objection_nurture' (or wrong_fit, reporting only). */
   objectionType?: ObjectionType;
   interestedLaterReason?: string;
@@ -285,9 +292,15 @@ export async function updateDeal(db: Queryable, actor: Actor | null, workspaceId
   if (patch.interestedLaterRestartAt !== undefined) set("interested_later_restart_at", patch.interestedLaterRestartAt || null);
   if (patch.interestedLaterNextAction !== undefined) set("interested_later_next_action", patch.interestedLaterNextAction.trim() || null);
   if (patch.interestedLaterDecisionOwner !== undefined) set("interested_later_decision_owner", patch.interestedLaterDecisionOwner.trim() || null);
+  if (patch.amount !== undefined) set("amount", patch.amount);
   if (sets.length === 0) return current;
 
-  await db.query(`update crm.deals set ${sets.join(", ")}, last_activity_at = now() where id = $${params.push(id)}`, params);
+  // Setting the amount is bookkeeping, not activity with the contact.
+  const activity = Object.entries(patch).some(([key, value]) => value !== undefined && key !== "amount");
+  await db.query(
+    `update crm.deals set ${sets.join(", ")}${activity ? ", last_activity_at = now()" : ""} where id = $${params.push(id)}`,
+    params,
+  );
 
   if (patch.stage && patch.stage !== current.stage) {
     await addTimelineEvent(db, { dealId: id, kind: "stage", title: `Stage changed to ${patch.stage}`, ...eventActor(actor) });

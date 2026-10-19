@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
@@ -12,14 +12,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackendError } from "@/lib/backend-client";
 import type { Contact, Deal, Run, Task } from "@/types";
 
-const api = vi.hoisted(() => ({ setOutcome: vi.fn(), markLost: vi.fn(), logCall: vi.fn() }));
+const api = vi.hoisted(() => ({
+  setOutcome: vi.fn(),
+  markLost: vi.fn(),
+  logCall: vi.fn(),
+  update: vi.fn(),
+}));
 vi.mock("@/lib/backend-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/backend-client")>();
   return {
     ...actual,
     backend: {
       ...actual.backend,
-      deals: { ...actual.backend.deals, setOutcome: api.setOutcome, markLost: api.markLost },
+      deals: {
+        ...actual.backend.deals,
+        setOutcome: api.setOutcome,
+        markLost: api.markLost,
+        update: api.update,
+      },
       contacts: { ...actual.backend.contacts, logCall: api.logCall },
     },
   };
@@ -82,6 +92,8 @@ const baseDeal = {
   doNotContact: false,
   nextAction: null,
   closedAt: null,
+  amount: null,
+  currency: "INR",
   lastActivityAt: new Date().toISOString(),
   createdAt: new Date().toISOString(),
 } as unknown as Deal;
@@ -131,6 +143,21 @@ describe("deal page", () => {
     expect(screen.getByText("Proposals (0)")).toBeInTheDocument();
     expect(screen.getByText("Automation runs (1)")).toBeInTheDocument();
     expect(screen.getByText("Later nurture V2")).toBeInTheDocument();
+  });
+
+  it("saves the deal amount and clears it when emptied", async () => {
+    api.update.mockResolvedValue({ ...baseDeal, amount: 250000 });
+    await renderDeal({ amount: 120000 });
+    expect(screen.getAllByText("₹1.2 L").length).toBeGreaterThan(0);
+    const input = screen.getByLabelText("Deal amount");
+    const save = within(input.parentElement!).getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    fireEvent.change(input, { target: { value: "250000" } });
+    fireEvent.click(save);
+    await vi.waitFor(() => expect(api.update).toHaveBeenCalledWith("d1", { amount: 250000 }));
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.click(save);
+    await vi.waitFor(() => expect(api.update).toHaveBeenLastCalledWith("d1", { amount: null }));
   });
 
   it("marking lost needs a loss reason", async () => {

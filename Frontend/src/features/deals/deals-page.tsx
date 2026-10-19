@@ -22,14 +22,14 @@ import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { StatusBadge } from "@/components/common/status-badge";
 import { backend, type DealFilters } from "@/lib/backend-client";
 import { downloadCsv } from "@/lib/csv";
-import { fmtDate, isOverdue } from "@/lib/format";
+import { fmtDate, isOverdue, money } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { useBulkAssignOwner } from "@/lib/use-bulk-assign";
 import { useStoredColumns } from "@/lib/use-stored-columns";
 import { cn } from "@/lib/utils";
 import { messageFromError, useCrmMutation, useDeals, useSession } from "@/store";
 import { DEAL_OUTCOMES, type Deal, type DealOutcome, type PipelineStage } from "@/types";
-import { DEAL_DRAG_TYPE, groupDealsByStage } from "./board";
+import { DEAL_DRAG_TYPE, groupDealsByStage, stageTotal } from "./board";
 import { DealCard } from "./deal-card";
 import { NewDealDialog } from "./new-deal-dialog";
 import { countLabel } from "@/lib/format";
@@ -224,11 +224,19 @@ function Board({
                 dropTarget === stage && "border-primary bg-primary/5",
               )}
             >
-              <header className="flex items-center justify-between border-b px-3 py-2 text-xs font-semibold">
-                <span className="truncate">{label(stage)}</span>
-                <span className="num rounded-full bg-background px-2 py-0.5 font-normal text-muted-foreground">
-                  {items.length}
-                </span>
+              <header className="border-b px-3 py-2 text-xs">
+                <div className="flex items-center justify-between gap-2 font-semibold">
+                  <span className="truncate">{label(stage)}</span>
+                  <span className="num rounded-full bg-background px-2 py-0.5 font-normal text-muted-foreground">
+                    {items.length}
+                  </span>
+                </div>
+                <div
+                  className="num pt-0.5 text-muted-foreground"
+                  aria-label={`${label(stage)} total`}
+                >
+                  {money(stageTotal(items))}
+                </div>
               </header>
               <div className="flex min-h-24 flex-col gap-2 p-2">
                 {items.map((deal) => (
@@ -281,6 +289,11 @@ const COLUMNS: ListColumn<Deal>[] = [
         </span>
       ),
   },
+  {
+    id: "amount",
+    label: "Amount",
+    cell: (d) => (d.amount === null ? undefined : <span className="num">{money(d.amount)}</span>),
+  },
   { id: "lastActivity", label: "Last activity", cell: (d) => <RelTime iso={d.lastActivityAt} /> },
   { id: "service", label: "Service interest", cell: (d) => d.serviceInterest },
   { id: "automation", label: "Automation", cell: (d) => label(d.automationMode) },
@@ -292,7 +305,15 @@ const COLUMNS: ListColumn<Deal>[] = [
   { id: "created", label: "Created", cell: (d) => fmtDate(d.createdAt) },
   { id: "closed", label: "Closed", cell: (d) => d.closedAt && fmtDate(d.closedAt) },
 ];
-const DEFAULT_COLUMNS = ["company", "stage", "outcome", "owner", "nextAction", "lastActivity"];
+const DEFAULT_COLUMNS = [
+  "company",
+  "stage",
+  "outcome",
+  "amount",
+  "owner",
+  "nextAction",
+  "lastActivity",
+];
 
 function DealList({
   query,

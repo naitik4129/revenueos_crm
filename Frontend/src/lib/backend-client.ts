@@ -594,7 +594,12 @@ export const backend = {
       send<Deal>("POST", "/deals", input),
     update: (
       id: string,
-      input: { stage?: PipelineStage; ownerId?: string | null; serviceInterest?: string },
+      input: {
+        stage?: PipelineStage;
+        ownerId?: string | null;
+        serviceInterest?: string;
+        amount?: number | null;
+      },
     ) => send<Deal>("PATCH", `/deals/${id}`, input),
     setAutomation: (id: string, mode: AutomationMode, reason?: string) =>
       send<Deal>("POST", `/deals/${id}/automation`, { mode, reason }),

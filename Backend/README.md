@@ -52,9 +52,9 @@ demo/                     demo mode only; never built or shipped
 1. `000_platform_grants.sql`: the `crm_app` role. Run once by a platform developer, as
    `postgres`, after the platform team approves; then set its password outside version control
    (`alter role crm_app with password '…'`).
-2. `001_crm_schema.sql` … `012_crm_deal_closed_at.sql`, in filename order: schema and grants,
+2. `001_crm_schema.sql` … `013_crm_deal_amount.sql`, in filename order: schema and grants,
    enums, identity, core, activity, automation, integrations, audit, triggers, RLS, brain intake,
-   `deals.closed_at`.
+   `deals.closed_at`, deal amount.
 
 They have not been run on the shared project yet.
 
@@ -104,7 +104,7 @@ Open http://127.0.0.1:8080 and click a demo user (password `demo` for all):
 `admin@demo.local` (admin), `sam@demo.local` (salesperson, both workspaces),
 `priya@demo.local` (salesperson, Acme only). Ctrl+C stops everything.
 
-One Node process runs it all: PGlite with migrations 000-012 and seed data (two client
+One Node process runs it all: PGlite with migrations 000-013 and seed data (two client
 workspaces, companies, contacts in every lifecycle stage, deals in every outcome, tasks,
 AI + human calls, campaign emails, a meeting today, a proposal, notifications, brain keys and an
 inactive user), a local fake of Supabase Auth/Storage, the API on 127.0.0.1:8787, the automation
@@ -128,7 +128,7 @@ worker logs "(dry run)" instead).
 
 `tests/integration/*.test.ts` run full HTTP flows (contacts → deals → calls and routing,
 meetings, proposals, workflows and the worker, brain intake, admin) on an in-process
-**PGlite** database with migrations `000`–`012` applied on stand-in `auth` and `public` tables
+**PGlite** database with migrations `000`–`013` applied on stand-in `auth` and `public` tables
 (`tests/integration/testDb.ts`). No Docker or Supabase needed; `npm run test:run` includes them.
 All connections share one PGlite session, so the tests run sequentially.
 
@@ -203,7 +203,7 @@ RevenueOS account by email, set role, activate/deactivate), **Workspaces**, **Me
 
 ## Safe production rollout
 
-1. `crm_app` approved and created (`000`), then `001`–`012` run in order, and the two storage
+1. `crm_app` approved and created (`000`), then `001`–`013` run in order, and the two storage
    buckets created.
 2. Set the env vars, with one stable `INTEGRATION_ENCRYPTION_KEY` on API and worker; deploy
    with email and WhatsApp outbound off.

@@ -56,6 +56,8 @@ const deal = (
     stage,
     outcome,
     nextAction: null,
+    amount: null,
+    currency: "INR",
     lastActivityAt: new Date().toISOString(),
   }) as Deal;
 
@@ -98,6 +100,23 @@ describe("deals board", () => {
     expect(within(column("New")).getByText("1")).toBeInTheDocument();
     expect(within(column("Negotiation")).getByText("Bob")).toBeInTheDocument();
     expect(screen.queryByText("Cy")).not.toBeInTheDocument(); // won: not on the board
+  });
+
+  it("shows each stage's total and each card's amount; the list has an Amount column", async () => {
+    deals.list = [
+      { ...deal("d1", "Ann", "new"), amount: 300000 },
+      { ...deal("d2", "Bob", "new"), amount: 150000 },
+      deal("d3", "Cy", "negotiation"),
+    ];
+    await renderPage();
+    expect(within(column("New")).getByLabelText("New total")).toHaveTextContent("₹4.5 L");
+    expect(within(column("Negotiation")).getByLabelText("Negotiation total")).toHaveTextContent(
+      "₹0",
+    );
+    expect(within(column("New")).getByText("₹3.0 L")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    expect(screen.getByRole("columnheader", { name: "Amount" })).toBeInTheDocument();
+    expect(screen.getByText("₹1.5 L")).toBeInTheDocument();
   });
 
   it("moves a deal with the stage dropdown", async () => {

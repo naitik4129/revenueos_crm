@@ -13,3 +13,12 @@ export function groupDealsByStage(deals: Deal[], pending: Partial<Record<string,
   for (const deal of deals) columns.get(pending[deal.id] ?? deal.stage)?.push(deal);
   return columns;
 }
+
+/**
+ * Sum of the deals' amounts (deals without one count as 0).
+ * shortcut: totals cover the deals the board loaded (BOARD_LIMIT, 500); move the sum to the
+ * server if a workspace ever has more open deals than that.
+ */
+export function stageTotal(deals: Deal[]) {
+  return deals.reduce((sum, deal) => sum + (deal.amount ?? 0), 0);
+}

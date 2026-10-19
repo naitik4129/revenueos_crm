@@ -4,6 +4,7 @@ import { CalendarDays, ListChecks, Phone, StickyNote } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { InfoRow, Section, TimelineList } from "@/components/common/detail-parts";
@@ -83,8 +84,9 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const close = () => setDialog(null);
 
-  const patch = useCrmMutation((input: { stage?: PipelineStage; ownerId?: string | null }) =>
-    backend.deals.update(dealId, input),
+  const patch = useCrmMutation(
+    (input: { stage?: PipelineStage; ownerId?: string | null; amount?: number | null }) =>
+      backend.deals.update(dealId, input),
   );
   const automation = useCrmMutation((mode: AutomationMode) =>
     backend.deals.setAutomation(dealId, mode),
@@ -206,6 +208,9 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
                 <StatusBadge value={deal.outcome} />
                 <StatusBadge value={deal.stage} />
                 <StatusBadge value={deal.automationMode} dot />
+                {deal.amount !== null && (
+                  <span className="num font-medium">{money(deal.amount)}</span>
+                )}
                 {deal.closedAt && (
                   <span className="text-muted-foreground">Closed {fmtDate(deal.closedAt)}</span>
                 )}
@@ -338,6 +343,18 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
                 </div>
               </Field>
               <div className="space-y-2">
+                <AmountField
+                  // Starts again from the saved value after every save.
+                  key={deal.amount ?? "none"}
+                  amount={deal.amount}
+                  disabled={patch.isPending}
+                  onSave={(amount) =>
+                    patch.mutate(
+                      { amount },
+                      { onSuccess: () => toast.success("Amount saved"), onError: toastError },
+                    )
+                  }
+                />
                 <InfoRow name="Response" value={label(deal.responseState)} />
                 <InfoRow name="Lifecycle" value={label(deal.lifecycleStage)} />
                 <InfoRow name="Last activity" value={relDay(deal.lastActivityAt)} />
@@ -829,6 +846,51 @@ export function DealDetailPage({ dealId }: { dealId: string }) {
         }
       />
     </div>
+  );
+}
+
+/** Deal value in INR; empty clears it. Saved with the button or Enter. */
+function AmountField({
+  amount,
+  disabled,
+  onSave,
+}: {
+  amount: number | null;
+  disabled: boolean;
+  onSave: (amount: number | null) => void;
+}) {
+  const [text, setText] = useState(amount === null ? "" : String(amount));
+  const value = text.trim() === "" ? null : Number(text);
+  const valid = value === null || (Number.isFinite(value) && value >= 0);
+  const changed = value !== amount;
+  const save = () => valid && changed && onSave(value);
+  return (
+    <Field label="Amount (INR)">
+      <div className="flex gap-2">
+        <Input
+          type="number"
+          min={0}
+          step="any"
+          inputMode="decimal"
+          aria-label="Deal amount"
+          placeholder="Not set"
+          value={text}
+          disabled={disabled}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && save()}
+          className="h-8"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled || !valid || !changed}
+          onClick={save}
+        >
+          Save
+        </Button>
+      </div>
+      {amount !== null && <p className="pt-1 text-xs text-muted-foreground">{money(amount)}</p>}
+    </Field>
   );
 }
 

@@ -171,6 +171,7 @@ Enums live in `crm` too.
 10. `010_crm_rls.sql` — enable RLS on all crm tables, no policies.
 11. `011_crm_brain_intake.sql` — lifecycle stage, external refs, AI calls, email activities, brain API keys, default owner.
 12. `012_crm_deal_closed_at.sql` — `deals.closed_at`, set by trigger when the outcome leaves `open`, cleared on reopen.
+13. `013_crm_deal_amount.sql` — `deals.amount` (numeric, ≥ 0, nullable) + `currency` (INR only, by check); the brain handover's `amount` fills an empty one.
 
 Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the human runs it first).
 
@@ -194,7 +195,6 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
   10. Tasks by company (the company page collects open tasks from its first 10 open deals; tasks on a contact with no deal are missed).
   11. Notes on a company (notes exist only on contacts and deals).
   12. Companies list: the same "Unassigned" filter and `sort` parameter as contacts (gaps 1 and 3).
-  13. A deal amount (deals have no value field), so the board can show totals per stage.
   14. Proposals list: counts per status and a multi-status filter (e.g. "in progress" = draft + uploaded + ready to send + revised); today it filters one status at a time, so the tabs show no counts.
   15. "Proposals awaiting decision" means two things: the dashboard counts sent + revision requested + revised, `GET /proposals/summary` counts sent only. The dashboard card opens the Sent tab, so its list can be shorter than the card.
   16. "Meetings today" on the dashboard leaves out cancelled/failed meetings; `GET /meetings?when=today` lists every status. A status filter on the meetings list (or one shared definition) would make the card and the Today tab agree.

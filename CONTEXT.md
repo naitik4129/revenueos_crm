@@ -25,7 +25,7 @@ The frontend uses Supabase JS only to sign in. Every CRM read and write goes thr
   (transactions and business rules), `src/domain` (pure routing and rendering), `src/providers`
   (email, WhatsApp, calendar), `src/worker.ts`. Tests in `tests/` (unit + PGlite integration).
 - `Frontend/`: React 19, Vite, TanStack Router + Query, Tailwind 4, Radix UI, Tiptap, Vitest.
-- `Supabase/migrations/`: SQL files `000`–`012`, written here and run by hand by the human.
+- `Supabase/migrations/`: SQL files `000`–`013`, written here and run by hand by the human.
 - `Backend/demo/`: demo mode only; never built or shipped.
 - `compose.yaml`: `backend`, `worker` and `frontend` services.
 
@@ -37,7 +37,7 @@ The frontend uses Supabase JS only to sign in. Every CRM read and write goes thr
 - Backend and worker log in as role **`crm_app`** (rights on `crm`, plus read-only access to
   `public.revenueos_profiles` and `public.revenueos_projects`). RLS is on for every `crm` table
   with no policies; `crm` is not exposed through the Data API.
-- **Migrations `000`–`012` have not been run yet.** Order:
+- **Migrations `000`–`013` have not been run yet.** Order:
 
 | File | Contents |
 |---|---|
@@ -54,6 +54,7 @@ The frontend uses Supabase JS only to sign in. Every CRM read and write goes thr
 | `010_crm_rls.sql` | RLS on, no policies |
 | `011_crm_brain_intake.sql` | lifecycle stage, external refs, AI calls, email activities, brain API keys, default owner |
 | `012_crm_deal_closed_at.sql` | `deals.closed_at` |
+| `013_crm_deal_amount.sql` | `deals.amount` + `currency` (INR) |
 
 - Storage buckets `crm-template-attachments` and `crm-proposal-documents` are created by hand in
   the Supabase dashboard.
@@ -67,7 +68,7 @@ The frontend uses Supabase JS only to sign in. Every CRM read and write goes thr
   Code moves it forward only; admins can move it back.
 - **The deal owns the sales journey**: pipeline stage (`new` … `negotiation`, see
   `Backend/src/domain/enums.ts`), outcome (open / won / lost / nurture / discarded), automation
-  mode, objection, interested-later fields, loss reason, owner, `closed_at`. A contact has at most
+  mode, objection, interested-later fields, loss reason, owner, `closed_at`, `amount` (INR, optional). A contact has at most
   one open deal per workspace.
 - Activity hangs off contacts and deals: notes, calls (human and AI), tasks, meetings,
   proposals, email activities, timeline events, notifications.
@@ -111,7 +112,8 @@ stored, full key shown once).
   items, one transaction per item, per-item results, idempotent by external ids.
 - `GET /suppressions`: who must not be contacted (DNC, unsubscribed, bounced).
 - Matching: external ref → email → E.164 phone. Brain data only fills empty fields.
-- A handover opens a deal (lifecycle → qualified) and notifies its owner.
+- A handover opens a deal (lifecycle → qualified) and notifies its owner. Its optional `amount`
+  (INR) fills the deal's amount only when that is empty.
 
 Details: [CLAUDE.md → Brain intake](CLAUDE.md#brain-intake-2026-10-16).
 
@@ -162,7 +164,7 @@ The sidebar has a workspace switcher and a notification bell.
 ## Demo mode
 
 `cd Backend && npm run demo` → http://127.0.0.1:8080 (`admin@`, `sam@`, `priya@demo.local`,
-password `demo`). One process runs PGlite with migrations 000–012 and seed data, a fake Supabase
+password `demo`). One process runs PGlite with migrations 000–013 and seed data, a fake Supabase
 Auth/Storage, the API on :8787, a dry-run worker and Vite. Data is in memory. Guards and limits:
 [Backend/README.md → Demo mode](Backend/README.md#demo-mode-local-click-through).
 
@@ -182,7 +184,7 @@ Commands: [CLAUDE.md → Commands](CLAUDE.md#commands).
 
 1. Platform developers approve the `crm_app` role; they run `000_platform_grants.sql` and set
    its password outside version control.
-2. The human runs `001`–`012` in order.
+2. The human runs `001`–`013` in order.
 3. Create the storage buckets `crm-template-attachments` and `crm-proposal-documents` by hand.
 4. Set the backend, worker and frontend env vars (one stable `INTEGRATION_ENCRYPTION_KEY`).
 5. Give the first admin CRM access (their account already exists on the platform):

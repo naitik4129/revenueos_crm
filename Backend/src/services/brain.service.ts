@@ -104,6 +104,8 @@ export const handoverItem = z.object({
   ownerEmail: z.string().email().optional(),
   summary: z.string().trim().min(1).max(20_000),
   notes: z.string().trim().max(20_000).optional(),
+  /** Deal value in INR; fills the deal's amount only when it is empty. */
+  amount: z.number().nonnegative().max(999_999_999_999.99).optional(),
 });
 
 type ContactData = z.infer<typeof contactRef>;
@@ -471,8 +473,9 @@ export async function applyHandover(db: Queryable, workspaceId: string, item: z.
   // An existing owner is kept; an unowned deal gets the handover owner.
   const owner = (
     await db.query<{ owner_id: string | null }>(
-      `update crm.deals set owner_id = coalesce(owner_id, $2), last_activity_at = now() where id = $1 returning owner_id`,
-      [dealId, ownerId],
+      `update crm.deals set owner_id = coalesce(owner_id, $2), amount = coalesce(amount, $3), last_activity_at = now()
+        where id = $1 returning owner_id`,
+      [dealId, ownerId, item.amount ?? null],
     )
   ).rows[0]!.owner_id;
 

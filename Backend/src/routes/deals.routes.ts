@@ -72,6 +72,7 @@ dealsRouter.patch(
         stage: z.enum(PIPELINE_STAGES).optional(),
         responseState: z.enum(RESPONSE_STATES).optional(),
         serviceInterest: z.string().optional(),
+        amount: z.number().nonnegative().max(999_999_999_999.99).nullable().optional(),
       }),
       req.body,
     );

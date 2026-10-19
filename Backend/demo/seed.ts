@@ -191,6 +191,16 @@ async function seedAcme(ws: string, sam: Actor, priya: Actor) {
   await pool.query(`update crm.contacts set last_activity_at = now() - (interval '1 day' * (random() * 20)) where workspace_id = $1 and source = 'brain'`, [ws]);
   await markDnc(pool, priya, ws, (await upsertContact(pool, ws, person(20))).id, { reason: "Asked by email to stop all contact." });
 
+  // Deal values (INR) so the board shows stage totals; one open deal is left without an amount.
+  await pool.query(
+    `update crm.deals d set amount = v.amount
+       from (select id, (array[450000, 1200000, 85000, 300000, 2500000, 640000, 175000, 90000])[row_number() over (order by created_at, id)] as amount
+               from crm.deals where workspace_id = $1) v
+      where d.id = v.id and v.amount is not null
+        and d.id <> (select id from crm.deals where workspace_id = $1 and outcome = 'open' order by created_at, id limit 1)`,
+    [ws],
+  );
+
   // A notification for the admin path would be wrong (admins get none); Sam gets one more.
   await pool.query(
     `insert into crm.notifications (workspace_id, recipient_id, deal_id, title, detail, kind, href) values ($1, $2, $3, 'Meeting today', 'Discovery call - Pixel Retail later today.', 'info', $4)`,
@@ -209,7 +219,7 @@ async function seedGlobex(ws: string, sam: Actor) {
 
   await upsertCall(pool, ws, { source: "quickhowl", externalId: "g-call-1", contact: { email: "zoya@umbramedia.co" }, connected: true, outcome: "interested", summary: "Wants help launching a new podcast network to brands.", durationSeconds: 156, sentiment: "positive", startedAt: daysAgo(1) });
   const deal = await createDeal(pool, sam, ws, { contactId: ravi.id, serviceInterest: "Dealer network outreach" });
-  await updateDeal(pool, sam, ws, deal.id, { stage: "negotiation" });
+  await updateDeal(pool, sam, ws, deal.id, { stage: "negotiation", amount: 900000 });
   await pool.query(
     `insert into crm.notifications (workspace_id, recipient_id, deal_id, title, detail, kind, href) values ($1, $2, $3, 'Negotiation stalled', 'No reply from Titan Motors for 5 days.', 'warning', $4)`,
     [ws, sam.id, deal.id, `/deals/${deal.id}`],

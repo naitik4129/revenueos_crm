@@ -87,6 +87,21 @@ describe("companies, contacts, deals (PGlite)", () => {
     expect((await api("post", `/deals/${first.id}/reopen`)).body).toMatchObject({ outcome: "open", automationMode: "manual" });
   });
 
+  it("deal amount (INR): set, cleared and refused when negative; setting it is not activity", async () => {
+    const deal = await newDeal((await newContact({ email: "amount@x.com" })).id);
+    await seed.query(`update crm.deals set last_activity_at = '2026-01-01T00:00:00Z' where id = $1`, [deal.id]);
+
+    const set = await api("patch", `/deals/${deal.id}`, { body: { amount: 450000.5 } });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({ amount: 450000.5, currency: "INR", lastActivityAt: "2026-01-01T00:00:00.000Z" });
+    expect((await api("get", "/deals?outcome=open")).body.data.find((d: { id: string }) => d.id === deal.id).amount).toBe(450000.5);
+
+    expect((await api("patch", `/deals/${deal.id}`, { body: { amount: -1 } })).status).toBe(400);
+    expect((await api("patch", `/deals/${deal.id}`, { body: { amount: "1000" } })).status).toBe(400);
+    expect((await api("patch", `/deals/${deal.id}`, { body: { amount: null } })).body.amount).toBeNull();
+    await expect(seed.query(`update crm.deals set currency = 'USD' where id = $1`, [deal.id])).rejects.toThrow(/deals_currency_inr/);
+  });
+
   it("board moves: stage changes on an open deal; objection nurture without a type and closed deals are refused", async () => {
     const c = await newContact({ email: "board@x.com" });
     const deal = await newDeal(c.id);

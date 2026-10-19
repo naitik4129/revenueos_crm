@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle } from "lucide-react";
 import { Avatar } from "@/components/common/record-parts";
-import { isOverdue } from "@/lib/format";
+import { isOverdue, money } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { NATIVE_SELECT, cn } from "@/lib/utils";
 import { PIPELINE_STAGES, type Deal, type PipelineStage } from "@/types";
@@ -47,6 +47,7 @@ export function DealCard({
         {deal.contactName}
       </Link>
       {deal.companyName && <div className="text-muted-foreground">{deal.companyName}</div>}
+      {deal.amount !== null && <div className="num font-medium">{money(deal.amount)}</div>}
       {deal.doNotContact && <div className="font-medium text-destructive">Do Not Contact</div>}
       <div className={next && isOverdue(next.dueAt) ? "text-destructive" : undefined}>
         {next ? (

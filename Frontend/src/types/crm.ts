@@ -227,6 +227,10 @@ export interface Deal {
   } | null;
   lastActivityAt: string;
   closedAt: string | null;
+  /** Deal value; null when not set. */
+  amount: number | null;
+  /** Always "INR" for now (migration 013). */
+  currency: string;
   createdAt: string;
   updatedAt: string;
 }
