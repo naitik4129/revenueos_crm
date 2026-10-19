@@ -21,7 +21,7 @@ import { findCurrentStep } from "@/lib/workflow-timeline";
 import { messageFromError, useAutomations, useRuns, useScheduledActions } from "@/store";
 import { DealLink } from "@/features/deals/deal-link";
 import { RUN_STATUSES, type Run, type ScheduledAction } from "@/types";
-import { countLabel } from "@/lib/format";
+import { countLabel, tabLabel } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 const ALL = "all";
@@ -120,8 +120,11 @@ export function RunsPage() {
           <div className="border-b px-3">
             <ViewTabs
               views={[
-                { id: ALL, label: "All runs" },
-                ...RUN_STATUSES.map((s) => ({ id: s, label: s[0]!.toUpperCase() + s.slice(1) })),
+                { id: ALL, label: tabLabel("All runs", runs.data?.statusCounts, ALL) },
+                ...RUN_STATUSES.map((s) => ({
+                  id: s,
+                  label: tabLabel(s[0]!.toUpperCase() + s.slice(1), runs.data?.statusCounts, s),
+                })),
               ]}
               active={status}
               onSelect={(id) => {

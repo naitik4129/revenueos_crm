@@ -81,3 +81,15 @@ export function relShort(iso?: string) {
 export function countLabel(n: number, one: string, many = `${one}s`) {
   return `${n.toLocaleString()} ${n === 1 ? one : many}`;
 }
+
+/** "Sent (3)" for a status tab; just the label while the counts are loading. */
+export function tabLabel(
+  label: string,
+  counts: Record<string, number> | undefined,
+  status: string,
+) {
+  if (!counts) return label;
+  const n =
+    status === "all" ? Object.values(counts).reduce((a, b) => a + b, 0) : (counts[status] ?? 0);
+  return `${label} (${n})`;
+}

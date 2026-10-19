@@ -153,18 +153,34 @@ export interface ListProposalsFilters {
   ownerId?: string;
 }
 
-export async function listProposals(db: Queryable, workspaceId: string, f: ListProposalsFilters, page?: Page) {
-  const params: unknown[] = [workspaceId];
+/** The list's where clause; shared with the per-status counts so both see the same rows. */
+function proposalWhere(params: unknown[], f: ListProposalsFilters) {
   const where = [`p.workspace_id = $1`];
   if (f.dealId) where.push(`p.deal_id = $${params.push(f.dealId)}`);
   if (f.status) where.push(`p.status = $${params.push(f.status)}`);
   if (f.ownerId) where.push(`p.owner_id = $${params.push(f.ownerId)}`);
+  return where.join(" and ");
+}
+
+export async function listProposals(db: Queryable, workspaceId: string, f: ListProposalsFilters, page?: Page) {
+  const params: unknown[] = [workspaceId];
   const result = await db.query<ProposalRow & { total: number }>(
-    `select q.*, count(*) over()::int as total from (${PROPOSAL_SELECT} where ${where.join(" and ")}) q
+    `select q.*, count(*) over()::int as total from (${PROPOSAL_SELECT} where ${proposalWhere(params, f)}) q
       order by q.updated_at desc, q.id ${pageSql(params, page)}`,
     params,
   );
   return { data: result.rows.map(proposalToDto), total: result.rows[0]?.total ?? 0 };
+}
+
+/** Proposals per status with the list's other filters (the status tabs' counts). */
+export async function proposalStatusCounts(db: Queryable, workspaceId: string, f: ListProposalsFilters) {
+  const { status: _ignored, ...others } = f;
+  const params: unknown[] = [workspaceId];
+  const result = await db.query<{ status: string; n: number }>(
+    `select p.status, count(*)::int as n from crm.proposals p where ${proposalWhere(params, others)} group by p.status`,
+    params,
+  );
+  return Object.fromEntries(result.rows.map((r) => [r.status, r.n])) as Record<string, number>;
 }
 
 /**

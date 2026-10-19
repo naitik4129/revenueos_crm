@@ -100,6 +100,7 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT
 - Runs and scheduled actions: `search` (contact or company name) runs on the server.
 - **Owner filter** (gap 1, 2026-10-19): `GET /contacts`, `/companies`, `/deals` take `ownerId` = a user id or `none` (no owner). Each list has an "Unassigned" view tab and an "Unassigned" Owner option; on Deals both the board and the list.
 - **Sorting** (gaps 3, 12, 2026-10-19): `GET /contacts`, `/companies`, `/deals` take `sort` = a fixed key, or `-key` for descending; anything else is 400. Keys: contacts `name`, `company`, `lastActivity`, `created`; companies `name`, `contacts`, `openDeals`, `created`; deals `name`, `amount`, `lastActivity`, `created`, `closed`. Names sort case-insensitively, empty values last in both directions, ties broken by id (stable paging); no `sort` keeps each list's default order (`orderBySql` in `dto.ts`, `*_SORTS` in the services). The UI sorts from column headers (▲/▼; click again to reverse), goes back to page 1, and remembers the sort per list in the browser like the columns; the deals board keeps its own order.
+- **Status counts** (gaps 14, 17, 2026-10-19): `GET /proposals` and `GET /runs` also return `statusCounts` (`{ status: n }`, statuses with no rows left out) under the same filters as the list except `status` (runs: search included), so every tab shows its number whichever tab is open. Tabs read "Sent (4)"; "All" is the sum; no number while loading (`tabLabel` in `lib/format.ts`).
 - **Deal page**: uses deal-filtered, unpaged calls (`/deals/:id/meetings|proposals|runs`, `/scheduled-actions?dealId=`); never the paged workspace lists. `useAutomations()` no longer loads runs or scheduled actions.
 
 ### Workflow templates (gap 18, 2026-10-19)
@@ -199,10 +200,9 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
   9. Contacts list columns "last contacted" and "next task due".
   10. Tasks by company (the company page collects open tasks from its first 10 open deals; tasks on a contact with no deal are missed).
   11. Notes on a company (notes exist only on contacts and deals).
-  14. Proposals list: counts per status and a multi-status filter (e.g. "in progress" = draft + uploaded + ready to send + revised); today it filters one status at a time, so the tabs show no counts.
+  14. Proposals list: a multi-status filter (e.g. "in progress" = draft + uploaded + ready to send + revised); it filters one status at a time. (The per-status counts are done.)
   15. "Proposals awaiting decision" means two things: the dashboard counts sent + revision requested + revised, `GET /proposals/summary` counts sent only. The dashboard card opens the Sent tab, so its list can be shorter than the card.
   16. "Meetings today" on the dashboard leaves out cancelled/failed meetings; `GET /meetings?when=today` lists every status. A status filter on the meetings list (or one shared definition) would make the card and the Today tab agree.
-  17. Runs: no per-status counts (`GET /runs` filters one status at a time and returns only that total), so the Runs status tabs show no counts.
 
 ## Demo mode (2026-10-16)
 `cd Backend && npm run demo` -> http://127.0.0.1:8080, users admin@/sam@/priya@demo.local (password `demo`). Local PGlite + seed + fake Supabase Auth/Storage + API + dry-run worker + Vite, all in one process. Code lives in `Backend/demo/` (never built or shipped); guards and tests are described in `Backend/README.md`. No demo code in `Backend/src`.

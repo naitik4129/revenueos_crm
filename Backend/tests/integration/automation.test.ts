@@ -132,6 +132,22 @@ describe("automation and worker (PGlite)", () => {
     expect((await api("get", "/scheduled-actions?limit=1&offset=1")).body).toMatchObject({ limit: 1, offset: 1 });
   });
 
+  it("returns per-status run counts with the list's other filters (search too), ignoring the status filter", async () => {
+    const id = await workflow("manual_enrollment", [{ action: "create_call_task", config: "Call", delayDays: 3 }]);
+    const deals = [await newDeal(), await newDeal(), await newDeal()];
+    for (const { dealId } of deals) expect((await api("post", "/runs", { dealId, workflowId: id })).status).toBe(201);
+    expect((await api("post", `/runs/${(await runOf(deals[0]!.dealId)).id}/cancel`, {})).status).toBe(200);
+
+    const waiting = (await api("get", `/runs?workflowId=${id}&status=waiting`)).body;
+    expect(waiting.total).toBe(2);
+    expect(waiting.statusCounts).toEqual({ waiting: 2, cancelled: 1 });
+
+    const company = (await api("get", `/deals/${deals[1]!.dealId}`)).body.companyName as string;
+    const searched = (await api("get", `/runs?workflowId=${id}&status=cancelled&search=${encodeURIComponent(company)}`)).body;
+    expect(searched.total).toBe(0);
+    expect(searched.statusCounts).toEqual({ waiting: 1 });
+  });
+
   it("a published version's steps cannot be edited", async () => {
     const id = await workflow("manual_enrollment", [{ action: "create_call_task" }]);
     const res = await api("put", `/workflows/${id}/versions/1/steps`, { steps: [{ order: 0, delayDays: 0, action: "stop_workflow", enabled: true }] });

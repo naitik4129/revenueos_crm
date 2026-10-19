@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { toIsoFromIst } from "./dates";
-import { countLabel, relShort } from "./format";
+import { countLabel, relShort, tabLabel } from "./format";
 import { label, timelineTitle, workflowTriggerLabel } from "./labels";
 
 describe("presentation helpers", () => {
@@ -54,5 +54,15 @@ describe("list labels", () => {
     expect(relShort(new Date(Date.now() - 5 * day).toISOString())).toBe("5d ago");
     expect(relShort(new Date().toISOString())).toMatch(/^Today, /);
     expect(relShort(undefined)).toBe("-");
+  });
+});
+
+describe("tabLabel", () => {
+  it("adds the status count, the total on All, and nothing while loading", () => {
+    const counts = { sent: 3, draft: 2 };
+    expect(tabLabel("Sent", counts, "sent")).toBe("Sent (3)");
+    expect(tabLabel("Rejected", counts, "rejected")).toBe("Rejected (0)");
+    expect(tabLabel("All", counts, "all")).toBe("All (5)");
+    expect(tabLabel("Sent", undefined, "sent")).toBe("Sent");
   });
 });

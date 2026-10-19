@@ -60,6 +60,7 @@ vi.mock("@/store", () => {
       return {
         proposals: [],
         total: 75,
+        statusCounts: { draft: 5, sent: 4, accepted: 2 },
         isLoading: false,
         error: null,
         isPending: false,
@@ -78,7 +79,8 @@ vi.mock("@/store", () => {
     }),
     useRuns: (params: Params) => {
       calls.runs.push(params);
-      return page([], 120);
+      const result = page([], 120);
+      return { ...result, data: { ...result.data, statusCounts: { waiting: 6, failed: 2 } } };
     },
     useScheduledActions: (params: Params) => {
       calls.actions.push(params);
@@ -139,7 +141,7 @@ describe("server-paged lists", () => {
 
   it("proposals: a status tab filters on the server and starts at page one", async () => {
     await renderScreen(ProposalsPage);
-    fireEvent.click(screen.getByRole("tab", { name: "Sent" }));
+    fireEvent.click(screen.getByRole("tab", { name: /^Sent/ }));
     await waitFor(() =>
       expect(last(calls.proposals)).toEqual({ status: "sent", limit: 50, offset: 0 }),
     );
@@ -165,11 +167,21 @@ describe("server-paged lists", () => {
     expect(last(calls.actions)).toEqual({ search: "Acme", limit: 50, offset: 0 });
   });
 
+  it("status tabs show each status's count under the other filters", async () => {
+    await renderScreen(ProposalsPage);
+    for (const name of ["All (11)", "Sent (4)", "Accepted (2)", "Rejected (0)"])
+      expect(screen.getByRole("tab", { name })).toBeInTheDocument();
+    cleanup();
+    await renderScreen(RunsPage);
+    for (const name of ["All runs (8)", "Waiting (6)", "Failed (2)", "Running (0)"])
+      expect(screen.getByRole("tab", { name })).toBeInTheDocument();
+  });
+
   it("runs: a status tab filters on the server and starts at page one", async () => {
     await renderScreen(RunsPage);
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(last(calls.runs)).toMatchObject({ offset: 50 }));
-    fireEvent.click(screen.getByRole("tab", { name: "Failed" }));
+    fireEvent.click(screen.getByRole("tab", { name: /^Failed/ }));
     await waitFor(() =>
       expect(last(calls.runs)).toEqual({ status: "failed", limit: 50, offset: 0 }),
     );

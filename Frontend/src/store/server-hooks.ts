@@ -214,6 +214,8 @@ export function useProposals(params: ListParams = {}) {
   return {
     proposals: query.data?.data ?? [],
     total: query.data?.total ?? 0,
+    /** Per status, under the other filters; undefined until loaded. */
+    statusCounts: query.data?.statusCounts,
     isLoading: query.isLoading,
     error: query.error,
     isPending: create.isPending || update.isPending || status.isPending,

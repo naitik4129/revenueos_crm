@@ -141,6 +141,9 @@ export interface Paged<T> {
   offset: number;
 }
 
+/** A paged list that also counts every status under the same filters (the status tabs). */
+export type PagedWithStatusCounts<T> = Paged<T> & { statusCounts: Record<string, number> };
+
 export interface Company {
   id: string;
   name: string;

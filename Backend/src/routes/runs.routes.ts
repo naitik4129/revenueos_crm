@@ -24,7 +24,11 @@ runsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const { limit = 50, offset = 0, ...filters } = parseQuery(listQuerySchema, req.query);
-    res.json({ ...(await runsService.listRuns(pool, req.workspaceId!, filters, { limit, offset })), limit, offset });
+    const [list, statusCounts] = await Promise.all([
+      runsService.listRuns(pool, req.workspaceId!, filters, { limit, offset }),
+      runsService.runStatusCounts(pool, req.workspaceId!, filters),
+    ]);
+    res.json({ ...list, statusCounts, limit, offset });
   }),
 );
 

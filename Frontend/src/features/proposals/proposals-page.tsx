@@ -23,7 +23,7 @@ import {
 } from "@/components/common/list-controls";
 import { StatusBadge } from "@/components/common/status-badge";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
-import { money } from "@/lib/format";
+import { money, tabLabel } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { useStoredColumns } from "@/lib/use-stored-columns";
 import { messageFromError, useProposalSummary, useProposals, useSession } from "@/store";
@@ -172,7 +172,7 @@ export function ProposalsPage({ initialView }: { initialView?: string | undefine
         }
         tabs={
           <ViewTabs
-            views={VIEWS}
+            views={VIEWS.map((v) => ({ ...v, label: tabLabel(v.label, store.statusCounts, v.id) }))}
             active={VIEWS.some((v) => v.id === status) ? status : null}
             onSelect={(id) => filter({ status: id })}
           />

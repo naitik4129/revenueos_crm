@@ -5,7 +5,7 @@ import { asyncHandler } from "../asyncHandler.js";
 import { pool, withTransaction } from "../db.js";
 import { parseBody, parseId, parseQuery } from "../validation/parse.js";
 import { LEAD_LOSS_REASONS, PROPOSAL_STATUSES } from "../domain/enums.js";
-import { createProposal, getProposalOr404, listProposals, proposalsSummary, updateProposal, updateProposalStatus } from "../services/proposals.service.js";
+import { createProposal, getProposalOr404, listProposals, proposalStatusCounts, proposalsSummary, updateProposal, updateProposalStatus } from "../services/proposals.service.js";
 import { sendProposal, uploadProposalDocument } from "../services/proposalSending.service.js";
 import { ValidationError } from "../errors.js";
 
@@ -65,7 +65,11 @@ proposalsRouter.get(
       }),
       req.query,
     );
-    res.json({ ...(await listProposals(pool, req.workspaceId!, filters, { limit, offset })), limit, offset });
+    const [list, statusCounts] = await Promise.all([
+      listProposals(pool, req.workspaceId!, filters, { limit, offset }),
+      proposalStatusCounts(pool, req.workspaceId!, filters),
+    ]);
+    res.json({ ...list, statusCounts, limit, offset });
   }),
 );
 

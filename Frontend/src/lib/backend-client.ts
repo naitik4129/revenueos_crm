@@ -23,6 +23,7 @@ import type {
   MeetingOutcome,
   MeetingStatus,
   Paged,
+  PagedWithStatusCounts,
   PipelineStage,
   Proposal,
   ProposalStatus,
@@ -643,7 +644,7 @@ export const backend = {
   },
   proposals: {
     list: (params?: ListParams, signal?: AbortSignal) =>
-      get<Paged<Proposal>>(query("/proposals", params), signal),
+      get<PagedWithStatusCounts<Proposal>>(query("/proposals", params), signal),
     summary: (signal?: AbortSignal) => get<ProposalSummary>("/proposals/summary", signal),
     create: (input: CreateProposalInput) => send<Proposal>("POST", "/proposals", input),
     uploadDocument: (id: string, file: File) => {
@@ -709,7 +710,7 @@ export const backend = {
   },
   runs: {
     list: (params?: ListParams, signal?: AbortSignal) =>
-      get<Paged<Run>>(query("/runs", params), signal),
+      get<PagedWithStatusCounts<Run>>(query("/runs", params), signal),
     create: (input: { dealId: string; workflowId: string; reason?: string | undefined }) =>
       send<{ data: Run[] }>("POST", "/runs", input),
     pause: (id: string, reason?: string) => send<Run>("POST", `/runs/${id}/pause`, { reason }),

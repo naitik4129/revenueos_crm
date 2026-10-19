@@ -73,30 +73,35 @@ function nameSearch(params: unknown[], search: string) {
   return `(names.contact_name ilike ${p} or names.company_name ilike ${p})`;
 }
 
-export async function listRuns(db: Queryable, workspaceId: string, filters: ListRunsFilters, page?: Page) {
+/** The list's where clause; shared with the per-status counts so both see the same rows. */
+function runWhere(params: unknown[], filters: ListRunsFilters) {
   const clauses: string[] = [`r.workspace_id = $1`];
-  const params: unknown[] = [workspaceId];
-  let i = 2;
-  if (filters.workflowId) {
-    clauses.push(`r.workflow_id = $${i++}`);
-    params.push(filters.workflowId);
-  }
-  if (filters.dealId) {
-    clauses.push(`r.deal_id = $${i++}`);
-    params.push(filters.dealId);
-  }
-  if (filters.status) {
-    clauses.push(`r.status = $${i++}`);
-    params.push(filters.status);
-  }
+  if (filters.workflowId) clauses.push(`r.workflow_id = $${params.push(filters.workflowId)}`);
+  if (filters.dealId) clauses.push(`r.deal_id = $${params.push(filters.dealId)}`);
+  if (filters.status) clauses.push(`r.status = $${params.push(filters.status)}`);
   if (filters.search) clauses.push(nameSearch(params, filters.search));
-  const where = `where ${clauses.join(" and ")}`;
+  return `where ${clauses.join(" and ")}`;
+}
+
+export async function listRuns(db: Queryable, workspaceId: string, filters: ListRunsFilters, page?: Page) {
+  const params: unknown[] = [workspaceId];
   const result = await db.query<RunRow & SubjectNames & { version_number: number; total: number }>(
-    `select q.*, count(*) over()::int as total from (${RUN_SELECT} ${where}) q
+    `select q.*, count(*) over()::int as total from (${RUN_SELECT} ${runWhere(params, filters)}) q
       order by q.started_at desc, q.id ${pageSql(params, page)}`,
     params,
   );
   return { data: result.rows.map((r) => runToDto(r, r.version_number)), total: result.rows[0]?.total ?? 0 };
+}
+
+/** Runs per status with the list's other filters, search included (the status tabs' counts). */
+export async function runStatusCounts(db: Queryable, workspaceId: string, filters: ListRunsFilters) {
+  const { status: _ignored, ...others } = filters;
+  const params: unknown[] = [workspaceId];
+  const result = await db.query<{ status: string; n: number }>(
+    `select q.status, count(*)::int as n from (${RUN_SELECT} ${runWhere(params, others)}) q group by q.status`,
+    params,
+  );
+  return Object.fromEntries(result.rows.map((r) => [r.status, r.n])) as Record<string, number>;
 }
 
 interface StepForScheduling {

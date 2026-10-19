@@ -329,6 +329,22 @@ describe("calls, tasks, meetings, proposals (PGlite)", () => {
       expect((await api("get", "/meetings")).body.limit).toBe(50);
     });
 
+    it("returns per-status counts with the list's other filters, ignoring the status filter", async () => {
+      const { dealId } = await newDeal();
+      const make = async (title: string) => (await api("post", "/proposals", { dealId, title })).body.id as string;
+      await make("One");
+      await make("Two");
+      const gone = await make("Three");
+      expect((await api("post", `/proposals/${gone}/status`, { status: "withdrawn" })).status).toBe(200);
+      const other = await newDeal();
+      await api("post", "/proposals", { dealId: other.dealId, title: "Elsewhere" });
+
+      const drafts = (await api("get", `/proposals?dealId=${dealId}&status=draft`)).body;
+      expect(drafts.data).toHaveLength(2);
+      expect(drafts.statusCounts).toEqual({ draft: 2, withdrawn: 1 });
+      expect((await api("get", `/proposals?dealId=${dealId}&status=accepted`)).body.statusCounts).toEqual({ draft: 2, withdrawn: 1 });
+    });
+
     it("pages proposals, summarises the whole workspace, and keeps the deal route unpaged", async () => {
       const { dealId } = await newDeal();
       for (const [title, amount] of [["A", 100], ["B", 250], ["C", 400]] as const) {
