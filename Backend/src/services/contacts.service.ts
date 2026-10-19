@@ -298,7 +298,12 @@ export async function updateContact(db: Queryable, actor: Actor, workspaceId: st
               linkedin_url = $8, country = $9, location = $10, source = $11,
               company_id = case when $12 then $13::uuid else company_id end,
               owner_id = case when $14 then $15::uuid else owner_id end,
-              last_activity_at = now()
+              -- An owner change alone is not activity; any other field that really changes is.
+              -- (Right-hand column names are the row's values before this update.)
+              last_activity_at = case
+                when (first_name, last_name, job_title, email, phone, linkedin_url, country, location, source, company_id)
+                     is distinct from ($2, $3, $4, $5, $6, $8, $9, $10, $11, case when $12 then $13::uuid else company_id end)
+                then now() else last_activity_at end
         where id = $1`,
       [
         id,

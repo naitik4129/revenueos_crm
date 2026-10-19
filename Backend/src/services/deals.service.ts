@@ -295,8 +295,10 @@ export async function updateDeal(db: Queryable, actor: Actor | null, workspaceId
   if (patch.amount !== undefined) set("amount", patch.amount);
   if (sets.length === 0) return current;
 
-  // Setting the amount is bookkeeping, not activity with the contact.
-  const activity = Object.entries(patch).some(([key, value]) => value !== undefined && key !== "amount");
+  // Assigning an owner or setting the amount is bookkeeping, not activity with the contact.
+  const activity = Object.entries(patch).some(
+    ([key, value]) => value !== undefined && key !== "amount" && key !== "ownerId",
+  );
   await db.query(
     `update crm.deals set ${sets.join(", ")}${activity ? ", last_activity_at = now()" : ""} where id = $${params.push(id)}`,
     params,

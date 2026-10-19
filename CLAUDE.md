@@ -43,6 +43,7 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT
 - **Max one open deal per contact per workspace** (partial unique index). `nurture` is **not** open (parked); reopening it is blocked if another deal is open.
 - **DNC** keeps the deal open but stops its automation and blocks all sends.
 - **Merge** of two contacts that both have an open deal is **blocked**.
+- **Last activity** (`last_activity_at`) moves on real activity and on field edits that actually change something; assigning an owner (contacts, deals; single or bulk) and setting a deal amount do not (gap 5, 2026-10-19).
 - `crm.workspaces.platform_project_id uuid` refers to `public.revenueos_projects.id` — **no FK** (backend checks existence); nullable, unique.
 - `external_source` / `external_id` are **text** (brain ids are bigint) — room for the brain to push companies, contacts, calls/emails and handovers later.
 - **No tickets.**
@@ -192,7 +193,6 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
   2. Contacts list: "has open deal" filter.
   3. Contacts list: `sort` parameter (column sorting).
   4. Bulk endpoints for contacts: owner, lifecycle, DNC, delete.
-  5. Assigning an owner must not move `last_activity_at` (today `PATCH /contacts/:id` and `PATCH /deals/:id` always set it to now).
   6. Send or log a one-off email from a record (the record page uses `mailto:` until then).
   7. Meetings by contact (meetings filter only by deal).
   8. Saved views stored on the server (custom or shared per team).

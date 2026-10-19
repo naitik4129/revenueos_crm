@@ -102,6 +102,41 @@ describe("companies, contacts, deals (PGlite)", () => {
     await expect(seed.query(`update crm.deals set currency = 'USD' where id = $1`, [deal.id])).rejects.toThrow(/deals_currency_inr/);
   });
 
+  it("assigning an owner is not activity (contacts and deals); other field edits still are", async () => {
+    const OLD = "2026-01-01T00:00:00.000Z";
+    const contact = await newContact({ lastName: "Owner", email: "owner-test@x.com", jobTitle: "CEO" });
+    const deal = await newDeal(contact.id);
+    const reset = () =>
+      Promise.all([
+        seed.query(`update crm.contacts set last_activity_at = $2 where id = $1`, [contact.id, OLD]),
+        seed.query(`update crm.deals set last_activity_at = $2 where id = $1`, [deal.id, OLD]),
+      ]);
+    const contactActivity = async () => (await api("get", `/contacts/${contact.id}`)).body.lastActivityAt;
+    const dealActivity = async () => (await api("get", `/deals/${deal.id}`)).body.lastActivityAt;
+
+    // Contact: the owner alone (single edit, or a bulk-assign PATCH), and the edit form saving
+    // every field unchanged plus a new owner, leave last activity alone.
+    await reset();
+    expect((await api("patch", `/contacts/${contact.id}`, { body: { ownerId: admin } })).status).toBe(200);
+    expect(await contactActivity()).toBe(OLD);
+    const { source } = (await api("get", `/contacts/${contact.id}`)).body;
+    const form = { firstName: "Test", lastName: "Owner", email: "owner-test@x.com", jobTitle: "CEO", source };
+    expect((await api("patch", `/contacts/${contact.id}`, { body: { ...form, ownerId: sales } })).status).toBe(200);
+    expect(await contactActivity()).toBe(OLD);
+    expect(await row(`select count(*)::int n from crm.timeline_events where contact_id = $1 and title = 'Contact Assigned'`, [contact.id])).toEqual({ n: 2 });
+    // A real field change is activity.
+    expect((await api("patch", `/contacts/${contact.id}`, { body: { jobTitle: "CTO" } })).status).toBe(200);
+    expect(await contactActivity()).not.toBe(OLD);
+
+    // Deal: same rule.
+    await reset();
+    expect((await api("patch", `/deals/${deal.id}`, { body: { ownerId: admin } })).status).toBe(200);
+    expect((await api("patch", `/deals/${deal.id}`, { body: { ownerId: null } })).status).toBe(200);
+    expect(await dealActivity()).toBe(OLD);
+    expect((await api("patch", `/deals/${deal.id}`, { body: { serviceInterest: "Lead generation" } })).status).toBe(200);
+    expect(await dealActivity()).not.toBe(OLD);
+  });
+
   it("board moves: stage changes on an open deal; objection nurture without a type and closed deals are refused", async () => {
     const c = await newContact({ email: "board@x.com" });
     const deal = await newDeal(c.id);
