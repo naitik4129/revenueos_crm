@@ -213,6 +213,23 @@ describe("companies, contacts, deals (PGlite)", () => {
     }
   });
 
+  it("hasOpenDeal=true/false splits contacts by an open deal; a nurture (parked) deal is not open; a bad value is 400", async () => {
+    const ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('Open deal test', 'open-deal-test') returning id`)).rows[0].id as string;
+    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sales]);
+    const withDeal = await newContact({ email: "with-deal@x.com" }, ws);
+    const parked = await newContact({ email: "parked@x.com" }, ws);
+    const none = await newContact({ email: "no-deal@x.com" }, ws);
+    await newDeal(withDeal.id, ws);
+    const parkedDeal = await newDeal(parked.id, ws);
+    expect((await api("post", `/deals/${parkedDeal.id}/nurture`, { body: {}, ws })).status).toBe(200);
+
+    const ids = async (path: string) => (await api("get", path, { ws })).body.data.map((r: { id: string }) => r.id).sort();
+    expect(await ids("/contacts?hasOpenDeal=true")).toEqual([withDeal.id]);
+    expect(await ids("/contacts?hasOpenDeal=false")).toEqual([parked.id, none.id].sort());
+    expect(await ids("/contacts")).toEqual([withDeal.id, parked.id, none.id].sort());
+    expect((await api("get", "/contacts?hasOpenDeal=yes", { ws })).status).toBe(400);
+  });
+
   it("board moves: stage changes on an open deal; objection nurture without a type and closed deals are refused", async () => {
     const c = await newContact({ email: "board@x.com" });
     const deal = await newDeal(c.id);

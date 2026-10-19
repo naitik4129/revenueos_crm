@@ -136,6 +136,18 @@ describe("ContactsPage", () => {
     expect(calls.list[0]?.["sort"]).toBeUndefined();
   });
 
+  it("the With open deal view asks the server for contacts with an open deal", async () => {
+    await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "With open deal" }));
+    await waitFor(() => expect(calls.list.at(-1)).toMatchObject({ hasOpenDeal: true }));
+    expect(screen.getByRole("tab", { name: "With open deal" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "All contacts" }));
+    await waitFor(() => expect(calls.list.at(-1)?.["hasOpenDeal"]).toBeUndefined());
+  });
+
   it("assigns an owner to every selected contact", async () => {
     await renderPage();
     fireEvent.click(screen.getByRole("checkbox", { name: "Select all on this page" }));

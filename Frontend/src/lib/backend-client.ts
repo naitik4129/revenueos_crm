@@ -276,6 +276,8 @@ export interface ContactFilters extends Page {
   status?: ContactStatus | undefined;
   ownerId?: string | undefined;
   companyId?: string | undefined;
+  /** true: only contacts with an open deal; false: only those without. */
+  hasOpenDeal?: boolean | undefined;
 }
 export interface ContactInput {
   firstName?: string | undefined;

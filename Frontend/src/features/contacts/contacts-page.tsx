@@ -43,14 +43,16 @@ const ALL = "all";
 // The API reads ownerId=none as "no owner".
 const UNASSIGNED = "none";
 
-type Filters = { lifecycle: string; status: string; owner: string };
-const NO_FILTERS: Filters = { lifecycle: ALL, status: ALL, owner: ALL };
+// openDeal: only contacts with an open deal (a nurture deal is not open).
+type Filters = { lifecycle: string; status: string; owner: string; openDeal: boolean };
+const NO_FILTERS: Filters = { lifecycle: ALL, status: ALL, owner: ALL, openDeal: false };
 
 // Fixed views are filter presets; the tab is highlighted while the filters still match it.
 const VIEWS: { id: string; label: string; filters: (me?: string) => Filters }[] = [
   { id: "all", label: "All contacts", filters: () => NO_FILTERS },
   { id: "mine", label: "My contacts", filters: (me) => ({ ...NO_FILTERS, owner: me ?? ALL }) },
   { id: "unassigned", label: "Unassigned", filters: () => ({ ...NO_FILTERS, owner: UNASSIGNED }) },
+  { id: "openDeal", label: "With open deal", filters: () => ({ ...NO_FILTERS, openDeal: true }) },
   {
     id: "qualified",
     label: "Qualified",
@@ -151,6 +153,7 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
     lifecycleStage: filters.lifecycle === ALL ? undefined : (filters.lifecycle as LifecycleStage),
     status: filters.status === ALL ? undefined : (filters.status as ContactStatus),
     ownerId: filters.owner === ALL ? undefined : filters.owner,
+    hasOpenDeal: filters.openDeal || undefined,
     sort,
     limit: PAGE_SIZE,
     offset,

@@ -99,6 +99,7 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT
 - Proposals: stat cards come from `GET /proposals/summary` (whole workspace: open, awaiting decision, value in play).
 - Runs and scheduled actions: `search` (contact or company name) runs on the server.
 - **Owner filter** (gap 1, 2026-10-19): `GET /contacts`, `/companies`, `/deals` take `ownerId` = a user id or `none` (no owner). Each list has an "Unassigned" view tab and an "Unassigned" Owner option; on Deals both the board and the list.
+- **Has open deal** (gap 2, 2026-10-19): `GET /contacts?hasOpenDeal=true|false` (anything else 400); a nurture deal is not open. Contacts has a "With open deal" view tab.
 - **Sorting** (gaps 3, 12, 2026-10-19): `GET /contacts`, `/companies`, `/deals` take `sort` = a fixed key, or `-key` for descending; anything else is 400. Keys: contacts `name`, `company`, `lastActivity`, `created`; companies `name`, `contacts`, `openDeals`, `created`; deals `name`, `amount`, `lastActivity`, `created`, `closed`. Names sort case-insensitively, empty values last in both directions, ties broken by id (stable paging); no `sort` keeps each list's default order (`orderBySql` in `dto.ts`, `*_SORTS` in the services). The UI sorts from column headers (▲/▼; click again to reverse), goes back to page 1, and remembers the sort per list in the browser like the columns; the deals board keeps its own order.
 - **Status counts** (gaps 14, 17, 2026-10-19): `GET /proposals` and `GET /runs` also return `statusCounts` (`{ status: n }`, statuses with no rows left out) under the same filters as the list except `status` (runs: search included), so every tab shows its number whichever tab is open. Tabs read "Sent (4)"; "All" is the sum; no number while loading (`tabLabel` in `lib/format.ts`).
 - **Deal page**: uses deal-filtered, unpaged calls (`/deals/:id/meetings|proposals|runs`, `/scheduled-actions?dealId=`); never the paged workspace lists. `useAutomations()` no longer loads runs or scheduled actions.
@@ -107,6 +108,15 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT
 - **Drafts** may save a send step (email/WhatsApp) without a template; **publishing** refuses it ("Step N (send_email) requires a template.").
 - **Guards** (`templateUsage` in `workflows.service.ts`): a template used by a workflow's live version, or by any version a run is still on (running / waiting / paused), can't be deleted or switched off — 409 naming the workflows. One kept only by an earlier published version can be switched off but not deleted: published steps never change (trigger `workflow_steps_draft_only_edit`), so the DB refuses it too; the API says so instead of a 500. A template only drafts use can be deleted.
 - **Safety net**: if a send still finds its template missing or inactive, the worker skips it (action `skipped`, timeline note), the run moves on, and `notifyOwnerOrMembers` warns the deal owner — with no owner, every active salesperson member; admins never (same rule as handovers): "Workflow X skipped a send: template missing/inactive".
+
+### Small gaps pass decisions (2026-10-19)
+Steps, one per "go": 1 gap 2 (has open deal) → 2 gap 7 (meetings by contact) → 3 gap 10 (tasks by company) → 4 gap 9 (last contacted / next task due) → 5 gap 14 rest (proposal status groups) → 6 gaps 15, 16 (one definition each) → 7 gap 6 half (log a hand-sent email/WhatsApp from the record page). No migrations.
+- **Last contacted** = the latest outgoing contact: a call (human or AI, any outcome); a campaign email sent by the brain (`email_activities.sent_at`); an email or WhatsApp sent by a workflow or logged by hand. The last two are timeline events matched on `event_kind` in (`email`, `whatsapp`) **and** `actor_source` in (`automation`, `user`) — kind alone also covers incoming WhatsApp replies (`system`) and brain email events (`brain`). Dry-run sends are excluded by `metadata.dryRun = true`, which the worker sets from now on (nothing has run in production, so no old events need it). No title matching. Replies, notes and field edits don't count.
+- **Next task due** = the earliest open task for the contact, on the contact or any of its deals; red when overdue.
+- **Proposal tab groups**: All · In progress (draft, uploaded, ready to send, **revised**) · Awaiting decision (sent, revision requested) · Accepted · Lost (rejected, withdrawn, expired). `revised` is In progress because delivering a proposal on any channel moves it to `sent` (`proposalSending.service.ts`), so a `revised` proposal is always one still to be sent; once re-sent it is `sent` and counts as Awaiting decision.
+- **"Awaiting decision"** (dashboard card, `GET /proposals/summary`, the tab) = sent + revision requested, everywhere.
+- **"Meetings today"** = today's meetings that are not cancelled or failed, everywhere (dashboard card and `GET /meetings?when=today`); they still show under Upcoming.
+- **Step 7**: the record page's Email action logs the send through `POST /contacts/:id/communications` and still opens the mail app (`mailto:`).
 
 ### Kept features
 CSV import, calls + routing, nurture workflows + worker, templates + attachments, email (Resend/SMTP), WhatsApp (Baileys), Google Calendar, meetings, proposals, tasks, DNC, merge, delete + audit, notifications, dashboard, workspaces, admin users.
@@ -192,7 +202,6 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
 - **Retention period** for email reply text, call transcripts and recordings: management decision (no auto-delete in V1).
 - **Email Tool results endpoint**: needed before email events beyond `sent` can be pushed.
 - **API gaps found by the UI redesign** (branch `ui-redesign`, frontend only; listed, not built):
-  2. Contacts list: "has open deal" filter.
   4. Bulk endpoints for contacts: owner, lifecycle, DNC, delete.
   6. Send or log a one-off email from a record (the record page uses `mailto:` until then).
   7. Meetings by contact (meetings filter only by deal).

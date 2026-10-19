@@ -233,6 +233,7 @@ export const CONTACT_SORTS: Record<string, string[]> = {
 
 export interface ListContactsFilters {
   sort?: string;
+  hasOpenDeal?: boolean;
   search?: string;
   lifecycleStage?: LifecycleStage;
   status?: ContactStatus;
@@ -250,6 +251,9 @@ export async function listContacts(db: Queryable, workspaceId: string, f: ListCo
   if (f.lifecycleStage) where.push(`c.lifecycle_stage = $${params.push(f.lifecycleStage)}`);
   if (f.ownerId) where.push(f.ownerId === "none" ? `c.owner_id is null` : `c.owner_id = $${params.push(f.ownerId)}`);
   if (f.companyId) where.push(`c.company_id = $${params.push(f.companyId)}`);
+  if (f.hasOpenDeal !== undefined) {
+    where.push(`${f.hasOpenDeal ? "" : "not "}exists (select 1 from crm.deals d where d.contact_id = c.id and d.outcome = 'open')`);
+  }
   if (f.search) {
     const p = `$${params.push(`%${f.search}%`)}`;
     // Full name too, so "Ann Lee" finds Ann Lee.

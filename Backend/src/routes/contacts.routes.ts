@@ -45,11 +45,14 @@ contactsRouter.get(
         ownerId: z.union([z.string().uuid(), z.literal("none")]).optional(),
         companyId: z.string().uuid().optional(),
         sort: z.enum(sortValues(contacts.CONTACT_SORTS)).optional(),
+        // A nurture (parked) deal is not open.
+        hasOpenDeal: z.enum(["true", "false"]).optional(),
         ...page,
       }),
       req.query,
     );
-    res.json(await contacts.listContacts(pool, req.workspaceId!, q));
+    const { hasOpenDeal, ...rest } = q;
+    res.json(await contacts.listContacts(pool, req.workspaceId!, { ...rest, ...(hasOpenDeal ? { hasOpenDeal: hasOpenDeal === "true" } : {}) }));
   }),
 );
 
