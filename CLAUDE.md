@@ -99,6 +99,11 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT
 - Runs and scheduled actions: `search` (contact or company name) runs on the server.
 - **Deal page**: uses deal-filtered, unpaged calls (`/deals/:id/meetings|proposals|runs`, `/scheduled-actions?dealId=`); never the paged workspace lists. `useAutomations()` no longer loads runs or scheduled actions.
 
+### Workflow templates (gap 18, 2026-10-19)
+- **Drafts** may save a send step (email/WhatsApp) without a template; **publishing** refuses it ("Step N (send_email) requires a template.").
+- **Guards** (`templateUsage` in `workflows.service.ts`): a template used by a workflow's live version, or by any version a run is still on (running / waiting / paused), can't be deleted or switched off — 409 naming the workflows. One kept only by an earlier published version can be switched off but not deleted: published steps never change (trigger `workflow_steps_draft_only_edit`), so the DB refuses it too; the API says so instead of a 500. A template only drafts use can be deleted.
+- **Safety net**: if a send still finds its template missing or inactive, the worker skips it (action `skipped`, timeline note), the run moves on, and `notifyOwnerOrMembers` warns the deal owner — with no owner, every active salesperson member; admins never (same rule as handovers): "Workflow X skipped a send: template missing/inactive".
+
 ### Kept features
 CSV import, calls + routing, nurture workflows + worker, templates + attachments, email (Resend/SMTP), WhatsApp (Baileys), Google Calendar, meetings, proposals, tasks, DNC, merge, delete + audit, notifications, dashboard, workspaces, admin users.
 
@@ -199,7 +204,6 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
   15. "Proposals awaiting decision" means two things: the dashboard counts sent + revision requested + revised, `GET /proposals/summary` counts sent only. The dashboard card opens the Sent tab, so its list can be shorter than the card.
   16. "Meetings today" on the dashboard leaves out cancelled/failed meetings; `GET /meetings?when=today` lists every status. A status filter on the meetings list (or one shared definition) would make the card and the Today tab agree.
   17. Runs: no per-status counts (`GET /runs` filters one status at a time and returns only that total), so the Runs status tabs show no counts.
-  18. Workflow drafts: `PUT .../versions/:n/steps` rejects the whole draft when any send step has no template, and the editor adds new steps as "Send email" with the first active email template. In a workspace without one, every added step fails to save and is gone after a reload (the editor now says "Not saved: …"). Needs a decision: allow template-less send steps in a draft (check on publish only), or default new steps to a task when no template exists.
 
 ## Demo mode (2026-10-16)
 `cd Backend && npm run demo` -> http://127.0.0.1:8080, users admin@/sam@/priya@demo.local (password `demo`). Local PGlite + seed + fake Supabase Auth/Storage + API + dry-run worker + Vite, all in one process. Code lives in `Backend/demo/` (never built or shipped); guards and tests are described in `Backend/README.md`. No demo code in `Backend/src`.

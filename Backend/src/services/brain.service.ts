@@ -10,6 +10,7 @@ import { z } from "zod";
 import type { Queryable } from "../dto.js";
 import { withTransaction } from "../db.js";
 import { AppError, NotFoundError, ValidationError } from "../errors.js";
+import { notifyOwnerOrMembers } from "./notifications.service.js";
 import { env } from "../env.js";
 import { normalizeEmail } from "../domain/email.js";
 import { EMAIL_STATUSES } from "../domain/enums.js";
@@ -493,15 +494,16 @@ export async function applyHandover(db: Queryable, workspaceId: string, item: z.
   });
 
   // The owner is told; with no owner every active salesperson member is (admins never get notifications).
-  await db.query(
-    `insert into crm.notifications (workspace_id, recipient_id, contact_id, deal_id, title, detail, kind, href)
-     select $1, p.id, $2, $3, 'New qualified handover', $4, 'success', $6
-       from crm.profiles p
-      where p.is_active and p.role = 'salesperson'
-        and (p.id = $5 or ($5::uuid is null and exists (
-              select 1 from crm.workspace_members m where m.workspace_id = $1 and m.user_id = p.id)))`,
-    [workspaceId, contact.id, dealId, item.summary.slice(0, 500), owner, `/deals/${dealId}`],
-  );
+  await notifyOwnerOrMembers(db, {
+    workspaceId,
+    ownerId: owner,
+    contactId: contact.id,
+    dealId,
+    title: "New qualified handover",
+    detail: item.summary.slice(0, 500),
+    kind: "success",
+    href: `/deals/${dealId}`,
+  });
   return { status, id: dealId };
 }
 

@@ -60,3 +60,31 @@ export async function markAllNotificationsRead(db: Queryable, recipientId: strin
   await db.query(`update crm.notifications set read = true where recipient_id = $1 and workspace_id = $2 and read = false`, [recipientId, workspaceId]);
   return listNotificationsFor(db, recipientId, workspaceId);
 }
+
+/**
+ * Tells a deal's owner; with no owner, every active salesperson member of the workspace.
+ * Admins are never recipients (an admin owner, or an inactive one, gets nothing).
+ */
+export async function notifyOwnerOrMembers(
+  db: Queryable,
+  n: {
+    workspaceId: string;
+    ownerId: string | null;
+    contactId: string | null;
+    dealId: string | null;
+    title: string;
+    detail: string;
+    kind: NotificationKind;
+    href: string;
+  },
+) {
+  await db.query(
+    `insert into crm.notifications (workspace_id, recipient_id, contact_id, deal_id, title, detail, kind, href)
+     select $1, p.id, $2, $3, $4, $5, $6, $8
+       from crm.profiles p
+      where p.is_active and p.role = 'salesperson'
+        and (p.id = $7 or ($7::uuid is null and exists (
+              select 1 from crm.workspace_members m where m.workspace_id = $1 and m.user_id = p.id)))`,
+    [n.workspaceId, n.contactId, n.dealId, n.title, n.detail, n.kind, n.ownerId, n.href],
+  );
+}

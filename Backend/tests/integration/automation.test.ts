@@ -177,6 +177,144 @@ describe("automation and worker (PGlite)", () => {
     expect(sent).toMatch(/Asha Rao \(Founder\) at Acme \d+ - deal stage new, owner Sam Seller/);
   });
 
+  describe("send steps and their templates (gap 18)", () => {
+    const newTemplate = async (name: string) =>
+      (await api("post", "/templates", { name, channel: "email", subject: "Hi", body: "<p>Hello {{contact.firstName}}</p>" })).body.id as string;
+    const remove = (path: string) => request(app).delete(`/api/v1${path}`).set("Authorization", `Bearer ${sam}`).set("X-Workspace-Id", ws);
+    const notices = (dealId: string) =>
+      seed.query(`select recipient_id, title, detail, kind from crm.notifications where deal_id = $1 order by recipient_id`, [dealId]).then((r) => r.rows);
+
+    it("a draft saves a send step without a template; publishing refuses it until one is set", async () => {
+      const wf = (await api("post", "/workflows", { name: "Draft only", trigger: "manual_enrollment" })).body;
+      const steps: object[] = [
+        { order: 0, delayDays: 0, enabled: true, action: "create_call_task", config: "Call" },
+        { order: 1, delayDays: 2, enabled: true, action: "send_whatsapp" },
+      ];
+      expect((await api("put", `/workflows/${wf.id}/versions/1/steps`, { steps })).status).toBe(200);
+      const refused = await api("post", `/workflows/${wf.id}/versions/1/publish`, {});
+      expect(refused.status).toBe(400);
+      expect(refused.body.error.message).toBe("Step 2 (send_whatsapp) requires a template.");
+
+      const wa = (await api("post", "/templates", { name: "WA", channel: "whatsapp", body: "Hello" })).body.id as string;
+      steps[1] = { ...steps[1], templateId: wa };
+      expect((await api("put", `/workflows/${wf.id}/versions/1/steps`, { steps })).status).toBe(200);
+      expect((await api("post", `/workflows/${wf.id}/versions/1/publish`, {})).status).toBe(200);
+    });
+
+    it("refuses deleting or switching off a template the live version uses, naming the workflow", async () => {
+      const live = await newTemplate("Live intro");
+      const id = await workflow("manual_enrollment", [{ action: "send_email", templateId: live }]);
+      const name = (await one(`select name from crm.workflows where id = $1`, [id])).name as string;
+
+      const del = await remove(`/templates/${live}`);
+      expect(del.status).toBe(409);
+      expect(del.body.error.message).toContain(`"${name}"`);
+      const off = await api("patch", `/templates/${live}`, { active: false });
+      expect(off.status).toBe(409);
+      expect(off.body.error.message).toMatch(new RegExp(`^Cannot switch off this template: it is used by "${name}"`));
+      expect((await api("patch", `/templates/${live}`, { active: true })).status).toBe(200);
+    });
+
+    it("also guards an older version that still has a run in progress; once the run ends it can be switched off", async () => {
+      await seed.query(`update crm.workflows set status = 'paused' where workspace_id = $1`, [ws]);
+      const old = await newTemplate("Old version email");
+      const id = await workflow("manual_enrollment", [{ action: "send_email", templateId: old, delayDays: 3 }]);
+      const { dealId } = await newDeal();
+      expect((await api("post", "/runs", { dealId, workflowId: id })).status).toBe(201);
+      const run = await runOf(dealId);
+      expect(run.status).toBe("waiting");
+
+      // V2 no longer uses the template, so only the waiting run on V1 still needs it.
+      expect((await api("post", `/workflows/${id}/draft`, {})).status).toBeLessThan(300);
+      const v2 = [{ order: 0, delayDays: 0, enabled: true, action: "create_call_task", config: "Call" }];
+      expect((await api("put", `/workflows/${id}/versions/2/steps`, { steps: v2 })).status).toBe(200);
+      expect((await api("post", `/workflows/${id}/versions/2/publish`, {})).status).toBe(200);
+      expect((await api("patch", `/templates/${old}`, { active: false })).status).toBe(409);
+      expect((await remove(`/templates/${old}`)).status).toBe(409);
+
+      // Once the run ends it can be switched off; deleting stays refused (with a reason, not a 500)
+      // because published steps never change, so V1 keeps the template in its history.
+      expect((await api("post", `/runs/${run.id}/cancel`, {})).status).toBe(200);
+      expect((await api("patch", `/templates/${old}`, { active: false })).status).toBe(200);
+      const del = await remove(`/templates/${old}`);
+      expect(del.status).toBe(409);
+      expect(del.body.error.message).toMatch(/keep it in their history\. Switch it off instead\.$/);
+    });
+
+    it("a template used only by a draft can still be deleted", async () => {
+      const draftOnly = await newTemplate("Draft only email");
+      const wf = (await api("post", "/workflows", { name: "Draft user", trigger: "manual_enrollment" })).body;
+      const steps = [{ order: 0, delayDays: 0, enabled: true, action: "send_email", templateId: draftOnly }];
+      expect((await api("put", `/workflows/${wf.id}/versions/1/steps`, { steps })).status).toBe(200);
+      expect((await remove(`/templates/${draftOnly}`)).status).toBeLessThan(300);
+    });
+
+    // The guards can still be bypassed (a race, or a direct DB edit): the worker skips and tells someone.
+    it.each([
+      // A published step's template can't be deleted (409, and the DB trigger), so "missing" means
+      // bad or legacy data: the queued send points at a template id that doesn't exist.
+      [
+        "missing",
+        "No template resolved for this step.",
+        `update crm.scheduled_actions set payload = jsonb_set(payload, '{templateId}', '"00000000-0000-4000-8000-000000000000"')
+          where payload->>'templateId' = $1::text`,
+      ],
+      ["inactive", "Template is inactive.", "update crm.message_templates set is_active = false where id = $1"],
+    ])("worker: a %s template skips the send, the run carries on, and the owner is told", async (problem, reason, breakSql) => {
+      await seed.query(`update crm.workflows set status = 'paused' where workspace_id = $1`, [ws]);
+      const tpl = await newTemplate(`Skip ${problem}`);
+      const id = await workflow("manual_enrollment", [
+        { action: "send_email", templateId: tpl },
+        { action: "create_call_task", config: "Follow up" },
+      ]);
+      const { dealId } = await newDeal();
+      await seed.query(`update crm.deals set owner_id = $2 where id = $1`, [dealId, sam]);
+      expect((await api("post", "/runs", { dealId, workflowId: id })).status).toBe(201);
+      await seed.query(breakSql, [tpl]);
+
+      for (let i = 0; i < 5 && (await runner.runAutomationTick(opts)); i++);
+      const run = await runOf(dealId);
+      expect(run.status).toBe("completed");
+      expect((await actionsOf(run.id)).map((a) => [a.action_type, a.status])).toEqual([
+        ["send_email", "skipped"],
+        ["create_call_task", "completed"],
+      ]);
+      expect(await one(`select last_error from crm.scheduled_actions where workflow_run_id = $1 and action_type = 'send_email'`, [run.id])).toEqual({
+        last_error: reason,
+      });
+      const name = (await one(`select name from crm.workflows where id = $1`, [id])).name as string;
+      expect(await notices(dealId)).toEqual([
+        {
+          recipient_id: sam,
+          title: `Workflow ${name} skipped a send: template ${problem}`,
+          detail: expect.stringMatching(/^Step 1 was not sent to Asha Rao\. .* The run carried on\.$/),
+          kind: "warning",
+        },
+      ]);
+    });
+
+    it("worker: an unowned deal's skip notice goes to every salesperson member, never to admins", async () => {
+      await seed.query(`update crm.workflows set status = 'paused' where workspace_id = $1`, [ws]);
+      const member = async (email: string, role: string) => {
+        const id = (await seed.query(`insert into auth.users (email) values ($1) returning id`, [email])).rows[0].id as string;
+        await seed.query(`insert into crm.profiles (id, role) values ($1, $2)`, [id, role]);
+        await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, id]);
+        return id;
+      };
+      const sue = await member("sue@x.com", "salesperson");
+      await member("boss@x.com", "admin");
+      const tpl = await newTemplate("Skip unowned");
+      const id = await workflow("manual_enrollment", [{ action: "send_email", templateId: tpl }]);
+      const { dealId } = await newDeal();
+      await seed.query(`update crm.deals set owner_id = null where id = $1`, [dealId]);
+      expect((await api("post", "/runs", { dealId, workflowId: id })).status).toBe(201);
+      await seed.query(`update crm.message_templates set is_active = false where id = $1`, [tpl]);
+
+      for (let i = 0; i < 5 && (await runner.runAutomationTick(opts)); i++);
+      expect((await notices(dealId)).map((n) => n.recipient_id)).toEqual([sam, sue].sort());
+    });
+  });
+
   describe("eligibility is checked right before each action", () => {
     async function claimedEmail() {
       await seed.query(`update crm.workflows set status = 'paused' where workspace_id = $1`, [ws]);

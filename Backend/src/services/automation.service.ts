@@ -1,5 +1,6 @@
 import type { Queryable } from "../dto.js";
 import { ConflictError, NotFoundError, ValidationError } from "../errors.js";
+import { notifyOwnerOrMembers } from "./notifications.service.js";
 import type { TaskType, WorkflowRunStatus, WorkflowStepAction } from "../domain/enums.js";
 import { assertValidPipelineStage, canRunAutomation } from "../domain/pipeline.js";
 import type { TemplateRenderContext, TemplateRenderMeeting } from "../domain/templateRenderer.js";
@@ -73,6 +74,10 @@ interface TemplateRow {
  */
 export type Eligibility = { ok: true } | { ok: false; kind: "stop" | "defer" | "pause" | "skip"; reason: string };
 
+// Template skips are a configuration problem nobody would otherwise see, so they notify (see applyIneligible).
+const NO_TEMPLATE = "No template resolved for this step.";
+const INACTIVE_TEMPLATE = "Template is inactive.";
+
 function computeEligibility(
   action: ScheduledActionRow,
   deal: DealRow,
@@ -100,8 +105,8 @@ function computeEligibility(
     if (channels.get("phone") === "do_not_contact") return { ok: false, kind: "skip", reason: `Phone channel is "do_not_contact".` };
   }
   if (MESSAGE_ACTION_TYPES.includes(action.action_type)) {
-    if (!template) return { ok: false, kind: "skip", reason: "No template resolved for this step." };
-    if (!template.is_active) return { ok: false, kind: "skip", reason: "Template is inactive." };
+    if (!template) return { ok: false, kind: "skip", reason: NO_TEMPLATE };
+    if (!template.is_active) return { ok: false, kind: "skip", reason: INACTIVE_TEMPLATE };
   }
   return { ok: true };
 }
@@ -254,6 +259,9 @@ export async function applyIneligible(db: Queryable, actionId: string, verdict: 
 
   await db.query(`update crm.scheduled_actions set status = 'skipped', last_error = $2 where id = $1`, [actionId, verdict.reason]);
   await addTimelineEvent(db, automationEvent(action, "Automation Step Skipped", verdict.reason));
+  if (verdict.reason === NO_TEMPLATE || verdict.reason === INACTIVE_TEMPLATE) {
+    await notifyTemplateSkip(db, action, verdict.reason === NO_TEMPLATE ? "missing" : "inactive");
+  }
   if (verdict.kind === "stop" && ["running", "waiting"].includes(run.status)) {
     await db.query(`update crm.workflow_runs set status = 'cancelled', cancelled_at = now(), cancel_reason = $2, next_run_at = null where id = $1`, [run.id, verdict.reason]);
     await db.query(
@@ -265,6 +273,35 @@ export async function applyIneligible(db: Queryable, actionId: string, verdict: 
   } else if (verdict.kind === "skip" && ["running", "waiting"].includes(run.status)) {
     await advanceRun(db, run);
   }
+}
+
+/** "Workflow X skipped a send: template missing" to the deal owner, or every member when unowned. */
+async function notifyTemplateSkip(db: Queryable, action: ScheduledActionRow, problem: "missing" | "inactive") {
+  const info = (
+    await db.query<{ workflow: string; step_order: number | null; owner_id: string | null; contact_id: string; contact: string }>(
+      `select w.name as workflow, ws.step_order, d.owner_id, d.contact_id,
+              coalesce(nullif(trim(concat_ws(' ', c.first_name, c.last_name)), ''), c.email, 'the contact') as contact
+         from crm.workflow_runs r
+         join crm.workflows w on w.id = r.workflow_id
+         join crm.deals d on d.id = r.deal_id
+         join crm.contacts c on c.id = d.contact_id
+         left join crm.workflow_steps ws on ws.id = $2
+        where r.id = $1`,
+      [action.workflow_run_id, action.workflow_step_id],
+    )
+  ).rows[0];
+  if (!info) return;
+  const step = info.step_order === null ? "A send step" : `Step ${info.step_order + 1}`;
+  await notifyOwnerOrMembers(db, {
+    workspaceId: action.workspace_id,
+    ownerId: info.owner_id,
+    contactId: info.contact_id,
+    dealId: action.deal_id,
+    title: `Workflow ${info.workflow} skipped a send: template ${problem}`,
+    detail: `${step} was not sent to ${info.contact}. ${problem === "missing" ? "Set a template on that step." : "Switch the template back on, or pick another."} The run carried on.`,
+    kind: "warning",
+    href: `/deals/${action.deal_id}`,
+  });
 }
 
 /** Back to the queue at retryAt without consuming a retry. */

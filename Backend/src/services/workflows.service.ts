@@ -292,10 +292,8 @@ export async function updateDraftSteps(db: Queryable, workspaceId: string, workf
 
   await db.query(`delete from crm.workflow_steps where workflow_version_id = $1`, [v.id]);
   let order = 0;
+  // A draft may hold a send step without a template yet; publishVersion refuses it.
   for (const s of steps) {
-    if (s.action === "send_email" || s.action === "send_whatsapp") {
-      if (!s.templateId) throw new ValidationError(`Step ${order + 1} (${s.action}) requires a template.`);
-    }
     await db.query(
       `insert into crm.workflow_steps (workspace_id, workflow_version_id, step_order, delay_days, action, template_id, config, is_enabled)
        values ($1,$2,$3,$4,$5,$6,$7,$8)`,
@@ -405,6 +403,16 @@ export async function publishVersion(db: Queryable, actor: Actor, workspaceId: s
   if (Number(stepCount.rows[0]?.count ?? 0) === 0) {
     throw new ValidationError("Cannot publish a version with no steps.");
   }
+
+  const missing = (
+    await db.query<{ step_order: number; action: string }>(
+      `select step_order, action from crm.workflow_steps
+        where workflow_version_id = $1 and action in ('send_email', 'send_whatsapp') and template_id is null
+        order by step_order limit 1`,
+      [v.id],
+    )
+  ).rows[0];
+  if (missing) throw new ValidationError(`Step ${missing.step_order + 1} (${missing.action}) requires a template.`);
 
   await assertNoUnknownTemplateVariables(db, v.id);
 
@@ -636,6 +644,7 @@ export async function updateTemplate(
     sets.push(`body = $${i++}`);
     params.push(patch.body);
   }
+  if (patch.active === false) await assertTemplateNotInUse(db, id, "switch off");
   if (patch.active !== undefined) {
     sets.push(`is_active = $${i++}`);
     params.push(patch.active);
@@ -730,27 +739,50 @@ export async function deleteTemplateAttachment(db: Queryable, workspaceId: strin
 }
 
 /**
- * `workflow_steps.template_id` is ON DELETE SET NULL, so deleting a template
- * never fails outright — but a step in a *published* version that loses its
- * template would silently stop sending the next time it's due
- * (computeEligibility in automation.service.ts reports "No template
- * resolved" rather than crashing, which is easy to miss). Deleting a
- * template only referenced by draft steps is fine (that's normal workflow-
- * builder editing) and still allowed.
+ * Non-draft workflow versions that send this template, by workflow. `in_use`: the live version,
+ * or a version a run is still on (running / waiting / paused); runs keep the version they started
+ * with, so "published" alone is not enough. Switching such a template off makes those sends skip
+ * (computeEligibility in automation.service.ts).
  */
-export async function deleteTemplate(db: Queryable, workspaceId: string, id: string) {
-  await getTemplateRowOr404(db, workspaceId, id);
-
-  const liveUsage = await db.query<{ count: string }>(
-    `select count(*)::text as count
+async function templateUsage(db: Queryable, templateId: string) {
+  const result = await db.query<{ name: string; in_use: boolean }>(
+    `select w.name,
+            bool_or(wv.status = 'published'
+                    or exists (select 1 from crm.workflow_runs r
+                                where r.workflow_version_id = wv.id and r.status in ('running', 'waiting', 'paused'))) as in_use
        from crm.workflow_steps ws
        join crm.workflow_versions wv on wv.id = ws.workflow_version_id
-      where ws.template_id = $1 and wv.status = 'published'`,
-    [id],
+       join crm.workflows w on w.id = wv.workflow_id
+      where ws.template_id = $1 and wv.status <> 'draft'
+      group by w.name
+      order by w.name`,
+    [templateId],
   );
-  if (Number(liveUsage.rows[0]?.count ?? 0) > 0) {
-    throw new ConflictError("Cannot delete a template used by a published workflow step - remove it from that step first.");
-  }
+  return result.rows;
+}
 
+const quoted = (names: string[]) => names.map((n) => `"${n}"`).join(", ");
+
+async function assertTemplateNotInUse(db: Queryable, templateId: string, verb: "delete" | "switch off") {
+  const usage = await templateUsage(db, templateId);
+  const inUse = usage.filter((u) => u.in_use).map((u) => u.name);
+  if (inUse.length > 0) {
+    throw new ConflictError(
+      `Cannot ${verb} this template: it is used by ${quoted(inUse)} (the live version or runs still in progress). Remove it from those steps first, or wait for the runs to finish.`,
+    );
+  }
+  // Steps of a non-draft version never change (trigger workflow_steps_draft_only_edit), so the
+  // database refuses the delete too; say why instead of failing with a 500.
+  if (verb === "delete" && usage.length > 0) {
+    throw new ConflictError(
+      `Cannot delete this template: earlier versions of ${quoted(usage.map((u) => u.name))} keep it in their history. Switch it off instead.`,
+    );
+  }
+}
+
+/** Deleting a template only drafts use is still allowed. */
+export async function deleteTemplate(db: Queryable, workspaceId: string, id: string) {
+  await getTemplateRowOr404(db, workspaceId, id);
+  await assertTemplateNotInUse(db, id, "delete");
   await db.query(`delete from crm.message_templates where id = $1`, [id]);
 }

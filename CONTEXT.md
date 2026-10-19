@@ -128,6 +128,12 @@ Details: [CLAUDE.md → Brain intake](CLAUDE.md#brain-intake-2026-10-16).
 - Templates use `{{contact.*}}`, `{{company.*}}`, `{{deal.*}}`, `{{meeting.*}}` and date
   variables. The list lives in `Backend/src/domain/templateRenderer.ts`; publishing is refused if
   a template uses an unknown variable.
+- A draft may hold a send step without a template; publishing refuses it ("Step N (send_email)
+  requires a template."). A template used by a live version or a run in progress (running /
+  waiting / paused) can't be deleted or switched off (409 naming the workflows); one kept only by
+  an earlier published version can be switched off but not deleted (published steps never change).
+- If a send still finds its template missing or inactive, the worker skips it, the run carries on,
+  and the deal owner (or, with no owner, every salesperson member) gets a warning notification.
 - `Backend/src/worker.ts` is the only executor. Each tick claims due scheduled actions, rechecks
   eligibility (outcome, DNC, channel status, automation mode, reply state), runs the step, records
   the result and schedules the next step. It also sends queued proposal and meeting WhatsApp

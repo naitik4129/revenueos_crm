@@ -253,7 +253,7 @@ export function TemplatesPage() {
           if (!v) setDeleteTarget(null);
         }}
         title={`Delete "${deleteTarget?.name ?? ""}"?`}
-        description="This removes the template. Templates still used by a published workflow step can't be deleted - remove them from that step first."
+        description="This removes the template. A template a workflow uses (its live version, a run still in progress, or an earlier published version) can't be deleted - switch it off instead once no run needs it."
         disabled={isPending}
         onConfirm={() => {
           if (!deleteTarget) return;
