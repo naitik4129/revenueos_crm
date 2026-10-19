@@ -107,6 +107,35 @@ describe("ContactsPage", () => {
     );
   });
 
+  it("sorts by a column header (ascending, then descending), back to page 1, remembered per browser", async () => {
+    await renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Last activity" }));
+    await waitFor(() =>
+      expect(calls.list.at(-1)).toMatchObject({ sort: "lastActivity", offset: 0 }),
+    );
+    expect(screen.getByRole("columnheader", { name: /Last activity/ })).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Last activity (ascending)" }));
+    await waitFor(() => expect(calls.list.at(-1)).toMatchObject({ sort: "-lastActivity" }));
+    expect(JSON.parse(localStorage.getItem("contacts.sort") ?? "null")).toBe("-lastActivity");
+    // The name column sorts too; unsortable columns have no button.
+    expect(screen.getByRole("button", { name: "Sort by Name" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sort by Email" })).toBeNull();
+  });
+
+  it("starts with the sort saved in this browser, and ignores a stale one", async () => {
+    localStorage.setItem("contacts.sort", JSON.stringify("-name"));
+    await renderPage();
+    expect(calls.list[0]).toMatchObject({ sort: "-name" });
+    cleanup();
+    calls.list.length = 0;
+    localStorage.setItem("contacts.sort", JSON.stringify("email"));
+    await renderPage();
+    expect(calls.list[0]?.["sort"]).toBeUndefined();
+  });
+
   it("assigns an owner to every selected contact", async () => {
     await renderPage();
     fireEvent.click(screen.getByRole("checkbox", { name: "Select all on this page" }));

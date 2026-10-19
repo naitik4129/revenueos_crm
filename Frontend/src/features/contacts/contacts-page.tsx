@@ -25,7 +25,7 @@ import { downloadCsv } from "@/lib/csv";
 import { fmtDate } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { useBulkAssignOwner } from "@/lib/use-bulk-assign";
-import { useStoredColumns } from "@/lib/use-stored-columns";
+import { useStoredColumns, useStoredSort } from "@/lib/use-stored-columns";
 import { useContacts, useSession } from "@/store";
 import {
   CONTACT_STATUSES,
@@ -70,6 +70,7 @@ const COLUMNS: ListColumn<Contact>[] = [
   {
     id: "company",
     label: "Company",
+    sort: "company",
     cell: (c) => c.companyId && <CompanyLink id={c.companyId} name={c.companyName} />,
   },
   {
@@ -97,9 +98,14 @@ const COLUMNS: ListColumn<Contact>[] = [
         </Link>
       ),
   },
-  { id: "lastActivity", label: "Last activity", cell: (c) => <RelTime iso={c.lastActivityAt} /> },
+  {
+    id: "lastActivity",
+    label: "Last activity",
+    sort: "lastActivity",
+    cell: (c) => <RelTime iso={c.lastActivityAt} />,
+  },
   { id: "source", label: "Source", cell: (c) => label(c.source) },
-  { id: "created", label: "Created", cell: (c) => fmtDate(c.createdAt) },
+  { id: "created", label: "Created", sort: "created", cell: (c) => fmtDate(c.createdAt) },
 ];
 const DEFAULT_COLUMNS = [
   "email",
@@ -110,6 +116,9 @@ const DEFAULT_COLUMNS = [
   "openDeal",
   "lastActivity",
 ];
+
+// Server sort keys (see CONTACT_SORTS in the backend).
+const SORTS = ["name", "company", "lastActivity", "created"];
 
 const contactName = (c: Contact) => `${c.firstName} ${c.lastName}`.trim() || c.email || "(no name)";
 
@@ -126,21 +135,23 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
   const [selected, setSelected] = useState<string[]>([]);
   const [importOpen, setImportOpen] = useState(false);
   const [visible, setVisible] = useStoredColumns("contacts.columns", DEFAULT_COLUMNS);
+  const [sort, setSort] = useStoredSort("contacts.sort", SORTS);
   const assignOwner = useBulkAssignOwner(
     (id, ownerId) => backend.contacts.update(id, { ownerId }),
     "contact",
   );
 
   // Any filter change starts again at the first page.
-  useEffect(() => setOffset(0), [search, filters]);
-  // Selection is per page: changing page or filters clears it.
-  useEffect(() => setSelected([]), [search, filters, offset]);
+  useEffect(() => setOffset(0), [search, filters, sort]);
+  // Selection is per page: changing page, filters or sort clears it.
+  useEffect(() => setSelected([]), [search, filters, sort, offset]);
 
   const { data, isLoading, error, isFetching } = useContacts({
     search: search || undefined,
     lifecycleStage: filters.lifecycle === ALL ? undefined : (filters.lifecycle as LifecycleStage),
     status: filters.status === ALL ? undefined : (filters.status as ContactStatus),
     ownerId: filters.owner === ALL ? undefined : filters.owner,
+    sort,
     limit: PAGE_SIZE,
     offset,
   });
@@ -303,6 +314,9 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
           ) : (
             <RecordTable
               rows={contacts}
+              nameSort="name"
+              sort={sort}
+              onSort={setSort}
               columns={COLUMNS.filter((c) => visible.includes(c.id))}
               rowLabel={contactName}
               selected={selected}

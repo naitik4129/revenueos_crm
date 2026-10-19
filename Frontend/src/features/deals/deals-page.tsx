@@ -25,7 +25,7 @@ import { downloadCsv } from "@/lib/csv";
 import { fmtDate, isOverdue, money } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { useBulkAssignOwner } from "@/lib/use-bulk-assign";
-import { useStoredColumns } from "@/lib/use-stored-columns";
+import { useStoredColumns, useStoredSort } from "@/lib/use-stored-columns";
 import { cn } from "@/lib/utils";
 import { messageFromError, useCrmMutation, useDeals, useSession } from "@/store";
 import { DEAL_OUTCOMES, type Deal, type DealOutcome, type PipelineStage } from "@/types";
@@ -299,9 +299,15 @@ const COLUMNS: ListColumn<Deal>[] = [
   {
     id: "amount",
     label: "Amount",
+    sort: "amount",
     cell: (d) => (d.amount === null ? undefined : <span className="num">{money(d.amount)}</span>),
   },
-  { id: "lastActivity", label: "Last activity", cell: (d) => <RelTime iso={d.lastActivityAt} /> },
+  {
+    id: "lastActivity",
+    label: "Last activity",
+    sort: "lastActivity",
+    cell: (d) => <RelTime iso={d.lastActivityAt} />,
+  },
   { id: "service", label: "Service interest", cell: (d) => d.serviceInterest },
   { id: "automation", label: "Automation", cell: (d) => label(d.automationMode) },
   {
@@ -309,9 +315,11 @@ const COLUMNS: ListColumn<Deal>[] = [
     label: "Lifecycle",
     cell: (d) => <StatusBadge value={d.lifecycleStage} tone="neutral" />,
   },
-  { id: "created", label: "Created", cell: (d) => fmtDate(d.createdAt) },
-  { id: "closed", label: "Closed", cell: (d) => d.closedAt && fmtDate(d.closedAt) },
+  { id: "created", label: "Created", sort: "created", cell: (d) => fmtDate(d.createdAt) },
+  { id: "closed", label: "Closed", sort: "closed", cell: (d) => d.closedAt && fmtDate(d.closedAt) },
 ];
+// Server sort keys for the list (see DEAL_SORTS in the backend).
+const SORTS = ["name", "amount", "lastActivity", "created", "closed"];
 const DEFAULT_COLUMNS = [
   "company",
   "stage",
@@ -336,11 +344,12 @@ function DealList({
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
   const [visible, setVisible] = useStoredColumns("deals.columns", DEFAULT_COLUMNS);
+  const [sort, setSort] = useStoredSort("deals.sort", SORTS);
   const assignOwner = useBulkAssignOwner(
     (id, ownerId) => backend.deals.update(id, { ownerId }),
     "deal",
   );
-  const key = JSON.stringify({ ...query, outcome });
+  const key = JSON.stringify({ ...query, outcome, sort });
   // Any filter change starts again at the first page; selection is per page.
   useEffect(() => setOffset(0), [key]);
   useEffect(() => setSelected([]), [key, offset]);
@@ -348,6 +357,7 @@ function DealList({
   const { data, isLoading, error, isFetching } = useDeals({
     ...query,
     outcome: outcome === ALL ? undefined : (outcome as DealOutcome),
+    sort,
     limit: LIST_PAGE_SIZE,
     offset,
   });
@@ -430,6 +440,9 @@ function DealList({
       ) : (
         <RecordTable
           rows={deals}
+          nameSort="name"
+          sort={sort}
+          onSort={setSort}
           columns={COLUMNS.filter((c) => visible.includes(c.id))}
           rowLabel={(d) => d.contactName}
           selected={selected}

@@ -1,5 +1,5 @@
 import type { Actor } from "../authMiddleware.js";
-import type { Queryable } from "../dto.js";
+import { orderBySql, type Queryable } from "../dto.js";
 import { ConflictError, DoNotContactError, ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } from "../errors.js";
 import {
   CONTACT_CHANNEL_STATUS,
@@ -223,7 +223,16 @@ export async function createContact(db: Queryable, actor: Actor, workspaceId: st
   return getContactOr404(db, workspaceId, id);
 }
 
+/** Sortable columns of the contacts list (`sort` = key, or "-key" for descending). */
+export const CONTACT_SORTS: Record<string, string[]> = {
+  name: ["lower(c.first_name)", "lower(c.last_name)"],
+  company: ["lower(co.name)"],
+  lastActivity: ["c.last_activity_at"],
+  created: ["c.created_at"],
+};
+
 export interface ListContactsFilters {
+  sort?: string;
   search?: string;
   lifecycleStage?: LifecycleStage;
   status?: ContactStatus;
@@ -251,7 +260,7 @@ export async function listContacts(db: Queryable, workspaceId: string, f: ListCo
   const result = await db.query<ContactRow & { total: number }>(
     `${CONTACT_SELECT.replace("select c.*,", "select c.*, count(*) over()::int as total,")}
       where ${where.join(" and ")}
-      order by c.created_at desc
+      ${orderBySql(f.sort, CONTACT_SORTS, "c.created_at desc", "c.id")}
       limit $${params.push(limit)} offset $${params.push(offset)}`,
     params,
   );

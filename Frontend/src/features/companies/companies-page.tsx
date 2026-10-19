@@ -22,7 +22,7 @@ import { downloadCsv } from "@/lib/csv";
 import { fmtDate } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { useBulkAssignOwner } from "@/lib/use-bulk-assign";
-import { useStoredColumns } from "@/lib/use-stored-columns";
+import { useStoredColumns, useStoredSort } from "@/lib/use-stored-columns";
 import { useCompanies, useIndustries, useSession } from "@/store";
 import type { Company } from "@/types";
 import { CompanyFormDialog } from "./company-form-dialog";
@@ -51,8 +51,8 @@ const COLUMNS: ListColumn<Company>[] = [
   { id: "industry", label: "Industry", cell: (c) => c.industry },
   { id: "location", label: "Location", cell: location },
   { id: "headcount", label: "Headcount", cell: (c) => c.headcount },
-  { id: "contacts", label: "Contacts", cell: (c) => c.contactCount },
-  { id: "openDeals", label: "Open deals", cell: (c) => c.openDealCount },
+  { id: "contacts", label: "Contacts", sort: "contacts", cell: (c) => c.contactCount },
+  { id: "openDeals", label: "Open deals", sort: "openDeals", cell: (c) => c.openDealCount },
   {
     id: "owner",
     label: "Owner",
@@ -60,8 +60,10 @@ const COLUMNS: ListColumn<Company>[] = [
   },
   { id: "phone", label: "Phone", cell: (c) => c.phone },
   { id: "source", label: "Source", cell: (c) => c.source && label(c.source) },
-  { id: "created", label: "Created", cell: (c) => fmtDate(c.createdAt) },
+  { id: "created", label: "Created", sort: "created", cell: (c) => fmtDate(c.createdAt) },
 ];
+// Server sort keys (see COMPANY_SORTS in the backend).
+const SORTS = ["name", "contacts", "openDeals", "created"];
 const DEFAULT_COLUMNS = ["domain", "industry", "location", "contacts", "openDeals", "owner"];
 
 export function CompaniesPage() {
@@ -73,20 +75,22 @@ export function CompaniesPage() {
   const [selected, setSelected] = useState<string[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [visible, setVisible] = useStoredColumns("companies.columns", DEFAULT_COLUMNS);
+  const [sort, setSort] = useStoredSort("companies.sort", SORTS);
   const assignOwner = useBulkAssignOwner(
     (id, ownerId) => backend.companies.update(id, { ownerId }),
     "company",
   );
 
   // Any filter change starts again at the first page.
-  useEffect(() => setOffset(0), [search, filters]);
-  // Selection is per page: changing page or filters clears it.
-  useEffect(() => setSelected([]), [search, filters, offset]);
+  useEffect(() => setOffset(0), [search, filters, sort]);
+  // Selection is per page: changing page, filters or sort clears it.
+  useEffect(() => setSelected([]), [search, filters, sort, offset]);
 
   const { data, isLoading, error, isFetching } = useCompanies({
     search: search || undefined,
     ownerId: filters.owner === ALL ? undefined : filters.owner,
     industry: filters.industry === ALL ? undefined : filters.industry,
+    sort,
     limit: PAGE_SIZE,
     offset,
   });
@@ -229,6 +233,9 @@ export function CompaniesPage() {
           ) : (
             <RecordTable
               rows={companies}
+              nameSort="name"
+              sort={sort}
+              onSort={setSort}
               columns={COLUMNS.filter((c) => visible.includes(c.id))}
               rowLabel={(c) => c.name}
               selected={selected}

@@ -99,6 +99,7 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT
 - Proposals: stat cards come from `GET /proposals/summary` (whole workspace: open, awaiting decision, value in play).
 - Runs and scheduled actions: `search` (contact or company name) runs on the server.
 - **Owner filter** (gap 1, 2026-10-19): `GET /contacts`, `/companies`, `/deals` take `ownerId` = a user id or `none` (no owner). Each list has an "Unassigned" view tab and an "Unassigned" Owner option; on Deals both the board and the list.
+- **Sorting** (gaps 3, 12, 2026-10-19): `GET /contacts`, `/companies`, `/deals` take `sort` = a fixed key, or `-key` for descending; anything else is 400. Keys: contacts `name`, `company`, `lastActivity`, `created`; companies `name`, `contacts`, `openDeals`, `created`; deals `name`, `amount`, `lastActivity`, `created`, `closed`. Names sort case-insensitively, empty values last in both directions, ties broken by id (stable paging); no `sort` keeps each list's default order (`orderBySql` in `dto.ts`, `*_SORTS` in the services). The UI sorts from column headers (▲/▼; click again to reverse), goes back to page 1, and remembers the sort per list in the browser like the columns; the deals board keeps its own order.
 - **Deal page**: uses deal-filtered, unpaged calls (`/deals/:id/meetings|proposals|runs`, `/scheduled-actions?dealId=`); never the paged workspace lists. `useAutomations()` no longer loads runs or scheduled actions.
 
 ### Workflow templates (gap 18, 2026-10-19)
@@ -191,7 +192,6 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
 - **Email Tool results endpoint**: needed before email events beyond `sent` can be pushed.
 - **API gaps found by the UI redesign** (branch `ui-redesign`, frontend only; listed, not built):
   2. Contacts list: "has open deal" filter.
-  3. Contacts list: `sort` parameter (column sorting).
   4. Bulk endpoints for contacts: owner, lifecycle, DNC, delete.
   6. Send or log a one-off email from a record (the record page uses `mailto:` until then).
   7. Meetings by contact (meetings filter only by deal).
@@ -199,7 +199,6 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
   9. Contacts list columns "last contacted" and "next task due".
   10. Tasks by company (the company page collects open tasks from its first 10 open deals; tasks on a contact with no deal are missed).
   11. Notes on a company (notes exist only on contacts and deals).
-  12. Companies list: the same `sort` parameter as contacts (gap 3).
   14. Proposals list: counts per status and a multi-status filter (e.g. "in progress" = draft + uploaded + ready to send + revised); today it filters one status at a time, so the tabs show no counts.
   15. "Proposals awaiting decision" means two things: the dashboard counts sent + revision requested + revised, `GET /proposals/summary` counts sent only. The dashboard card opens the Sent tab, so its list can be shorter than the card.
   16. "Meetings today" on the dashboard leaves out cancelled/failed meetings; `GET /meetings?when=today` lists every status. A status filter on the meetings list (or one shared definition) would make the card and the Today tab agree.

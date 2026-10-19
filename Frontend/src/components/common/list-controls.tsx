@@ -215,7 +215,41 @@ export function SelectAll({
   );
 }
 
-export type ListColumn<T> = { id: string; label: string; cell: (row: T) => ReactNode };
+export type ListColumn<T> = {
+  id: string;
+  label: string;
+  cell: (row: T) => ReactNode;
+  /** The server's sort key for this column; sortable only when set. */
+  sort?: string;
+};
+
+/** A column header that sorts: first click ascending, the next descending, and so on. */
+function SortHeader({
+  label: text,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  label: string;
+  sortKey: string;
+  sort: string | undefined;
+  onSort: (sort: string) => void;
+}) {
+  const dir = sort === sortKey ? "ascending" : sort === `-${sortKey}` ? "descending" : null;
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+      onClick={() => onSort(dir === "ascending" ? `-${sortKey}` : sortKey)}
+      aria-label={`Sort by ${text}${dir ? ` (${dir})` : ""}`}
+    >
+      {text}
+      <span aria-hidden className={dir ? "text-foreground" : "opacity-30"}>
+        {dir === "descending" ? "▼" : "▲"}
+      </span>
+    </button>
+  );
+}
 
 /**
  * Dense list table: optional tick boxes (pass `onSelect`), a fixed name column, the chosen
@@ -226,6 +260,9 @@ export function RecordTable<T extends { id: string }>({
   columns,
   name,
   nameHeader = "Name",
+  nameSort,
+  sort,
+  onSort,
   rowLabel,
   selected = [],
   onSelect,
@@ -241,6 +278,11 @@ export function RecordTable<T extends { id: string }>({
   onSelect?: (ids: string[]) => void;
   actions?: (row: T) => ReactNode;
   dimmed?: boolean;
+  /** Sort key of the name column. */
+  nameSort?: string;
+  /** Current sort ("key" or "-key"); headers with a sort key call onSort. */
+  sort?: string | undefined;
+  onSort?: (sort: string) => void;
 }) {
   return (
     <div className="max-h-[calc(100vh-17rem)] overflow-auto">
@@ -252,10 +294,24 @@ export function RecordTable<T extends { id: string }>({
                 <SelectAll ids={rows.map((r) => r.id)} selected={selected} onChange={onSelect} />
               </th>
             )}
-            <th className="px-3 py-2 font-medium">{nameHeader}</th>
+            <th className="px-3 py-2 font-medium" aria-sort={ariaSort(nameSort, sort)}>
+              {nameSort && onSort ? (
+                <SortHeader label={nameHeader} sortKey={nameSort} sort={sort} onSort={onSort} />
+              ) : (
+                nameHeader
+              )}
+            </th>
             {columns.map((c) => (
-              <th key={c.id} className="whitespace-nowrap px-3 py-2 font-medium">
-                {c.label}
+              <th
+                key={c.id}
+                className="whitespace-nowrap px-3 py-2 font-medium"
+                aria-sort={ariaSort(c.sort, sort)}
+              >
+                {c.sort && onSort ? (
+                  <SortHeader label={c.label} sortKey={c.sort} sort={sort} onSort={onSort} />
+                ) : (
+                  c.label
+                )}
               </th>
             ))}
             {actions && (
@@ -307,6 +363,11 @@ export function RecordTable<T extends { id: string }>({
       </table>
     </div>
   );
+}
+
+function ariaSort(key: string | undefined, sort: string | undefined) {
+  if (!key) return undefined;
+  return sort === key ? "ascending" : sort === `-${key}` ? "descending" : "none";
 }
 
 /** Centered icon, title, text and actions for a list with no rows. */

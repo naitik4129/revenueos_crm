@@ -163,6 +163,56 @@ describe("companies, contacts, deals (PGlite)", () => {
     }
   });
 
+  it("sorts contacts, companies and deals by fixed keys ('-' = descending), stable across pages; unknown keys are 400", async () => {
+    const ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('Sort test', 'sort-test') returning id`)).rows[0].id as string;
+    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sales]);
+    const company = async (name: string) => (await api("post", "/companies", { body: { name }, ws })).body.id as string;
+    const beta = await company("beta Labs");
+    const alpha = await company("Alpha Co");
+    const contact = async (firstName: string, lastName: string, companyId?: string) =>
+      (await api("post", "/contacts", { body: { firstName, lastName, email: `sort${++sortN}@sort.test`, companyId }, ws })).body.id as string;
+    let sortN = 0;
+    const zed = await contact("Zed", "Young", alpha);
+    const amy = await contact("amy", "Stone", beta);
+    const bob = await contact("Bob", "Ray");
+    const twin1 = await contact("Same", "Name");
+    const twin2 = await contact("Same", "Name");
+    const names = async (path: string) =>
+      (await api("get", path, { ws })).body.data.map((r: { firstName?: string; name?: string; contactName?: string }) => r.firstName ?? r.name ?? r.contactName);
+
+    // Case-insensitive name order, both directions.
+    expect(await names("/contacts?sort=name")).toEqual(["amy", "Bob", "Same", "Same", "Zed"]);
+    expect(await names("/contacts?sort=-name")).toEqual(["Zed", "Same", "Same", "Bob", "amy"]);
+    // Contacts without a company go last in both directions.
+    expect(await names("/contacts?sort=company")).toEqual(["Zed", "amy", expect.any(String), expect.any(String), expect.any(String)]);
+    expect((await names("/contacts?sort=-company")).slice(0, 2)).toEqual(["amy", "Zed"]);
+    // Equal sort values page without repeats or gaps (id tie-break).
+    const page1 = (await api("get", "/contacts?sort=name&limit=3&offset=2", { ws })).body.data.map((r: { id: string }) => r.id);
+    const page2 = (await api("get", "/contacts?sort=name&limit=3&offset=3", { ws })).body.data.map((r: { id: string }) => r.id);
+    expect(new Set([page1[0], page2[0]])).toEqual(new Set([twin1, twin2]));
+
+    // Companies by contact count.
+    await api("patch", `/contacts/${bob}`, { body: { companyId: beta }, ws });
+    expect(await names("/companies?sort=-contacts")).toEqual(["beta Labs", "Alpha Co"]);
+    expect(await names("/companies?sort=name")).toEqual(["Alpha Co", "beta Labs"]);
+
+    // Deals by amount: empty amounts last in both directions.
+    const deal = async (contactId: string, amount: number | null) => {
+      const id = (await api("post", "/deals", { body: { contactId }, ws })).body.id as string;
+      await api("patch", `/deals/${id}`, { body: { amount }, ws });
+    };
+    await deal(zed, 500);
+    await deal(amy, null);
+    await deal(bob, 2000);
+    expect(await names("/deals?sort=amount")).toEqual(["Zed Young", "Bob Ray", "amy Stone"]);
+    expect(await names("/deals?sort=-amount")).toEqual(["Bob Ray", "Zed Young", "amy Stone"]);
+    expect(await names("/deals?sort=name")).toEqual(["amy Stone", "Bob Ray", "Zed Young"]);
+
+    for (const path of ["/contacts?sort=email", "/companies?sort=industry", "/deals?sort=stage", "/deals?sort=--amount"]) {
+      expect((await api("get", path, { ws })).status).toBe(400);
+    }
+  });
+
   it("board moves: stage changes on an open deal; objection nurture without a type and closed deals are refused", async () => {
     const c = await newContact({ email: "board@x.com" });
     const deal = await newDeal(c.id);

@@ -1,5 +1,5 @@
 import type { Actor } from "../authMiddleware.js";
-import type { Queryable } from "../dto.js";
+import { orderBySql, type Queryable } from "../dto.js";
 import { ConflictError, InvalidTransitionError, isUniqueViolation, NotFoundError } from "../errors.js";
 import type {
   AutomationMode,
@@ -210,7 +210,17 @@ export async function createDeal(db: Queryable, actor: Actor | EventActor | null
   return getDealOr404(db, workspaceId, id);
 }
 
+/** Sortable columns of the deals list (`sort` = key, or "-key" for descending). */
+export const DEAL_SORTS: Record<string, string[]> = {
+  name: ["lower(c.first_name)", "lower(c.last_name)"],
+  amount: ["d.amount"],
+  lastActivity: ["d.last_activity_at"],
+  created: ["d.created_at"],
+  closed: ["d.closed_at"],
+};
+
 export interface ListDealsFilters {
+  sort?: string;
   outcome?: DealOutcome;
   stage?: PipelineStage;
   ownerId?: string;
@@ -243,7 +253,7 @@ export async function listDeals(db: Queryable, workspaceId: string, f: ListDeals
   const result = await db.query<DealRow & { total: number }>(
     `${DEAL_SELECT.replace("select d.*,", "select d.*, count(*) over()::int as total,")}
       where ${where.join(" and ")}
-      order by d.last_activity_at desc
+      ${orderBySql(f.sort, DEAL_SORTS, "d.last_activity_at desc", "d.id")}
       limit $${params.push(limit)} offset $${params.push(offset)}`,
     params,
   );

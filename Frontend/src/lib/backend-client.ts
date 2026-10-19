@@ -268,6 +268,8 @@ export interface Page {
   offset?: number | undefined;
 }
 export interface ContactFilters extends Page {
+  /** A sort key of that list, or "-key" for descending. */
+  sort?: string | undefined;
   search?: string | undefined;
   lifecycleStage?: LifecycleStage | undefined;
   status?: ContactStatus | undefined;
@@ -318,11 +320,15 @@ export interface CompanyInput {
   ownerId?: string | null | undefined;
 }
 export interface CompanyFilters extends Page {
+  /** A sort key of that list, or "-key" for descending. */
+  sort?: string | undefined;
   search?: string | undefined;
   ownerId?: string | undefined;
   industry?: string | undefined;
 }
 export interface DealFilters extends Page {
+  /** A sort key of that list, or "-key" for descending. */
+  sort?: string | undefined;
   outcome?: DealOutcome | undefined;
   stage?: PipelineStage | undefined;
   ownerId?: string | undefined;

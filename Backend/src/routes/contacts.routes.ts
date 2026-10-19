@@ -5,6 +5,7 @@ import { pool, withTransaction } from "../db.js";
 import { parseBody, parseId, parseQuery } from "../validation/parse.js";
 import { CALL_CONNECTED_OUTCOMES, CALL_NOT_CONNECTED_REASONS, CONTACT_CHANNELS, CONTACT_STATUSES, LIFECYCLE_STAGES } from "../domain/enums.js";
 import * as contacts from "../services/contacts.service.js";
+import { sortValues } from "../dto.js";
 import { contactToDto } from "../services/contacts.service.js";
 import { listDeals } from "../services/deals.service.js";
 import { listTimeline } from "../services/timeline.service.js";
@@ -43,6 +44,7 @@ contactsRouter.get(
         // "none" = no owner (the Unassigned view).
         ownerId: z.union([z.string().uuid(), z.literal("none")]).optional(),
         companyId: z.string().uuid().optional(),
+        sort: z.enum(sortValues(contacts.CONTACT_SORTS)).optional(),
         ...page,
       }),
       req.query,

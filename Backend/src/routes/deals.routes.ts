@@ -5,6 +5,7 @@ import { pool, withTransaction } from "../db.js";
 import { parseBody, parseId, parseQuery } from "../validation/parse.js";
 import { AUTOMATION_MODES, DEAL_OUTCOMES, LEAD_LOSS_REASONS, PIPELINE_STAGES, RESPONSE_STATES } from "../domain/enums.js";
 import * as deals from "../services/deals.service.js";
+import { sortValues } from "../dto.js";
 import { dealToDto } from "../services/deals.service.js";
 import { listTimeline } from "../services/timeline.service.js";
 import { listTasks } from "../services/tasks.service.js";
@@ -31,6 +32,7 @@ dealsRouter.get(
         companyId: z.string().uuid().optional(),
         missingNextAction: z.enum(["true", "false"]).optional(),
         search: z.string().optional(),
+        sort: z.enum(sortValues(deals.DEAL_SORTS)).optional(),
         ...page,
       }),
       req.query,

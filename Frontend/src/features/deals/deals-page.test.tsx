@@ -191,6 +191,18 @@ describe("deals board", () => {
     );
   });
 
+  it("the list sorts by Amount; the board keeps its own order", async () => {
+    deals.list = [deal("d1", "Ann", "new")];
+    localStorage.removeItem("deals.sort");
+    await renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Amount" }));
+    await vi.waitFor(() => expect(deals.calls.at(-1)).toMatchObject({ sort: "amount" }));
+    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    await vi.waitFor(() => expect(deals.calls.at(-1)).toMatchObject({ outcome: "open" }));
+    expect(deals.calls.at(-1)).not.toHaveProperty("sort");
+  });
+
   it("list view assigns an owner to the ticked deals", async () => {
     deals.list = [deal("d1", "Ann", "new"), deal("d2", "Bob", "new")];
     api.update.mockResolvedValue(deal("d1", "Ann", "new"));

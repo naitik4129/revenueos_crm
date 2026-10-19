@@ -1,5 +1,5 @@
 import type { Actor } from "../authMiddleware.js";
-import type { Queryable } from "../dto.js";
+import { orderBySql, type Queryable } from "../dto.js";
 import { ConflictError, isUniqueViolation, NotFoundError, ValidationError } from "../errors.js";
 import { LEAD_SOURCES, type LeadSource } from "../domain/enums.js";
 import { userNameSql } from "./profiles.service.js";
@@ -91,7 +91,16 @@ export async function getCompanyOr404(db: Queryable, workspaceId: string, id: st
   return row;
 }
 
+/** Sortable columns of the companies list (`sort` = key, or "-key" for descending). */
+export const COMPANY_SORTS: Record<string, string[]> = {
+  name: ["lower(co.name)"],
+  contacts: ["co.contact_count"],
+  openDeals: ["co.open_deal_count"],
+  created: ["co.created_at"],
+};
+
 export interface ListCompaniesFilters {
+  sort?: string;
   search?: string;
   ownerId?: string;
   industry?: string;
@@ -112,7 +121,7 @@ export async function listCompanies(db: Queryable, workspaceId: string, f: ListC
   const result = await db.query<CompanyRow & { total: number }>(
     `select co.*, count(*) over()::int as total from (${COMPANY_SELECT}) co
       where ${where.join(" and ")}
-      order by co.name asc
+      ${orderBySql(f.sort, COMPANY_SORTS, "co.name asc", "co.id")}
       limit $${params.push(limit)} offset $${params.push(f.offset ?? 0)}`,
     params,
   );

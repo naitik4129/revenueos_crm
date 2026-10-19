@@ -4,6 +4,7 @@ import { asyncHandler } from "../asyncHandler.js";
 import { pool, withTransaction } from "../db.js";
 import { parseBody, parseId, parseQuery } from "../validation/parse.js";
 import * as companies from "../services/companies.service.js";
+import { sortValues } from "../dto.js";
 import { listContacts } from "../services/contacts.service.js";
 import { listDeals } from "../services/deals.service.js";
 import { listTimeline } from "../services/timeline.service.js";
@@ -32,7 +33,7 @@ companiesRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const q = parseQuery(
-      z.object({ search: z.string().optional(), ownerId: z.union([z.string().uuid(), z.literal("none")]).optional(), industry: z.string().optional(), ...page }),
+      z.object({ search: z.string().optional(), ownerId: z.union([z.string().uuid(), z.literal("none")]).optional(), industry: z.string().optional(), sort: z.enum(sortValues(companies.COMPANY_SORTS)).optional(), ...page }),
       req.query,
     );
     res.json(await companies.listCompanies(pool, req.workspaceId!, q));

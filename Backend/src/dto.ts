@@ -48,5 +48,23 @@ export function pageSql(params: unknown[], page?: Page): string {
   return page ? `limit $${params.push(page.limit)} offset $${params.push(page.offset)}` : "";
 }
 
+/** Allowed `sort` values for a list: each key ascending, or with a leading "-" descending. */
+export function sortValues(columns: Record<string, string[]>): [string, ...string[]] {
+  const keys = Object.keys(columns);
+  return [...keys, ...keys.map((k) => `-${k}`)] as [string, ...string[]];
+}
+
+/**
+ * `order by` for a list. `sort` is a key of `columns` (checked by the route), "-" for descending;
+ * empty values always go last. The tie-break keeps paging stable when the sort values repeat.
+ */
+export function orderBySql(sort: string | undefined, columns: Record<string, string[]>, fallback: string, tieBreak: string): string {
+  if (!sort) return `order by ${fallback}, ${tieBreak}`;
+  const desc = sort.startsWith("-");
+  const exprs = columns[desc ? sort.slice(1) : sort];
+  if (!exprs) throw new Error(`Unknown sort "${sort}".`);
+  return `order by ${exprs.map((e) => `${e} ${desc ? "desc" : "asc"} nulls last`).join(", ")}, ${tieBreak}`;
+}
+
 /** Start of today in Asia/Kolkata as a timestamptz SQL expression (same day boundary as tasks). */
 export const START_OF_TODAY_IST = `(date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata')`;
