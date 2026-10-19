@@ -97,6 +97,16 @@ describe("ContactsPage", () => {
     );
   });
 
+  it("the Unassigned view asks the server for contacts with no owner", async () => {
+    await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "Unassigned" }));
+    await waitFor(() => expect(calls.list.at(-1)).toMatchObject({ ownerId: "none" }));
+    expect(screen.getByRole("tab", { name: "Unassigned" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
   it("assigns an owner to every selected contact", async () => {
     await renderPage();
     fireEvent.click(screen.getByRole("checkbox", { name: "Select all on this page" }));

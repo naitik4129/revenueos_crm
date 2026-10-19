@@ -32,7 +32,7 @@ companiesRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const q = parseQuery(
-      z.object({ search: z.string().optional(), ownerId: z.string().uuid().optional(), industry: z.string().optional(), ...page }),
+      z.object({ search: z.string().optional(), ownerId: z.union([z.string().uuid(), z.literal("none")]).optional(), industry: z.string().optional(), ...page }),
       req.query,
     );
     res.json(await companies.listCompanies(pool, req.workspaceId!, q));

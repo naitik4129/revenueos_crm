@@ -35,6 +35,8 @@ import { NewDealDialog } from "./new-deal-dialog";
 import { countLabel } from "@/lib/format";
 
 const ALL = "all";
+// The API reads ownerId=none as "no owner".
+const UNASSIGNED = "none";
 // The backend's page limit; the board shows open deals only (a few hundred per client).
 const BOARD_LIMIT = 500;
 const LIST_PAGE_SIZE = 50;
@@ -46,6 +48,7 @@ const NO_FILTERS: Filters = { owner: ALL, noNextAction: false };
 const VIEWS: { id: string; label: string; filters: (me?: string) => Filters }[] = [
   { id: "all", label: "All deals", filters: () => NO_FILTERS },
   { id: "mine", label: "My deals", filters: (me) => ({ ...NO_FILTERS, owner: me ?? ALL }) },
+  { id: "unassigned", label: "Unassigned", filters: () => ({ ...NO_FILTERS, owner: UNASSIGNED }) },
   {
     id: "noNext",
     label: "No next action",
@@ -87,7 +90,11 @@ export function DealsPage({ initialView }: { initialView?: string | undefined } 
         label="Owner"
         value={filters.owner}
         onChange={(owner) => setFilters((f) => ({ ...f, owner }))}
-        options={[[ALL, "All owners"], ...users.map((u) => [u.id, u.name] as const)]}
+        options={[
+          [ALL, "All owners"],
+          [UNASSIGNED, "Unassigned"],
+          ...users.map((u) => [u.id, u.name] as const),
+        ]}
       />
     </>
   );

@@ -40,6 +40,8 @@ import { countLabel } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 const ALL = "all";
+// The API reads ownerId=none as "no owner".
+const UNASSIGNED = "none";
 
 type Filters = { lifecycle: string; status: string; owner: string };
 const NO_FILTERS: Filters = { lifecycle: ALL, status: ALL, owner: ALL };
@@ -48,6 +50,7 @@ const NO_FILTERS: Filters = { lifecycle: ALL, status: ALL, owner: ALL };
 const VIEWS: { id: string; label: string; filters: (me?: string) => Filters }[] = [
   { id: "all", label: "All contacts", filters: () => NO_FILTERS },
   { id: "mine", label: "My contacts", filters: (me) => ({ ...NO_FILTERS, owner: me ?? ALL }) },
+  { id: "unassigned", label: "Unassigned", filters: () => ({ ...NO_FILTERS, owner: UNASSIGNED }) },
   {
     id: "qualified",
     label: "Qualified",
@@ -244,7 +247,11 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
                   label="Owner"
                   value={filters.owner}
                   onChange={(v) => set({ owner: v })}
-                  options={[[ALL, "All owners"], ...users.map((u) => [u.id, u.name] as const)]}
+                  options={[
+                    [ALL, "All owners"],
+                    [UNASSIGNED, "Unassigned"],
+                    ...users.map((u) => [u.id, u.name] as const),
+                  ]}
                 />
                 <FilterSelect
                   label="Status"

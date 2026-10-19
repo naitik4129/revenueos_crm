@@ -40,7 +40,8 @@ contactsRouter.get(
         search: z.string().optional(),
         lifecycleStage: z.enum(LIFECYCLE_STAGES).optional(),
         status: z.enum(CONTACT_STATUSES).optional(),
-        ownerId: z.string().uuid().optional(),
+        // "none" = no owner (the Unassigned view).
+        ownerId: z.union([z.string().uuid(), z.literal("none")]).optional(),
         companyId: z.string().uuid().optional(),
         ...page,
       }),

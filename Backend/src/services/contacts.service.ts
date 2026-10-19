@@ -239,7 +239,7 @@ export async function listContacts(db: Queryable, workspaceId: string, f: ListCo
   const where = [`c.workspace_id = $1`];
   where.push(f.status ? `c.status = $${params.push(f.status)}` : `c.status <> 'merged'`);
   if (f.lifecycleStage) where.push(`c.lifecycle_stage = $${params.push(f.lifecycleStage)}`);
-  if (f.ownerId) where.push(`c.owner_id = $${params.push(f.ownerId)}`);
+  if (f.ownerId) where.push(f.ownerId === "none" ? `c.owner_id is null` : `c.owner_id = $${params.push(f.ownerId)}`);
   if (f.companyId) where.push(`c.company_id = $${params.push(f.companyId)}`);
   if (f.search) {
     const p = `$${params.push(`%${f.search}%`)}`;

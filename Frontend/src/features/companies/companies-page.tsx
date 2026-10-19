@@ -30,6 +30,8 @@ import { countLabel } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 const ALL = "all";
+// The API reads ownerId=none as "no owner".
+const UNASSIGNED = "none";
 
 type Filters = { industry: string; owner: string };
 const NO_FILTERS: Filters = { industry: ALL, owner: ALL };
@@ -38,6 +40,7 @@ const NO_FILTERS: Filters = { industry: ALL, owner: ALL };
 const VIEWS: { id: string; label: string; filters: (me?: string) => Filters }[] = [
   { id: "all", label: "All companies", filters: () => NO_FILTERS },
   { id: "mine", label: "My companies", filters: (me) => ({ ...NO_FILTERS, owner: me ?? ALL }) },
+  { id: "unassigned", label: "Unassigned", filters: () => ({ ...NO_FILTERS, owner: UNASSIGNED }) },
 ];
 
 const location = (c: Company) =>
@@ -182,7 +185,11 @@ export function CompaniesPage() {
                   label="Owner"
                   value={filters.owner}
                   onChange={(v) => set({ owner: v })}
-                  options={[[ALL, "All owners"], ...users.map((u) => [u.id, u.name] as const)]}
+                  options={[
+                    [ALL, "All owners"],
+                    [UNASSIGNED, "Unassigned"],
+                    ...users.map((u) => [u.id, u.name] as const),
+                  ]}
                 />
                 <div className="ml-auto">
                   <ColumnChooser columns={COLUMNS} visible={visible} onChange={setVisible} />

@@ -175,6 +175,22 @@ describe("deals board", () => {
     );
   });
 
+  it("the Unassigned view filters both the board and the list to deals with no owner", async () => {
+    deals.list = [deal("d1", "Ann", "new")];
+    await renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "Unassigned" }));
+    await vi.waitFor(() =>
+      expect(deals.calls.at(-1)).toMatchObject({ outcome: "open", ownerId: "none" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    await vi.waitFor(() => expect(deals.calls.at(-1)).toMatchObject({ ownerId: "none" }));
+    expect(deals.calls.at(-1)).not.toHaveProperty("outcome", "open");
+    expect(screen.getByRole("tab", { name: "Unassigned" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
   it("list view assigns an owner to the ticked deals", async () => {
     deals.list = [deal("d1", "Ann", "new"), deal("d2", "Bob", "new")];
     api.update.mockResolvedValue(deal("d1", "Ann", "new"));

@@ -115,6 +115,12 @@ describe("CompaniesPage", () => {
     await waitFor(() => expect(calls.list.at(-1)).toMatchObject({ ownerId: "u-me" }));
   });
 
+  it("the Unassigned view asks the server for companies with no owner", async () => {
+    await renderScreen(CompaniesPage);
+    fireEvent.click(await screen.findByRole("tab", { name: "Unassigned" }));
+    await waitFor(() => expect(calls.list.at(-1)).toMatchObject({ ownerId: "none" }));
+  });
+
   it("assigns an owner to the ticked companies through the companies API", async () => {
     await renderScreen(CompaniesPage);
     fireEvent.click(await screen.findByRole("checkbox", { name: "Select Globex" }));

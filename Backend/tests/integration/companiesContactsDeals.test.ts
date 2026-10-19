@@ -137,6 +137,32 @@ describe("companies, contacts, deals (PGlite)", () => {
     expect(await dealActivity()).not.toBe(OLD);
   });
 
+  it("ownerId=none lists only unowned contacts, companies and deals; a bad owner id is a 400", async () => {
+    const ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('Unassigned test', 'unassigned-test') returning id`)).rows[0].id as string;
+    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sales]);
+    const owned = await newContact({ email: "owned@x.com" }, ws);
+    const free = await newContact({ email: "free@x.com" }, ws);
+    const ownedDeal = await newDeal(owned.id, ws);
+    const freeDeal = await newDeal(free.id, ws);
+    const ownedCo = (await api("post", "/companies", { body: { name: "Owned Co" }, ws })).body.id as string;
+    const freeCo = (await api("post", "/companies", { body: { name: "Free Co" }, ws })).body.id as string;
+    await seed.query(`update crm.contacts set owner_id = case when id = $1 then $3::uuid else null end where id in ($1, $2)`, [owned.id, free.id, sales]);
+    await seed.query(`update crm.deals set owner_id = case when id = $1 then $3::uuid else null end where id in ($1, $2)`, [ownedDeal.id, freeDeal.id, sales]);
+    await seed.query(`update crm.companies set owner_id = case when id = $1 then $3::uuid else null end where id in ($1, $2)`, [ownedCo, freeCo, sales]);
+
+    const ids = async (path: string) => (await api("get", path, { ws })).body.data.map((r: { id: string }) => r.id);
+    expect(await ids("/contacts?ownerId=none")).toEqual([free.id]);
+    expect(await ids("/deals?ownerId=none")).toEqual([freeDeal.id]);
+    expect(await ids("/companies?ownerId=none")).toEqual([freeCo]);
+    // A real owner id still filters by that owner.
+    expect(await ids(`/contacts?ownerId=${sales}`)).toEqual([owned.id]);
+    expect(await ids(`/deals?ownerId=${sales}`)).toEqual([ownedDeal.id]);
+    expect(await ids(`/companies?ownerId=${sales}`)).toEqual([ownedCo]);
+    for (const path of ["/contacts", "/deals", "/companies"]) {
+      expect((await api("get", `${path}?ownerId=nobody`, { ws })).status).toBe(400);
+    }
+  });
+
   it("board moves: stage changes on an open deal; objection nurture without a type and closed deals are refused", async () => {
     const c = await newContact({ email: "board@x.com" });
     const deal = await newDeal(c.id);

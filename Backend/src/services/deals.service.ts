@@ -228,7 +228,7 @@ export async function listDeals(db: Queryable, workspaceId: string, f: ListDeals
   const where = [`d.workspace_id = $1`];
   if (f.outcome) where.push(`d.outcome = $${params.push(f.outcome)}`);
   if (f.stage) where.push(`d.stage = $${params.push(f.stage)}`);
-  if (f.ownerId) where.push(`d.owner_id = $${params.push(f.ownerId)}`);
+  if (f.ownerId) where.push(f.ownerId === "none" ? `d.owner_id is null` : `d.owner_id = $${params.push(f.ownerId)}`);
   if (f.automationMode) where.push(`d.automation_mode = $${params.push(f.automationMode)}`);
   if (f.contactId) where.push(`d.contact_id = $${params.push(f.contactId)}`);
   if (f.companyId) where.push(`d.company_id = $${params.push(f.companyId)}`);

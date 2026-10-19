@@ -102,7 +102,7 @@ export interface ListCompaniesFilters {
 export async function listCompanies(db: Queryable, workspaceId: string, f: ListCompaniesFilters) {
   const params: unknown[] = [workspaceId];
   const where = [`co.workspace_id = $1`];
-  if (f.ownerId) where.push(`co.owner_id = $${params.push(f.ownerId)}`);
+  if (f.ownerId) where.push(f.ownerId === "none" ? `co.owner_id is null` : `co.owner_id = $${params.push(f.ownerId)}`);
   if (f.industry) where.push(`lower(co.industry) = lower($${params.push(f.industry)})`);
   if (f.search) {
     const p = `$${params.push(`%${f.search}%`)}`;

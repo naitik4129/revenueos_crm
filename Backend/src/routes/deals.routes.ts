@@ -25,7 +25,7 @@ dealsRouter.get(
       z.object({
         outcome: z.enum(DEAL_OUTCOMES).optional(),
         stage: z.enum(PIPELINE_STAGES).optional(),
-        ownerId: z.string().uuid().optional(),
+        ownerId: z.union([z.string().uuid(), z.literal("none")]).optional(),
         automationMode: z.enum(AUTOMATION_MODES).optional(),
         contactId: z.string().uuid().optional(),
         companyId: z.string().uuid().optional(),
