@@ -72,7 +72,7 @@ const TERMINAL_PROPOSAL: ProposalStatus[] = ["accepted", "rejected", "withdrawn"
 export function DealDetailPage({ dealId }: { dealId: string }) {
   const dealQuery = useDeal(dealId);
   const deal = dealQuery.data;
-  const detail = useDealDetail(dealId, deal?.contactId, deal?.companyId);
+  const detail = useDealDetail(dealId);
   // The deal's own runs/actions; the workspace lists are paged.
   const dealRuns = detail.runs.data?.data ?? [];
   const dealActions = detail.scheduledActions.data?.data ?? [];

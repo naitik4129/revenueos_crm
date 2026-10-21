@@ -199,6 +199,8 @@ export interface ListTasksFilters {
   ownerId?: string;
   dealId?: string;
   contactId?: string;
+  /** Tasks on the company's deals or on its contacts. */
+  companyId?: string;
   status?: "open" | "completed" | "cancelled";
   type?: TaskType;
   overdueOnly?: boolean;
@@ -216,6 +218,10 @@ export async function listTasks(db: Queryable, workspaceId: string, f: ListTasks
   if (f.ownerId) where.push(`t.owner_id = $${params.push(f.ownerId)}`);
   if (f.dealId) where.push(`t.deal_id = $${params.push(f.dealId)}`);
   if (f.contactId) where.push(`t.contact_id = $${params.push(f.contactId)}`);
+  if (f.companyId) {
+    const p = `$${params.push(f.companyId)}`;
+    where.push(`(t.deal_id in (select id from crm.deals where company_id = ${p}) or t.contact_id in (select id from crm.contacts where company_id = ${p}))`);
+  }
   if (f.status) where.push(`t.status = $${params.push(f.status)}`);
   if (f.type) where.push(`t.task_type = $${params.push(f.type)}`);
   // Overdue = due before today (Asia/Kolkata), same as the dashboard; never overlaps dueTodayOnly.

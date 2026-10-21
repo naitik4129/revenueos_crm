@@ -1,7 +1,8 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Proposal } from "@/types";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { PipelineStage, Proposal } from "@/types";
 import {
   backend,
+  type BoardFilters,
   type CompanyFilters,
   type ContactFilters,
   type DealFilters,
@@ -51,19 +52,13 @@ export function useContactDetail(id: string) {
     queryFn: ({ signal }: { signal: AbortSignal }) => fn(signal),
     enabled: Boolean(ws),
   });
-  const contact = useQuery(opts("contact", (s) => backend.contacts.get(id, s)));
-  const { companyId, openDealId } = contact.data ?? {};
+  // The company card and the open deal's meetings come in one request keyed by the contact,
+  // so nothing waits for the contact first (two queries share it through `select`).
+  const related = opts("related", (s) => backend.contacts.related(id, s));
   return {
-    contact,
-    // These two wait for the contact: its company card and its open deal's meetings.
-    company: useQuery({
-      ...opts(`company:${companyId}`, (s) => backend.companies.get(companyId ?? "", s)),
-      enabled: Boolean(ws && companyId),
-    }),
-    meetings: useQuery({
-      ...opts(`meetings:${openDealId}`, (s) => backend.deals.meetings(openDealId ?? "", s)),
-      enabled: Boolean(ws && openDealId),
-    }),
+    contact: useQuery(opts("contact", (s) => backend.contacts.get(id, s))),
+    company: useQuery({ ...related, select: (r) => r.company }),
+    meetings: useQuery({ ...related, select: (r) => ({ data: r.openDealMeetings }) }),
     deals: useQuery(opts("deals", (s) => backend.contacts.deals(id, { limit: 50 }, s))),
     calls: useQuery(opts("calls", (s) => backend.contacts.calls(id, s))),
     emails: useQuery(opts("emails", (s) => backend.contacts.emailActivities(id, s))),
@@ -105,30 +100,15 @@ export function useCompanyDetail(id: string) {
     queryFn: ({ signal }: { signal: AbortSignal }) => fn(signal),
     enabled: Boolean(ws),
   });
-  const deals = useQuery(opts("deals", (s) => backend.companies.deals(id, { limit: 200 }, s)));
-  // No tasks-by-company endpoint: collect the open tasks of the company's open deals.
-  // shortcut: first 10 open deals only, and contact-only tasks are missed; upgrade when the API
-  // can list tasks by company.
-  const openDealIds = (deals.data?.data ?? [])
-    .filter((d) => d.outcome === "open")
-    .slice(0, 10)
-    .map((d) => d.id);
-  const tasks = useQueries({
-    queries: openDealIds.map((dealId) =>
-      opts(`tasks:${dealId}`, (s) => backend.deals.tasks(dealId, s)),
-    ),
-    combine: (results) => ({
-      data: results
-        .flatMap((r) => r.data?.data ?? [])
-        .filter((t) => t.status === "open")
-        .sort((a, b) => a.dueAt.localeCompare(b.dueAt)),
-      isLoading: results.some((r) => r.isLoading),
-    }),
+  // Open tasks on the company's deals and contacts, soonest first (one page of 200).
+  const tasks = useQuery({
+    ...opts("tasks", (s) => backend.tasks.list({ companyId: id, status: "open", limit: 200 }, s)),
+    select: (r) => r.data,
   });
   return {
     company: useQuery(opts("company", (s) => backend.companies.get(id, s))),
     contacts: useQuery(opts("contacts", (s) => backend.companies.contacts(id, { limit: 200 }, s))),
-    deals,
+    deals: useQuery(opts("deals", (s) => backend.companies.deals(id, { limit: 200 }, s))),
     tasks,
     timeline: useQuery(opts("timeline", (s) => backend.companies.timeline(id, { limit: 100 }, s))),
   };
@@ -144,18 +124,52 @@ export function useDeals(filters: DealFilters) {
   });
 }
 
-/** One deal and everything shown on its page (notes are the contact's, filtered to the deal). */
-export function useDealDetail(
-  id: string,
-  contactId: string | undefined,
-  companyId?: string | undefined,
+/** The board in one request: count + amount per stage (all open deals) and each stage's first deals. */
+export function useDealBoardSummary(filters: BoardFilters, perStage: number) {
+  const { currentWorkspaceId } = useWorkspace();
+  return useQuery({
+    queryKey: keys.deals(currentWorkspaceId, { boardSummary: filters, perStage }),
+    queryFn: ({ signal }) => backend.deals.boardSummary({ ...filters, perStage }, signal),
+    enabled: Boolean(currentWorkspaceId),
+    placeholderData: (previous) => previous,
+  });
+}
+
+/**
+ * One board column's deals after the first page (which comes with the board summary): off until
+ * the first "load more", then a page at a time (fetchNextPage).
+ */
+export function useDealColumn(
+  filters: BoardFilters,
+  stage: PipelineStage,
+  pageSize: number,
+  enabled: boolean,
 ) {
+  const { currentWorkspaceId } = useWorkspace();
+  return useInfiniteQuery({
+    queryKey: keys.deals(currentWorkspaceId, { boardColumn: stage, pageSize, ...filters }),
+    queryFn: ({ pageParam, signal }) =>
+      backend.deals.list(
+        { ...filters, outcome: "open", stage, limit: pageSize, offset: pageParam },
+        signal,
+      ),
+    initialPageParam: pageSize,
+    getNextPageParam: (last) =>
+      last.offset + last.data.length < last.total ? last.offset + last.data.length : undefined,
+    enabled: Boolean(currentWorkspaceId) && enabled,
+  });
+}
+
+/** One deal and everything shown on its page (notes are the contact's, filtered to the deal). */
+export function useDealDetail(id: string) {
   const { currentWorkspaceId: ws } = useWorkspace();
-  const opts = <T>(part: string, fn: (signal: AbortSignal) => Promise<T>, enabled = true) => ({
+  const opts = <T>(part: string, fn: (signal: AbortSignal) => Promise<T>) => ({
     queryKey: keys.deal(ws, id, part),
     queryFn: ({ signal }: { signal: AbortSignal }) => fn(signal),
-    enabled: Boolean(ws) && enabled,
+    enabled: Boolean(ws),
   });
+  // Contact, notes and company in one request keyed by the deal, so nothing waits for the deal.
+  const related = opts("related", (s) => backend.deals.related(id, s));
   return {
     tasks: useQuery(opts("tasks", (s) => backend.deals.tasks(id, s))),
     meetings: useQuery(opts("meetings", (s) => backend.deals.meetings(id, s))),
@@ -173,15 +187,9 @@ export function useDealDetail(
       opts("scheduledActions", (s) => backend.scheduledActions.list({ dealId: id, limit: 500 }, s)),
     ),
     timeline: useQuery(opts("timeline", (s) => backend.deals.timeline(id, { limit: 100 }, s))),
-    contact: useQuery(
-      opts("contact", (s) => backend.contacts.get(contactId!, s), Boolean(contactId)),
-    ),
-    notes: useQuery(
-      opts("notes", (s) => backend.contacts.notes(contactId!, s), Boolean(contactId)),
-    ),
-    company: useQuery(
-      opts(`company:${companyId}`, (s) => backend.companies.get(companyId!, s), Boolean(companyId)),
-    ),
+    contact: useQuery({ ...related, select: (r) => r.contact }),
+    notes: useQuery({ ...related, select: (r) => ({ data: r.notes }) }),
+    company: useQuery({ ...related, select: (r) => r.company }),
   };
 }
 

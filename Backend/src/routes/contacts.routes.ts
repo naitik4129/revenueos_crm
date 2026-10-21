@@ -11,6 +11,8 @@ import { listDeals } from "../services/deals.service.js";
 import { listTimeline } from "../services/timeline.service.js";
 import { listCallsForContact, listEmailActivities, logCall } from "../services/calls.service.js";
 import { listTasks } from "../services/tasks.service.js";
+import { companyToDto, getCompanyOr404 } from "../services/companies.service.js";
+import { listMeetings } from "../services/meetings.service.js";
 
 /** Mounted under the workspace-gated crmRouter (routes/index.ts). */
 export const contactsRouter = Router();
@@ -122,6 +124,19 @@ contactsRouter.delete(
   asyncHandler(async (req, res) => {
     await withTransaction((db) => contacts.deleteContact(db, req.actor!, req.workspaceId!, id(req)));
     res.status(204).send();
+  }),
+);
+
+/** What the contact page would otherwise fetch after the contact: its company and its open deal's meetings. */
+contactsRouter.get(
+  "/:id/related",
+  asyncHandler(async (req, res) => {
+    const contact = await contacts.getContactOr404(pool, req.workspaceId!, id(req));
+    const [company, meetings] = await Promise.all([
+      contact.company_id ? getCompanyOr404(pool, req.workspaceId!, contact.company_id).then(companyToDto) : null,
+      contact.open_deal_id ? listMeetings(pool, req.workspaceId!, { dealId: contact.open_deal_id }).then((m) => m.data) : [],
+    ]);
+    res.json({ company, openDealMeetings: meetings });
   }),
 );
 

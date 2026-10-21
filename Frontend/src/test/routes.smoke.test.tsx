@@ -42,6 +42,19 @@ vi.mock("@/store", () => {
       error: null,
       isFetching: false,
     }),
+    useDealBoardSummary: () => ({
+      data: { stages: [], count: 0, amount: 0 },
+      dataUpdatedAt: 0,
+      isLoading: false,
+      error: null,
+    }),
+    useDealColumn: () => ({
+      data: undefined,
+      hasNextPage: false,
+      isFetching: false,
+      fetchNextPage: () => undefined,
+      error: null,
+    }),
     useTaskTotals: () => [],
     useTasks: () => ({
       tasks: [],

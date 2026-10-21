@@ -15,6 +15,7 @@ import type {
 } from "../domain/enums.js";
 import type { TemplateRenderContext } from "../domain/templateRenderer.js";
 import { assertPipelineStageEditable, assertValidPipelineStage, canRunAutomation } from "../domain/pipeline.js";
+import { PIPELINE_STAGES } from "../domain/enums.js";
 import { userNameSql } from "./profiles.service.js";
 import { actorEvent, addTimelineEvent, toEventActor, type EventActor } from "./timeline.service.js";
 import { writeDeletedAudit } from "./companies.service.js";
@@ -235,7 +236,8 @@ export interface ListDealsFilters {
   offset?: number;
 }
 
-export async function listDeals(db: Queryable, workspaceId: string, f: ListDealsFilters) {
+/** The deals list's filters as SQL over DEAL_FROM (params[0] is the workspace). */
+function dealFilter(workspaceId: string, f: Omit<ListDealsFilters, "sort" | "limit" | "offset">) {
   const params: unknown[] = [workspaceId];
   const where = [`d.workspace_id = $1`];
   if (f.outcome) where.push(`d.outcome = $${params.push(f.outcome)}`);
@@ -244,26 +246,70 @@ export async function listDeals(db: Queryable, workspaceId: string, f: ListDeals
   if (f.automationMode) where.push(`d.automation_mode = $${params.push(f.automationMode)}`);
   if (f.contactId) where.push(`d.contact_id = $${params.push(f.contactId)}`);
   if (f.companyId) where.push(`d.company_id = $${params.push(f.companyId)}`);
-  if (f.missingNextAction) where.push(`d.outcome = 'open' and na.id is null`);
+  // No next action = no open task (NEXT_TASK_JOIN's na.id is null).
+  if (f.missingNextAction) where.push(`d.outcome = 'open' and not exists (select 1 from crm.tasks t where t.deal_id = d.id and t.status = 'open')`);
   if (f.search) {
     const p = `$${params.push(`%${f.search}%`)}`;
     // Full name too, so "Ann Lee" finds Ann Lee's deals.
     where.push(`(concat_ws(' ', c.first_name, c.last_name) ilike ${p} or c.email ilike ${p} or co.name ilike ${p})`);
   }
+  return { where: where.join(" and "), params };
+}
+
+export async function listDeals(db: Queryable, workspaceId: string, f: ListDealsFilters) {
+  const { where, params } = dealFilter(workspaceId, f);
   const limit = Math.min(f.limit ?? 50, 500);
   const offset = f.offset ?? 0;
   const { rows, total } = await pageOf<DealRow>(db, {
     select: DEAL_SELECT,
     idColumn: "d.id",
-    // The next-task join only when the filter reads it (it runs per deal).
-    from: f.missingNextAction ? `${DEAL_FROM} ${NEXT_TASK_JOIN}` : DEAL_FROM,
-    where: where.join(" and "),
+    from: DEAL_FROM,
+    where,
     order: orderBySql(f.sort, DEAL_SORTS, "d.last_activity_at desc", "d.id"),
     params,
     limit,
     offset,
   });
   return { data: rows.map(dealToDto), total, limit, offset };
+}
+
+/**
+ * The deals board in one request: every open deal matching the board's filters, counted and
+ * summed (INR; no amount counts as 0) per stage, every stage in pipeline order; with `perStage`,
+ * also each stage's first deals in the list's default order (a column's "load more" then pages
+ * /deals?stage=… from offset perStage).
+ */
+export async function dealBoardSummary(
+  db: Queryable,
+  workspaceId: string,
+  f: Pick<ListDealsFilters, "ownerId" | "missingNextAction" | "search">,
+  perStage = 0,
+) {
+  const { where, params } = dealFilter(workspaceId, { ...f, outcome: "open" });
+  const [totals, first] = await Promise.all([
+    db.query<{ stage: PipelineStage; count: number; amount: string }>(
+      `select d.stage, count(*)::int as count, coalesce(sum(d.amount), 0)::text as amount ${DEAL_FROM} where ${where} group by d.stage`,
+      params,
+    ),
+    perStage > 0
+      ? db.query<DealRow>(
+          `${DEAL_SELECT}
+             join (select d.id, row_number() over (partition by d.stage order by d.last_activity_at desc, d.id) as n ${DEAL_FROM} where ${where}) top
+               on top.id = d.id and top.n <= $${params.length + 1}
+            order by d.last_activity_at desc, d.id`,
+          [...params, perStage],
+        )
+      : null,
+  ]);
+  const byStage = new Map(totals.rows.map((r) => [r.stage, r]));
+  const deals = (first?.rows ?? []).map(dealToDto);
+  const stages = PIPELINE_STAGES.map((stage) => ({
+    stage,
+    count: byStage.get(stage)?.count ?? 0,
+    amount: Number(byStage.get(stage)?.amount ?? 0),
+    ...(perStage > 0 && { deals: deals.filter((d) => d.stage === stage) }),
+  }));
+  return { stages, count: stages.reduce((n, s) => n + s.count, 0), amount: stages.reduce((n, s) => n + s.amount, 0) };
 }
 
 export interface UpdateDealInput {

@@ -119,7 +119,7 @@ export interface ProposalSummary {
 }
 
 export type TaskListParams = Partial<
-  Record<"ownerId" | "dealId" | "contactId" | "status" | "type", string | undefined> &
+  Record<"ownerId" | "dealId" | "contactId" | "companyId" | "status" | "type", string | undefined> &
     Record<"overdueOnly" | "dueTodayOnly" | "upcomingOnly", boolean | undefined> &
     Record<"limit" | "offset", number | undefined>
 >;
@@ -340,6 +340,16 @@ export interface DealFilters extends Page {
   companyId?: string | undefined;
   missingNextAction?: boolean | undefined;
   search?: string | undefined;
+}
+
+/** The deals board's filters (it always shows open deals). */
+export type BoardFilters = Pick<DealFilters, "ownerId" | "missingNextAction" | "search">;
+
+export interface DealBoardSummary {
+  /** Every pipeline stage, in order. */
+  stages: { stage: PipelineStage; count: number; amount: number; deals?: Deal[] }[];
+  count: number;
+  amount: number;
 }
 
 export type CrmRole = "admin" | "salesperson";
@@ -569,6 +579,12 @@ export const backend = {
       send<{ data: ImportContactsResult }>("POST", "/contacts/import", { rows }),
     notes: (id: string, signal?: AbortSignal) =>
       get<{ data: ContactNote[] }>(`/contacts/${id}/notes`, signal),
+    /** The contact page's company card and open-deal meetings, fetched with the contact. */
+    related: (id: string, signal?: AbortSignal) =>
+      get<{ company: Company | null; openDealMeetings: Meeting[] }>(
+        `/contacts/${id}/related`,
+        signal,
+      ),
     addNote: (id: string, body: string, dealId?: string) =>
       send<ContactNote>("POST", `/contacts/${id}/notes`, { body, dealId }),
     markDnc: (id: string, reason: string) =>
@@ -598,6 +614,9 @@ export const backend = {
   deals: {
     list: (params?: DealFilters, signal?: AbortSignal) =>
       get<Paged<Deal>>(query("/deals", { ...params }), signal),
+    /** Count + amount per stage over every open deal matching the board's filters (+ first deals per stage). */
+    boardSummary: (params: BoardFilters & { perStage?: number }, signal?: AbortSignal) =>
+      get<DealBoardSummary>(query("/deals/board-summary", { ...params }), signal),
     get: (id: string, signal?: AbortSignal) => get<Deal>(`/deals/${id}`, signal),
     create: (input: { contactId: string; ownerId?: string | null; serviceInterest?: string }) =>
       send<Deal>("POST", "/deals", input),
@@ -621,6 +640,12 @@ export const backend = {
       get<Paged<Task>>(query(`/deals/${id}/tasks`, { limit: 200 }), signal),
     meetings: (id: string, signal?: AbortSignal) =>
       get<{ data: Meeting[] }>(`/deals/${id}/meetings`, signal),
+    /** The deal page's contact, the contact's notes and the company, fetched with the deal. */
+    related: (id: string, signal?: AbortSignal) =>
+      get<{ contact: Contact; notes: ContactNote[]; company: Company | null }>(
+        `/deals/${id}/related`,
+        signal,
+      ),
     proposals: (id: string, signal?: AbortSignal) =>
       get<{ data: Proposal[] }>(`/deals/${id}/proposals`, signal),
     runs: (id: string, signal?: AbortSignal) => get<{ data: Run[] }>(`/deals/${id}/runs`, signal),

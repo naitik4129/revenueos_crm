@@ -47,7 +47,7 @@ export function CompanyDetailPage({ companyId }: { companyId: string }) {
 
   const contacts = detail.contacts.data?.data ?? [];
   const deals = detail.deals.data?.data ?? [];
-  const tasks = detail.tasks.data;
+  const tasks = detail.tasks.data ?? [];
   const site = company.website ?? company.domain;
   const where = [company.location ?? company.city, company.country].filter(Boolean).join(", ");
   const close = (open: boolean) => !open && setDialog(null);

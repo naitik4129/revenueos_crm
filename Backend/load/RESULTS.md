@@ -6287,3 +6287,1299 @@ Planning:
 Planning Time: 0.258 ms
 Execution Time: 0.054 ms
 ```
+
+## Quick run 2026-10-21 06:05 UTC: `--only board,mixed` (first try, not kept: summary + 15 column requests per board load)
+
+> Step 7: the board loaded as the summary plus 15 column requests at once. Fine for one user, but 10 users queued on the pool: mixed p95 1.9 s. Replaced by one request (`perStage`), below.
+
+- Postgres 17.11 (local, native), Node v24.18.0, Windows. App pool `max: 10` (`DB_POOL_MAX`, `src/db.ts`), connection timeout 5 s (then 503), statement timeout 15 s.
+- **+15 ms per round trip** to the database and to Supabase Auth (TCP proxy, `load/latency.ts`).
+- Seed: A 15k / B 5k / C 5k contacts. All workspaces: companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334.
+- Requests as a salesperson member of workspace A (admin for Admin rows); 20 timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).
+- Targets: p95 ≤ 1000 ms per request or page; brain batch of 500 ≤ 5 s.
+
+**Summary:** 0 of 9 request rows miss the target or had errors.
+
+### Requests
+
+| Group | Route | p50 | p95 | max | SQL | Errors | |
+|---|---|---:|---:|---:|---:|---:|---|
+| Pages | Contact page, old (2 rounds, 11 calls) | 350 | 366 | 454 | 38 | 0 | ✅ |
+| Pages | Contact page, 1 round (9 calls) | 170 | 184 | 218 | 36 | 0 | ✅ |
+| Pages | Deal page, old (2 rounds, 10 calls) | 350 | 365 | 367 | 36 | 0 | ✅ |
+| Pages | Deal page, 1 round (8 calls) | 204 | 228 | 233 | 33 | 0 | ✅ |
+| Pages | Company page, old (2 rounds: tasks of 10 open deals) | 350 | 368 | 368 | 21 | 0 | ✅ |
+| Pages | Company page, 1 round (5 calls) | 180 | 184 | 184 | 20 | 0 | ✅ |
+| Board | old: one request, first 500 open deals | 159 | 176 | 176 | 4 | 0 | ✅ |
+| Board | summary + 15 columns of 20 (1 round) | 263 | 274 | 275 | 63 | 0 | ✅ |
+| Board | load more: next 20 of the biggest column | 145 | 152 | 153 | 4 | 0 | ✅ |
+
+### Mixed load
+
+10 users browsing workspace A (contacts list, deals board as the app loads it, contact + timeline, dashboard, tasks; each screen's requests at once) for 60 s while contact batches of 500 run 3 at a time, round after round.
+
+| User requests | p50 | p95 | max | Errors | Brain batches (3 at once) | |
+|---:|---:|---:|---:|---:|---|---|
+| 4381 | 937 | 1873 | 2367 | 0 | 114 batches, p50 1.4 s, max 2.9 s | ❌ |
+
+### Row counts after the run
+
+companies 25,000, contacts 28,250, contact_channels 50,000, external_refs 53,250, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 69,916, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334
+
+### EXPLAIN (ANALYZE, BUFFERS) for anything over 300 ms
+
+Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
+
+### Pages: Contact page, old (2 rounds, 11 calls) (p95 366 ms, 38 SQL)
+
+Statement (33.7 ms in the request, incl. 15 ms latency):
+
+```sql
+select c.*, co.name as company_name, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = c.owner_id) as owner_name,
+  (select d.id from crm.deals d where d.contact_id = c.id and d.outcome = 'open') as open_deal_id
+  from crm.contacts c left join crm.companies co on co.id = c.company_id where c.id = $1 and c.workspace_id = $2
+```
+
+```
+Nested Loop Left Join  (cost=0.58..26.01 rows=1 width=413) (actual time=0.040..0.041 rows=1 loops=1)
+  Buffers: shared hit=10
+  ->  Index Scan using contacts_id_workspace_key on contacts c  (cost=0.29..8.31 rows=1 width=348) (actual time=0.007..0.007 rows=1 loops=1)
+        Index Cond: ((id = '8bdc2d37-855f-4463-ea21-9f4c0bc1601f'::uuid) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+        Buffers: shared hit=3
+  ->  Index Scan using companies_id_workspace_key on companies co  (cost=0.29..8.30 rows=1 width=33) (actual time=0.008..0.008 rows=1 loops=1)
+        Index Cond: (id = c.company_id)
+        Buffers: shared hit=3
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.011..0.012 rows=1 loops=1)
+          Filter: (id = c.owner_id)
+          Rows Removed by Filter: 6
+          Buffers: shared hit=1
+  SubPlan 2
+    ->  Index Scan using deals_contact_id_idx on deals d  (cost=0.29..8.30 rows=1 width=16) (actual time=0.009..0.010 rows=1 loops=1)
+          Index Cond: (contact_id = c.id)
+          Filter: (outcome = 'open'::crm.deal_outcome)
+          Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=238
+Planning Time: 1.266 ms
+Execution Time: 0.072 ms
+```
+
+Statement (33.6 ms in the request, incl. 15 ms latency):
+
+```sql
+select count(*)::int as total from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id where d.workspace_id = $1 and d.contact_id = $2
+```
+
+```
+Aggregate  (cost=16.63..16.64 rows=1 width=4) (actual time=0.075..0.076 rows=1 loops=1)
+  Buffers: shared hit=6
+  ->  Nested Loop  (cost=0.57..16.62 rows=1 width=0) (actual time=0.072..0.074 rows=1 loops=1)
+        Buffers: shared hit=6
+        ->  Index Scan using deals_contact_id_idx on deals d  (cost=0.29..8.30 rows=1 width=32) (actual time=0.006..0.006 rows=1 loops=1)
+              Index Cond: (contact_id = '8bdc2d37-855f-4463-ea21-9f4c0bc1601f'::uuid)
+              Filter: (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid)
+              Buffers: shared hit=3
+        ->  Index Only Scan using contacts_id_workspace_key on contacts c  (cost=0.29..8.31 rows=1 width=16) (actual time=0.066..0.067 rows=1 loops=1)
+              Index Cond: (id = '8bdc2d37-855f-4463-ea21-9f4c0bc1601f'::uuid)
+              Heap Fetches: 0
+              Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=13
+Planning Time: 0.229 ms
+Execution Time: 0.089 ms
+```
+
+Statement (33.2 ms in the request, incl. 15 ms latency):
+
+```sql
+select channel, status, reason, updated_at from crm.contact_channels where contact_id = $1 order by channel
+```
+
+```
+Sort  (cost=12.09..12.10 rows=2 width=50) (actual time=0.028..0.028 rows=2 loops=1)
+  Sort Key: channel
+  Sort Method: quicksort  Memory: 25kB
+  Buffers: shared hit=5
+  ->  Bitmap Heap Scan on contact_channels  (cost=4.43..12.08 rows=2 width=50) (actual time=0.023..0.024 rows=2 loops=1)
+        Recheck Cond: (contact_id = '8bdc2d37-855f-4463-ea21-9f4c0bc1601f'::uuid)
+        Heap Blocks: exact=2
+        Buffers: shared hit=5
+        ->  Bitmap Index Scan on contact_channels_unique_channel  (cost=0.00..4.43 rows=2 width=0) (actual time=0.015..0.015 rows=2 loops=1)
+              Index Cond: (contact_id = '8bdc2d37-855f-4463-ea21-9f4c0bc1601f'::uuid)
+              Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=9
+Planning Time: 0.060 ms
+Execution Time: 0.039 ms
+```
+
+### Pages: Deal page, old (2 rounds, 10 calls) (p95 365 ms, 36 SQL)
+
+Statement (38.2 ms in the request, incl. 15 ms latency):
+
+```sql
+select p.id, p.role, p.is_active, p.created_at,
+  coalesce(rp.email, '') as email,
+  coalesce(nullif(trim(rp.full_name), ''), rp.email, '') as full_name from crm.profiles p left join public.revenueos_profiles rp on rp.id = p.id where p.id = $1
+```
+
+```
+Nested Loop Left Join  (cost=0.00..2.19 rows=1 width=93) (actual time=0.013..0.014 rows=1 loops=1)
+  Buffers: shared hit=2
+  ->  Seq Scan on profiles p  (cost=0.00..1.09 rows=1 width=29) (actual time=0.008..0.008 rows=1 loops=1)
+        Filter: (id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+        Rows Removed by Filter: 6
+        Buffers: shared hit=1
+  ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=43) (actual time=0.003..0.004 rows=1 loops=1)
+        Filter: (id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+        Rows Removed by Filter: 1
+        Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=34
+Planning Time: 0.218 ms
+Execution Time: 0.023 ms
+```
+
+Statement (35.1 ms in the request, incl. 15 ms latency):
+
+```sql
+select w.id,
+  exists (select 1 from crm.workspace_members m where m.workspace_id = w.id and m.user_id = $2) as is_member
+  from crm.workspaces w
+  where w.id = $1 and w.is_active = true
+```
+
+```
+Seq Scan on workspaces w  (cost=0.00..2.31 rows=1 width=17) (actual time=0.020..0.021 rows=1 loops=1)
+  Filter: (is_active AND (id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+  Rows Removed by Filter: 2
+  Buffers: shared hit=2
+  SubPlan 2
+    ->  Seq Scan on workspace_members m  (cost=0.00..1.23 rows=3 width=16) (actual time=0.005..0.006 rows=3 loops=1)
+          Filter: (user_id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+          Rows Removed by Filter: 15
+          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=58
+Planning Time: 0.446 ms
+Execution Time: 0.030 ms
+```
+
+Statement (34.1 ms in the request, incl. 15 ms latency):
+
+```sql
+select d.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = d.owner_id) as owner_name,
+  c.first_name, c.last_name, c.job_title, c.email, c.phone, c.phone_e164, c.status as contact_status, c.lifecycle_stage,
+  co.name as company_name, co.industry, co.website,
+  na.id as next_task_id, na.task_type as next_task_type, na.title as next_task_title,
+  na.due_at as next_task_due_at, na.owner_id as next_task_owner_id, na.origin as next_task_origin
+  from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id
+  left join lateral (
+  select t.id, t.task_type, t.title, t.due_at, t.owner_id, t.origin
+  from crm.tasks t
+  where t.deal_id = d.id and t.status = 'open'
+  order by t.due_at
+  limit 1
+  ) na on true where d.id = $1 and d.workspace_id = $2
+```
+
+```
+Nested Loop Left Join  (cost=12.75..37.91 rows=1 width=624) (actual time=0.051..0.052 rows=1 loops=1)
+  Buffers: shared hit=14
+  ->  Nested Loop Left Join  (cost=0.86..24.92 rows=1 width=535) (actual time=0.023..0.024 rows=1 loops=1)
+        Buffers: shared hit=9
+        ->  Nested Loop  (cost=0.57..16.61 rows=1 width=480) (actual time=0.019..0.020 rows=1 loops=1)
+              Buffers: shared hit=6
+              ->  Index Scan using deals_id_workspace_key on deals d  (cost=0.29..8.30 rows=1 width=389) (actual time=0.010..0.011 rows=1 loops=1)
+                    Index Cond: ((id = 'bf728a27-5da8-e46d-d683-bd8c830f1c5e'::uuid) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+                    Buffers: shared hit=3
+              ->  Index Scan using contacts_id_workspace_key on contacts c  (cost=0.29..8.31 rows=1 width=107) (actual time=0.008..0.008 rows=1 loops=1)
+                    Index Cond: (id = d.contact_id)
+                    Buffers: shared hit=3
+        ->  Index Scan using companies_id_workspace_key on companies co  (cost=0.29..8.30 rows=1 width=71) (actual time=0.004..0.004 rows=1 loops=1)
+              Index Cond: (id = d.company_id)
+              Buffers: shared hit=3
+  ->  Limit  (cost=11.88..11.89 rows=1 width=57) (actual time=0.017..0.018 rows=0 loops=1)
+        Buffers: shared hit=4
+        ->  Sort  (cost=11.88..11.89 rows=1 width=57) (actual time=0.017..0.017 rows=0 loops=1)
+              Sort Key: t.due_at
+              Sort Method: quicksort  Memory: 25kB
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on tasks t  (cost=4.30..11.87 rows=1 width=57) (actual time=0.015..0.015 rows=0 loops=1)
+                    Recheck Cond: (deal_id = d.id)
+                    Filter: (status = 'open'::crm.task_status)
+                    Rows Removed by Filter: 2
+                    Heap Blocks: exact=2
+                    Buffers: shared hit=4
+                    ->  Bitmap Index Scan on tasks_deal_id_idx  (cost=0.00..4.30 rows=2 width=0) (actual time=0.005..0.005 rows=2 loops=1)
+                          Index Cond: (deal_id = d.id)
+                          Buffers: shared hit=2
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.008..0.008 rows=1 loops=1)
+          Filter: (id = d.owner_id)
+          Rows Removed by Filter: 6
+          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=118
+Planning Time: 0.546 ms
+Execution Time: 0.094 ms
+```
+
+### Pages: Company page, old (2 rounds: tasks of 10 open deals) (p95 368 ms, 21 SQL)
+
+Statement (36.4 ms in the request, incl. 15 ms latency):
+
+```sql
+select p.id, p.role, p.is_active, p.created_at,
+  coalesce(rp.email, '') as email,
+  coalesce(nullif(trim(rp.full_name), ''), rp.email, '') as full_name from crm.profiles p left join public.revenueos_profiles rp on rp.id = p.id where p.id = $1
+```
+
+```
+Nested Loop Left Join  (cost=0.00..2.19 rows=1 width=93) (actual time=0.011..0.012 rows=1 loops=1)
+  Buffers: shared hit=2
+  ->  Seq Scan on profiles p  (cost=0.00..1.09 rows=1 width=29) (actual time=0.006..0.007 rows=1 loops=1)
+        Filter: (id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+        Rows Removed by Filter: 6
+        Buffers: shared hit=1
+  ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=43) (actual time=0.003..0.003 rows=1 loops=1)
+        Filter: (id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+        Rows Removed by Filter: 1
+        Buffers: shared hit=1
+Planning Time: 0.058 ms
+Execution Time: 0.020 ms
+```
+
+Statement (34.3 ms in the request, incl. 15 ms latency):
+
+```sql
+with page as (
+  select p.id, p.ord from unnest(array(
+  select c.id from crm.contacts c left join crm.companies co on co.id = c.company_id where c.workspace_id = $1 and c.status <> 'merged' and c.company_id = $2 order by c.created_at desc, c.id limit $3 offset $4
+  )) with ordinality as p(id, ord)
+  )
+  select c.*, co.name as company_name, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = c.owner_id) as owner_name,
+  (select d.id from crm.deals d where d.contact_id = c.id and d.outcome = 'open') as open_deal_id
+  from crm.contacts c left join crm.companies co on co.id = c.company_id
+  join page on page.id = c.id
+  order by page.ord
+```
+
+```
+Nested Loop Left Join  (cost=8.91..189.15 rows=10 width=421) (actual time=0.046..0.060 rows=2 loops=1)
+  Buffers: shared hit=23
+  InitPlan 3
+    ->  Limit  (cost=8.32..8.33 rows=1 width=24) (actual time=0.014..0.015 rows=2 loops=1)
+          Buffers: shared hit=4
+          ->  Sort  (cost=8.32..8.33 rows=1 width=24) (actual time=0.014..0.015 rows=2 loops=1)
+                Sort Key: c_1.created_at DESC, c_1.id
+                Sort Method: quicksort  Memory: 25kB
+                Buffers: shared hit=4
+                ->  Index Scan using contacts_company_id_idx on contacts c_1  (cost=0.29..8.31 rows=1 width=24) (actual time=0.007..0.008 rows=2 loops=1)
+                      Index Cond: (company_id = 'af8c9581-6c9d-07a1-e1f2-452bf5f37ec4'::uuid)
+                      Filter: ((status <> 'merged'::crm.contact_status) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+                      Buffers: shared hit=4
+  ->  Nested Loop  (cost=0.29..83.18 rows=10 width=356) (actual time=0.028..0.032 rows=2 loops=1)
+        Buffers: shared hit=10
+        ->  Function Scan on unnest p  (cost=0.00..0.10 rows=10 width=24) (actual time=0.022..0.022 rows=2 loops=1)
+              Buffers: shared hit=4
+        ->  Index Scan using contacts_id_workspace_key on contacts c  (cost=0.29..8.31 rows=1 width=348) (actual time=0.004..0.004 rows=1 loops=2)
+              Index Cond: (id = p.id)
+              Buffers: shared hit=6
+  ->  Index Scan using companies_pkey on companies co  (cost=0.29..0.37 rows=1 width=33) (actual time=0.003..0.003 rows=1 loops=2)
+        Index Cond: (id = c.company_id)
+        Buffers: shared hit=6
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.005..0.005 rows=0 loops=2)
+          Filter: (id = c.owner_id)
+          Rows Removed by Filter: 6
+          Buffers: shared hit=2
+  SubPlan 2
+    ->  Index Scan using deals_contact_id_idx on deals d  (cost=0.29..8.30 rows=1 width=16) (actual time=0.003..0.003 rows=0 loops=2)
+          Index Cond: (contact_id = c.id)
+          Filter: (outcome = 'open'::crm.deal_outcome)
+          Buffers: shared hit=5
+Planning:
+  Buffers: shared hit=24
+Planning Time: 0.462 ms
+Execution Time: 0.090 ms
+```
+
+Statement (33.9 ms in the request, incl. 15 ms latency):
+
+```sql
+with page as (
+  select p.id, p.ord from unnest(array(
+  select d.id from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id where d.workspace_id = $1 and d.company_id = $2 order by d.last_activity_at desc, d.id limit $3 offset $4
+  )) with ordinality as p(id, ord)
+  )
+  select d.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = d.owner_id) as owner_name,
+  c.first_name, c.last_name, c.job_title, c.email, c.phone, c.phone_e164, c.status as contact_status, c.lifecycle_stage,
+  co.name as company_name, co.industry, co.website,
+  na.id as next_task_id, na.task_type as next_task_type, na.title as next_task_title,
+  na.due_at as next_task_due_at, na.owner_id as next_task_owner_id, na.origin as next_task_origin
+  from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id
+  left join lateral (
+  select t.id, t.task_type, t.title, t.due_at, t.owner_id, t.origin
+  from crm.tasks t
+  where t.deal_id = d.id and t.status = 'open'
+  order by t.due_at
+  limit 1
+  ) na on true
+  join page on page.id = d.id
+  order by page.ord
+```
+
+```
+Nested Loop Left Join  (cost=29.38..243.62 rows=10 width=632) (actual time=0.066..0.068 rows=1 loops=1)
+  Buffers: shared hit=20
+  InitPlan 2
+    ->  Limit  (cost=16.62..16.63 rows=1 width=24) (actual time=0.013..0.014 rows=1 loops=1)
+          Buffers: shared hit=6
+          ->  Sort  (cost=16.62..16.63 rows=1 width=24) (actual time=0.013..0.014 rows=1 loops=1)
+                Sort Key: d_1.last_activity_at DESC, d_1.id
+                Sort Method: quicksort  Memory: 25kB
+                Buffers: shared hit=6
+                ->  Nested Loop  (cost=0.57..16.61 rows=1 width=24) (actual time=0.010..0.011 rows=1 loops=1)
+                      Buffers: shared hit=6
+                      ->  Index Scan using deals_company_id_idx on deals d_1  (cost=0.29..8.30 rows=1 width=56) (actual time=0.006..0.007 rows=1 loops=1)
+                            Index Cond: (company_id = 'af8c9581-6c9d-07a1-e1f2-452bf5f37ec4'::uuid)
+                            Filter: (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid)
+                            Buffers: shared hit=3
+                      ->  Index Only Scan using contacts_id_workspace_key on contacts c_1  (cost=0.29..8.31 rows=1 width=16) (actual time=0.003..0.003 rows=1 loops=1)
+                            Index Cond: (id = d_1.contact_id)
+                            Heap Fetches: 0
+                            Buffers: shared hit=3
+  ->  Nested Loop Left Join  (cost=0.86..97.08 rows=10 width=543) (actual time=0.034..0.035 rows=1 loops=1)
+        Buffers: shared hit=15
+        ->  Nested Loop  (cost=0.58..91.73 rows=10 width=488) (actual time=0.030..0.031 rows=1 loops=1)
+              Buffers: shared hit=12
+              ->  Nested Loop  (cost=0.29..83.13 rows=10 width=397) (actual time=0.024..0.025 rows=1 loops=1)
+                    Buffers: shared hit=9
+                    ->  Function Scan on unnest p  (cost=0.00..0.10 rows=10 width=24) (actual time=0.019..0.019 rows=1 loops=1)
+                          Buffers: shared hit=6
+                    ->  Index Scan using deals_id_workspace_key on deals d  (cost=0.29..8.30 rows=1 width=389) (actual time=0.005..0.005 rows=1 loops=1)
+                          Index Cond: (id = p.id)
+                          Buffers: shared hit=3
+              ->  Index Scan using contacts_pkey on contacts c  (cost=0.29..0.86 rows=1 width=107) (actual time=0.006..0.006 rows=1 loops=1)
+                    Index Cond: (id = d.contact_id)
+                    Buffers: shared hit=3
+        ->  Index Scan using companies_pkey on companies co  (cost=0.29..0.54 rows=1 width=71) (actual time=0.004..0.004 rows=1 loops=1)
+              Index Cond: (id = d.company_id)
+              Buffers: shared hit=3
+  ->  Limit  (cost=11.88..11.89 rows=1 width=57) (actual time=0.025..0.026 rows=0 loops=1)
+        Buffers: shared hit=4
+        ->  Sort  (cost=11.88..11.89 rows=1 width=57) (actual time=0.025..0.025 rows=0 loops=1)
+              Sort Key: t.due_at
+              Sort Method: quicksort  Memory: 25kB
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on tasks t  (cost=4.30..11.87 rows=1 width=57) (actual time=0.016..0.016 rows=0 loops=1)
+                    Recheck Cond: (deal_id = d.id)
+                    Filter: (status = 'open'::crm.task_status)
+                    Rows Removed by Filter: 2
+                    Heap Blocks: exact=2
+                    Buffers: shared hit=4
+                    ->  Bitmap Index Scan on tasks_deal_id_idx  (cost=0.00..4.30 rows=2 width=0) (actual time=0.006..0.006 rows=2 loops=1)
+                          Index Cond: (deal_id = d.id)
+                          Buffers: shared hit=2
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.005..0.005 rows=0 loops=1)
+          Filter: (id = d.owner_id)
+          Rows Removed by Filter: 7
+          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=38
+Planning Time: 0.844 ms
+Execution Time: 0.125 ms
+```
+
+## Quick run 2026-10-21 06:11 UTC: `--only board,mixed` (before: 3ee8918)
+
+> Step 7, back to back on the same seed and machine: this run is the code before step 7 (git worktree, new load runner; the "1 round" and one-request rows 404 there), the next one is step 7.
+
+- Postgres 17.11 (local, native), Node v24.18.0, Windows. App pool `max: 10` (`DB_POOL_MAX`, `src/db.ts`), connection timeout 5 s (then 503), statement timeout 15 s.
+- **+15 ms per round trip** to the database and to Supabase Auth (TCP proxy, `load/latency.ts`).
+- Seed: A 15k / B 5k / C 5k contacts. All workspaces: companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334.
+- Requests as a salesperson member of workspace A (admin for Admin rows); 20 timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).
+- Targets: p95 ≤ 1000 ms per request or page; brain batch of 500 ≤ 5 s.
+
+**Summary:** 3 of 9 request rows miss the target or had errors.
+
+### Requests
+
+| Group | Route | p50 | p95 | max | SQL | Errors | |
+|---|---|---:|---:|---:|---:|---:|---|
+| Pages | Contact page, old (2 rounds, 11 calls) | 328 | 356 | 367 | 38 | 0 | ✅ |
+| Pages | Contact page, 1 round (9 calls) | 163 | 181 | 183 | 33 | 20: 404 {"error":{"code":"not_found","message":"No route: GET /api/v1/contacts/8bdc2d37-855f-4463-ea21-9f4c0bc1601f/related"}} | ❌ |
+| Pages | Deal page, old (2 rounds, 10 calls) | 344 | 360 | 364 | 36 | 0 | ✅ |
+| Pages | Deal page, 1 round (8 calls) | 163 | 178 | 181 | 28 | 20: 404 {"error":{"code":"not_found","message":"No route: GET /api/v1/deals/3a729b9a-fc51-ef84-8db7-d7f9dfcf8f22/related"}} | ❌ |
+| Pages | Company page, old (2 rounds: tasks of 10 open deals) | 357 | 369 | 370 | 21 | 0 | ✅ |
+| Pages | Company page, 1 round (5 calls) | 156 | 185 | 185 | 20 | 0 | ✅ |
+| Board | old: one request, first 500 open deals | 157 | 170 | 176 | 4 | 0 | ✅ |
+| Board | one request: 15 stage totals + first 20 per stage | 111 | 112 | 124 | 2 | 20: 404 {"error":{"code":"not_found","message":"Deal not found."}} | ❌ |
+| Board | load more: next 20 of the biggest column | 143 | 149 | 150 | 4 | 0 | ✅ |
+
+### Mixed load
+
+10 users browsing workspace A (contacts list, deals board as the app loads it, contact + timeline, dashboard, tasks; each screen's requests at once) for 60 s while contact batches of 500 run 3 at a time, round after round.
+
+| User requests | p50 | p95 | max | Errors | Brain batches (3 at once) | |
+|---:|---:|---:|---:|---:|---|---|
+| 3707 | 191 | 287 | 400 | 0 | 210 batches, p50 608 ms, max 1.4 s | ✅ |
+
+### Row counts after the run
+
+companies 25,000, contacts 28,250, contact_channels 50,000, external_refs 53,250, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 69,916, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334
+
+### EXPLAIN (ANALYZE, BUFFERS) for anything over 300 ms
+
+Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
+
+### Pages: Contact page, old (2 rounds, 11 calls) (p95 356 ms, 38 SQL)
+
+Statement (39.5 ms in the request, incl. 15 ms latency):
+
+```sql
+select q.*, count(*) over()::int as total from (select m.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = m.owner_id) as owner_name, names.* from crm.meetings m left join lateral (
+  select nullif(trim(concat_ws(' ', nc.first_name, nc.last_name)), '') as contact_name, nco.name as company_name
+  from (select m.deal_id as deal_id, null::uuid as contact_id) s
+  left join crm.deals nd on nd.id = s.deal_id
+  join crm.contacts nc on nc.id = coalesce(s.contact_id, nd.contact_id)
+  left join crm.companies nco on nco.id = coalesce(nd.company_id, nc.company_id)
+  ) names on true where m.workspace_id = $1 and m.deal_id = $2) q
+  order by q.scheduled_at asc, q.id
+```
+
+```
+Incremental Sort  (cost=34.37..34.42 rows=2 width=510) (actual time=0.063..0.064 rows=1 loops=1)
+  Sort Key: m.scheduled_at, m.id
+  Presorted Key: m.scheduled_at
+  Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 25kB  Peak Memory: 25kB
+  Buffers: shared hit=14
+  ->  WindowAgg  (cost=1.14..34.36 rows=1 width=510) (actual time=0.056..0.058 rows=1 loops=1)
+        Buffers: shared hit=14
+        ->  Nested Loop Left Join  (cost=1.14..33.25 rows=1 width=474) (actual time=0.034..0.036 rows=1 loops=1)
+              Buffers: shared hit=13
+              ->  Index Scan Backward using meetings_deal_id_idx on meetings m  (cost=0.28..8.30 rows=1 width=425) (actual time=0.008..0.009 rows=1 loops=1)
+                    Index Cond: (deal_id = '8d7a08f9-7cae-8c39-0dff-7a7bf502be11'::uuid)
+                    Filter: (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid)
+                    Buffers: shared hit=4
+              ->  Nested Loop Left Join  (cost=0.86..24.94 rows=1 width=49) (actual time=0.024..0.025 rows=1 loops=1)
+                    Buffers: shared hit=9
+                    ->  Nested Loop  (cost=0.57..16.63 rows=1 width=43) (actual time=0.014..0.015 rows=1 loops=1)
+                          Buffers: shared hit=6
+                          ->  Nested Loop Left Join  (cost=0.29..8.32 rows=1 width=32) (actual time=0.005..0.006 rows=1 loops=1)
+                                Buffers: shared hit=3
+                                ->  Result  (cost=0.00..0.01 rows=1 width=0) (actual time=0.000..0.000 rows=1 loops=1)
+                                ->  Index Scan using deals_id_workspace_key on deals nd  (cost=0.29..8.30 rows=1 width=32) (actual time=0.005..0.005 rows=1 loops=1)
+                                      Index Cond: (id = m.deal_id)
+                                      Buffers: shared hit=3
+                          ->  Index Scan using contacts_id_workspace_key on contacts nc  (cost=0.29..8.31 rows=1 width=43) (actual time=0.008..0.008 rows=1 loops=1)
+                                Index Cond: (id = COALESCE(nd.contact_id))
+                                Buffers: shared hit=3
+                    ->  Index Scan using companies_id_workspace_key on companies nco  (cost=0.29..8.30 rows=1 width=33) (actual time=0.006..0.006 rows=1 loops=1)
+                          Index Cond: (id = COALESCE(nd.company_id, nc.company_id))
+                          Buffers: shared hit=3
+        SubPlan 1
+          ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.009..0.010 rows=1 loops=1)
+                Filter: (id = m.owner_id)
+                Rows Removed by Filter: 6
+                Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=246
+Planning Time: 1.505 ms
+Execution Time: 0.111 ms
+```
+
+Statement (36.1 ms in the request, incl. 15 ms latency):
+
+```sql
+select d.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = d.owner_id) as owner_name,
+  c.first_name, c.last_name, c.job_title, c.email, c.phone, c.phone_e164, c.status as contact_status, c.lifecycle_stage,
+  co.name as company_name, co.industry, co.website,
+  na.id as next_task_id, na.task_type as next_task_type, na.title as next_task_title,
+  na.due_at as next_task_due_at, na.owner_id as next_task_owner_id, na.origin as next_task_origin
+  from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id
+  left join lateral (
+  select t.id, t.task_type, t.title, t.due_at, t.owner_id, t.origin
+  from crm.tasks t
+  where t.deal_id = d.id and t.status = 'open'
+  order by t.due_at
+  limit 1
+  ) na on true where d.id = $1 and d.workspace_id = $2
+```
+
+```
+Nested Loop Left Join  (cost=12.75..37.91 rows=1 width=625) (actual time=0.063..0.065 rows=1 loops=1)
+  Buffers: shared hit=14
+  ->  Nested Loop Left Join  (cost=0.86..24.92 rows=1 width=536) (actual time=0.023..0.024 rows=1 loops=1)
+        Buffers: shared hit=9
+        ->  Nested Loop  (cost=0.57..16.61 rows=1 width=481) (actual time=0.017..0.018 rows=1 loops=1)
+              Buffers: shared hit=6
+              ->  Index Scan using deals_id_workspace_key on deals d  (cost=0.29..8.30 rows=1 width=389) (actual time=0.009..0.009 rows=1 loops=1)
+                    Index Cond: ((id = '8d7a08f9-7cae-8c39-0dff-7a7bf502be11'::uuid) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+                    Buffers: shared hit=3
+              ->  Index Scan using contacts_id_workspace_key on contacts c  (cost=0.29..8.31 rows=1 width=108) (actual time=0.008..0.008 rows=1 loops=1)
+                    Index Cond: (id = d.contact_id)
+                    Buffers: shared hit=3
+        ->  Index Scan using companies_id_workspace_key on companies co  (cost=0.29..8.30 rows=1 width=71) (actual time=0.005..0.005 rows=1 loops=1)
+              Index Cond: (id = d.company_id)
+              Buffers: shared hit=3
+  ->  Limit  (cost=11.88..11.89 rows=1 width=57) (actual time=0.029..0.030 rows=1 loops=1)
+        Buffers: shared hit=4
+        ->  Sort  (cost=11.88..11.89 rows=1 width=57) (actual time=0.029..0.029 rows=1 loops=1)
+              Sort Key: t.due_at
+              Sort Method: quicksort  Memory: 25kB
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on tasks t  (cost=4.30..11.87 rows=1 width=57) (actual time=0.020..0.021 rows=2 loops=1)
+                    Recheck Cond: (deal_id = d.id)
+                    Filter: (status = 'open'::crm.task_status)
+                    Heap Blocks: exact=2
+                    Buffers: shared hit=4
+                    ->  Bitmap Index Scan on tasks_deal_id_idx  (cost=0.00..4.30 rows=2 width=0) (actual time=0.011..0.011 rows=2 loops=1)
+                          Index Cond: (deal_id = d.id)
+                          Buffers: shared hit=2
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.008..0.009 rows=1 loops=1)
+          Filter: (id = d.owner_id)
+          Rows Removed by Filter: 6
+          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=149
+Planning Time: 0.922 ms
+Execution Time: 0.114 ms
+```
+
+Statement (36.0 ms in the request, incl. 15 ms latency):
+
+```sql
+select co.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = co.owner_id) as owner_name,
+  (select count(*)::int from crm.contacts c where c.company_id = co.id and c.status <> 'merged') as contact_count,
+  (select count(*)::int from crm.deals d where d.company_id = co.id and d.outcome = 'open') as open_deal_count
+  from crm.companies co where co.id = $1 and co.workspace_id = $2
+```
+
+```
+Index Scan using companies_id_workspace_key on companies co  (cost=0.29..29.88 rows=1 width=313) (actual time=0.040..0.041 rows=1 loops=1)
+  Index Cond: ((id = 'cec5d722-4bca-8b1c-18ff-6bf7e50960df'::uuid) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+  Buffers: shared hit=11
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.008..0.008 rows=1 loops=1)
+          Filter: (id = co.owner_id)
+          Rows Removed by Filter: 6
+          Buffers: shared hit=1
+  SubPlan 2
+    ->  Aggregate  (cost=12.14..12.16 rows=1 width=4) (actual time=0.013..0.013 rows=1 loops=1)
+          Buffers: shared hit=4
+          ->  Bitmap Heap Scan on contacts c  (cost=4.30..12.14 rows=2 width=0) (actual time=0.010..0.011 rows=2 loops=1)
+                Recheck Cond: (company_id = co.id)
+                Filter: (status <> 'merged'::crm.contact_status)
+                Heap Blocks: exact=2
+                Buffers: shared hit=4
+                ->  Bitmap Index Scan on contacts_company_id_idx  (cost=0.00..4.30 rows=2 width=0) (actual time=0.005..0.005 rows=2 loops=1)
+                      Index Cond: (company_id = co.id)
+                      Buffers: shared hit=2
+  SubPlan 3
+    ->  Aggregate  (cost=8.31..8.32 rows=1 width=4) (actual time=0.008..0.009 rows=1 loops=1)
+          Buffers: shared hit=3
+          ->  Index Scan using deals_company_id_idx on deals d  (cost=0.29..8.30 rows=1 width=0) (actual time=0.007..0.008 rows=1 loops=1)
+                Index Cond: (company_id = co.id)
+                Filter: (outcome = 'open'::crm.deal_outcome)
+                Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=38
+Planning Time: 0.277 ms
+Execution Time: 0.063 ms
+```
+
+### Pages: Deal page, old (2 rounds, 10 calls) (p95 360 ms, 36 SQL)
+
+Statement (38.6 ms in the request, incl. 15 ms latency):
+
+```sql
+select n.id, n.deal_id, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = n.author_id) as author, n.body, n.created_at
+  from crm.notes n where n.contact_id = $1 order by n.created_at desc
+```
+
+```
+Index Scan using notes_contact_id_idx on notes n  (cost=0.29..9.39 rows=1 width=91) (actual time=0.014..0.015 rows=1 loops=1)
+  Index Cond: (contact_id = '3cc9d1ba-52e5-d3bc-d76f-29c05052dcc9'::uuid)
+  Buffers: shared hit=4
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.007..0.008 rows=1 loops=1)
+          Filter: (id = n.author_id)
+          Rows Removed by Filter: 6
+          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=23
+Planning Time: 0.102 ms
+Execution Time: 0.023 ms
+```
+
+Statement (36.2 ms in the request, incl. 15 ms latency):
+
+```sql
+select w.id,
+  exists (select 1 from crm.workspace_members m where m.workspace_id = w.id and m.user_id = $2) as is_member
+  from crm.workspaces w
+  where w.id = $1 and w.is_active = true
+```
+
+```
+Seq Scan on workspaces w  (cost=0.00..2.31 rows=1 width=17) (actual time=0.021..0.021 rows=1 loops=1)
+  Filter: (is_active AND (id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+  Rows Removed by Filter: 2
+  Buffers: shared hit=2
+  SubPlan 2
+    ->  Seq Scan on workspace_members m  (cost=0.00..1.23 rows=3 width=16) (actual time=0.004..0.006 rows=3 loops=1)
+          Filter: (user_id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+          Rows Removed by Filter: 15
+          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=58
+Planning Time: 0.444 ms
+Execution Time: 0.031 ms
+```
+
+Statement (33.7 ms in the request, incl. 15 ms latency):
+
+```sql
+select p.id, p.role, p.is_active, p.created_at,
+  coalesce(rp.email, '') as email,
+  coalesce(nullif(trim(rp.full_name), ''), rp.email, '') as full_name from crm.profiles p left join public.revenueos_profiles rp on rp.id = p.id where p.id = $1
+```
+
+```
+Nested Loop Left Join  (cost=0.00..2.19 rows=1 width=93) (actual time=0.019..0.021 rows=1 loops=1)
+  Buffers: shared hit=2
+  ->  Seq Scan on profiles p  (cost=0.00..1.09 rows=1 width=29) (actual time=0.011..0.012 rows=1 loops=1)
+        Filter: (id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+        Rows Removed by Filter: 6
+        Buffers: shared hit=1
+  ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=43) (actual time=0.005..0.005 rows=1 loops=1)
+        Filter: (id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+        Rows Removed by Filter: 1
+        Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=34
+Planning Time: 0.298 ms
+Execution Time: 0.034 ms
+```
+
+### Pages: Company page, old (2 rounds: tasks of 10 open deals) (p95 369 ms, 21 SQL)
+
+Statement (37.4 ms in the request, incl. 15 ms latency):
+
+```sql
+with page as (
+  select p.id, p.ord from unnest(array(
+  select c.id from crm.contacts c left join crm.companies co on co.id = c.company_id where c.workspace_id = $1 and c.status <> 'merged' and c.company_id = $2 order by c.created_at desc, c.id limit $3 offset $4
+  )) with ordinality as p(id, ord)
+  )
+  select c.*, co.name as company_name, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = c.owner_id) as owner_name,
+  (select d.id from crm.deals d where d.contact_id = c.id and d.outcome = 'open') as open_deal_id
+  from crm.contacts c left join crm.companies co on co.id = c.company_id
+  join page on page.id = c.id
+  order by page.ord
+```
+
+```
+Nested Loop Left Join  (cost=8.91..189.06 rows=10 width=422) (actual time=0.051..0.065 rows=2 loops=1)
+  Buffers: shared hit=23
+  InitPlan 3
+    ->  Limit  (cost=8.32..8.33 rows=1 width=24) (actual time=0.013..0.014 rows=2 loops=1)
+          Buffers: shared hit=4
+          ->  Sort  (cost=8.32..8.33 rows=1 width=24) (actual time=0.013..0.013 rows=2 loops=1)
+                Sort Key: c_1.created_at DESC, c_1.id
+                Sort Method: quicksort  Memory: 25kB
+                Buffers: shared hit=4
+                ->  Index Scan using contacts_company_id_idx on contacts c_1  (cost=0.29..8.31 rows=1 width=24) (actual time=0.007..0.009 rows=2 loops=1)
+                      Index Cond: (company_id = 'c0dc0a6c-45d6-130f-193f-db9f17c2e571'::uuid)
+                      Filter: ((status <> 'merged'::crm.contact_status) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+                      Buffers: shared hit=4
+  ->  Nested Loop  (cost=0.29..83.18 rows=10 width=357) (actual time=0.029..0.033 rows=2 loops=1)
+        Buffers: shared hit=10
+        ->  Function Scan on unnest p  (cost=0.00..0.10 rows=10 width=24) (actual time=0.020..0.020 rows=2 loops=1)
+              Buffers: shared hit=4
+        ->  Index Scan using contacts_id_workspace_key on contacts c  (cost=0.29..8.31 rows=1 width=349) (actual time=0.006..0.006 rows=1 loops=2)
+              Index Cond: (id = p.id)
+              Buffers: shared hit=6
+  ->  Index Scan using companies_pkey on companies co  (cost=0.29..0.36 rows=1 width=33) (actual time=0.003..0.003 rows=1 loops=2)
+        Index Cond: (id = c.company_id)
+        Buffers: shared hit=6
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.005..0.005 rows=1 loops=2)
+          Filter: (id = c.owner_id)
+          Rows Removed by Filter: 6
+          Buffers: shared hit=2
+  SubPlan 2
+    ->  Index Scan using deals_contact_id_idx on deals d  (cost=0.29..8.30 rows=1 width=16) (actual time=0.003..0.004 rows=0 loops=2)
+          Index Cond: (contact_id = c.id)
+          Filter: (outcome = 'open'::crm.deal_outcome)
+          Buffers: shared hit=5
+Planning:
+  Buffers: shared hit=67
+Planning Time: 0.602 ms
+Execution Time: 0.104 ms
+```
+
+Statement (37.2 ms in the request, incl. 15 ms latency):
+
+```sql
+select count(*)::int as total from crm.contacts c left join crm.companies co on co.id = c.company_id where c.workspace_id = $1 and c.status <> 'merged' and c.company_id = $2
+```
+
+```
+Aggregate  (cost=8.31..8.32 rows=1 width=4) (actual time=0.012..0.013 rows=1 loops=1)
+  Buffers: shared hit=4
+  ->  Index Scan using contacts_company_id_idx on contacts c  (cost=0.29..8.31 rows=1 width=0) (actual time=0.008..0.009 rows=2 loops=1)
+        Index Cond: (company_id = 'c0dc0a6c-45d6-130f-193f-db9f17c2e571'::uuid)
+        Filter: ((status <> 'merged'::crm.contact_status) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+        Buffers: shared hit=4
+Planning Time: 0.182 ms
+Execution Time: 0.027 ms
+```
+
+Statement (36.9 ms in the request, incl. 15 ms latency):
+
+```sql
+select t.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = t.owner_id) as owner_name, names.*, count(*) over()::int as total
+  from crm.tasks t left join lateral (
+  select nullif(trim(concat_ws(' ', nc.first_name, nc.last_name)), '') as contact_name, nco.name as company_name
+  from (select t.deal_id as deal_id, t.contact_id as contact_id) s
+  left join crm.deals nd on nd.id = s.deal_id
+  join crm.contacts nc on nc.id = coalesce(s.contact_id, nd.contact_id)
+  left join crm.companies nco on nco.id = coalesce(nd.company_id, nc.company_id)
+  ) names on true
+  where t.workspace_id = $1 and t.deal_id = $2
+  order by t.due_at asc
+  limit $3 offset $4
+```
+
+```
+Limit  (cost=36.85..37.96 rows=1 width=306) (actual time=0.083..0.091 rows=2 loops=1)
+  Buffers: shared hit=24
+  ->  Result  (cost=36.85..37.96 rows=1 width=306) (actual time=0.083..0.091 rows=2 loops=1)
+        Buffers: shared hit=24
+        ->  Sort  (cost=36.85..36.86 rows=1 width=274) (actual time=0.071..0.072 rows=2 loops=1)
+              Sort Key: t.due_at
+              Sort Method: quicksort  Memory: 25kB
+              Buffers: shared hit=22
+              ->  WindowAgg  (cost=5.17..36.84 rows=1 width=274) (actual time=0.065..0.068 rows=2 loops=1)
+                    Buffers: shared hit=22
+                    ->  Nested Loop Left Join  (cost=5.17..36.83 rows=1 width=270) (actual time=0.040..0.056 rows=2 loops=1)
+                          Buffers: shared hit=22
+                          ->  Bitmap Heap Scan on tasks t  (cost=4.30..11.87 rows=1 width=221) (actual time=0.020..0.022 rows=2 loops=1)
+                                Recheck Cond: (deal_id = '34caf4fa-f503-9f59-723f-4ec28ea1425c'::uuid)
+                                Filter: (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid)
+                                Heap Blocks: exact=2
+                                Buffers: shared hit=4
+                                ->  Bitmap Index Scan on tasks_deal_id_idx  (cost=0.00..4.30 rows=2 width=0) (actual time=0.007..0.007 rows=2 loops=1)
+                                      Index Cond: (deal_id = '34caf4fa-f503-9f59-723f-4ec28ea1425c'::uuid)
+                                      Buffers: shared hit=2
+                          ->  Nested Loop Left Join  (cost=0.86..24.94 rows=1 width=49) (actual time=0.014..0.015 rows=1 loops=2)
+                                Buffers: shared hit=18
+                                ->  Nested Loop  (cost=0.57..16.63 rows=1 width=43) (actual time=0.009..0.010 rows=1 loops=2)
+                                      Buffers: shared hit=12
+                                      ->  Nested Loop Left Join  (cost=0.29..8.32 rows=1 width=32) (actual time=0.005..0.006 rows=1 loops=2)
+                                            Buffers: shared hit=6
+                                            ->  Result  (cost=0.00..0.01 rows=1 width=0) (actual time=0.000..0.000 rows=1 loops=2)
+                                            ->  Index Scan using deals_id_workspace_key on deals nd  (cost=0.29..8.30 rows=1 width=32) (actual time=0.004..0.004 rows=1 loops=2)
+                                                  Index Cond: (id = t.deal_id)
+                                                  Buffers: shared hit=6
+                                      ->  Index Scan using contacts_id_workspace_key on contacts nc  (cost=0.29..8.31 rows=1 width=43) (actual time=0.003..0.003 rows=1 loops=2)
+                                            Index Cond: (id = COALESCE(t.contact_id, nd.contact_id))
+                                            Buffers: shared hit=6
+                                ->  Index Scan using companies_id_workspace_key on companies nco  (cost=0.29..8.30 rows=1 width=33) (actual time=0.003..0.003 rows=1 loops=2)
+                                      Index Cond: (id = COALESCE(nd.company_id, nc.company_id))
+                                      Buffers: shared hit=6
+        SubPlan 1
+          ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.005..0.005 rows=0 loops=2)
+                Filter: (id = t.owner_id)
+                Rows Removed by Filter: 6
+                Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=40
+Planning Time: 0.711 ms
+Execution Time: 0.147 ms
+```
+
+## Quick run 2026-10-21 06:13 UTC: `--only board,mixed` (after: board in one request, pages in one round)
+
+- Postgres 17.11 (local, native), Node v24.18.0, Windows. App pool `max: 10` (`DB_POOL_MAX`, `src/db.ts`), connection timeout 5 s (then 503), statement timeout 15 s.
+- **+15 ms per round trip** to the database and to Supabase Auth (TCP proxy, `load/latency.ts`).
+- Seed: A 15k / B 5k / C 5k contacts. All workspaces: companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334.
+- Requests as a salesperson member of workspace A (admin for Admin rows); 20 timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).
+- Targets: p95 ≤ 1000 ms per request or page; brain batch of 500 ≤ 5 s.
+
+**Summary:** 0 of 9 request rows miss the target or had errors.
+
+### Requests
+
+| Group | Route | p50 | p95 | max | SQL | Errors | |
+|---|---|---:|---:|---:|---:|---:|---|
+| Pages | Contact page, old (2 rounds, 11 calls) | 335 | 368 | 416 | 38 | 0 | ✅ |
+| Pages | Contact page, 1 round (9 calls) | 166 | 184 | 191 | 36 | 0 | ✅ |
+| Pages | Deal page, old (2 rounds, 10 calls) | 336 | 354 | 366 | 36 | 0 | ✅ |
+| Pages | Deal page, 1 round (8 calls) | 207 | 217 | 218 | 33 | 0 | ✅ |
+| Pages | Company page, old (2 rounds: tasks of 10 open deals) | 350 | 354 | 355 | 21 | 0 | ✅ |
+| Pages | Company page, 1 round (5 calls) | 175 | 178 | 179 | 20 | 0 | ✅ |
+| Board | old: one request, first 500 open deals | 160 | 162 | 166 | 4 | 0 | ✅ |
+| Board | one request: 15 stage totals + first 20 per stage | 161 | 176 | 187 | 4 | 0 | ✅ |
+| Board | load more: next 20 of the biggest column | 144 | 145 | 146 | 4 | 0 | ✅ |
+
+### Mixed load
+
+10 users browsing workspace A (contacts list, deals board as the app loads it, contact + timeline, dashboard, tasks; each screen's requests at once) for 60 s while contact batches of 500 run 3 at a time, round after round.
+
+| User requests | p50 | p95 | max | Errors | Brain batches (3 at once) | |
+|---:|---:|---:|---:|---:|---|---|
+| 3625 | 194 | 293 | 393 | 0 | 219 batches, p50 593 ms, max 1.4 s | ✅ |
+
+### Row counts after the run
+
+companies 25,000, contacts 28,250, contact_channels 50,000, external_refs 53,250, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 69,916, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334
+
+### EXPLAIN (ANALYZE, BUFFERS) for anything over 300 ms
+
+Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
+
+### Pages: Contact page, old (2 rounds, 11 calls) (p95 368 ms, 38 SQL)
+
+Statement (38.5 ms in the request, incl. 15 ms latency):
+
+```sql
+select co.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = co.owner_id) as owner_name,
+  (select count(*)::int from crm.contacts c where c.company_id = co.id and c.status <> 'merged') as contact_count,
+  (select count(*)::int from crm.deals d where d.company_id = co.id and d.outcome = 'open') as open_deal_count
+  from crm.companies co where co.id = $1 and co.workspace_id = $2
+```
+
+```
+Index Scan using companies_id_workspace_key on companies co  (cost=0.29..29.88 rows=1 width=313) (actual time=0.047..0.048 rows=1 loops=1)
+  Index Cond: ((id = '1f63ebca-f537-52ba-ae31-a22cdd0251d5'::uuid) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+  Buffers: shared hit=11
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.009..0.010 rows=1 loops=1)
+          Filter: (id = co.owner_id)
+          Rows Removed by Filter: 6
+          Buffers: shared hit=1
+  SubPlan 2
+    ->  Aggregate  (cost=12.14..12.16 rows=1 width=4) (actual time=0.021..0.022 rows=1 loops=1)
+          Buffers: shared hit=4
+          ->  Bitmap Heap Scan on contacts c  (cost=4.30..12.14 rows=2 width=0) (actual time=0.018..0.020 rows=2 loops=1)
+                Recheck Cond: (company_id = co.id)
+                Filter: (status <> 'merged'::crm.contact_status)
+                Heap Blocks: exact=2
+                Buffers: shared hit=4
+                ->  Bitmap Index Scan on contacts_company_id_idx  (cost=0.00..4.30 rows=2 width=0) (actual time=0.011..0.012 rows=2 loops=1)
+                      Index Cond: (company_id = co.id)
+                      Buffers: shared hit=2
+  SubPlan 3
+    ->  Aggregate  (cost=8.31..8.32 rows=1 width=4) (actual time=0.006..0.006 rows=1 loops=1)
+          Buffers: shared hit=3
+          ->  Index Scan using deals_company_id_idx on deals d  (cost=0.29..8.30 rows=1 width=0) (actual time=0.005..0.005 rows=1 loops=1)
+                Index Cond: (company_id = co.id)
+                Filter: (outcome = 'open'::crm.deal_outcome)
+                Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=168
+Planning Time: 0.962 ms
+Execution Time: 0.087 ms
+```
+
+Statement (38.1 ms in the request, incl. 15 ms latency):
+
+```sql
+select d.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = d.owner_id) as owner_name,
+  c.first_name, c.last_name, c.job_title, c.email, c.phone, c.phone_e164, c.status as contact_status, c.lifecycle_stage,
+  co.name as company_name, co.industry, co.website,
+  na.id as next_task_id, na.task_type as next_task_type, na.title as next_task_title,
+  na.due_at as next_task_due_at, na.owner_id as next_task_owner_id, na.origin as next_task_origin
+  from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id
+  left join lateral (
+  select t.id, t.task_type, t.title, t.due_at, t.owner_id, t.origin
+  from crm.tasks t
+  where t.deal_id = d.id and t.status = 'open'
+  order by t.due_at
+  limit 1
+  ) na on true where d.id = $1 and d.workspace_id = $2
+```
+
+```
+Nested Loop Left Join  (cost=12.74..37.91 rows=1 width=624) (actual time=0.039..0.041 rows=1 loops=1)
+  Buffers: shared hit=14
+  ->  Nested Loop Left Join  (cost=0.86..24.92 rows=1 width=535) (actual time=0.016..0.017 rows=1 loops=1)
+        Buffers: shared hit=9
+        ->  Nested Loop  (cost=0.57..16.61 rows=1 width=480) (actual time=0.013..0.014 rows=1 loops=1)
+              Buffers: shared hit=6
+              ->  Index Scan using deals_id_workspace_key on deals d  (cost=0.29..8.30 rows=1 width=389) (actual time=0.006..0.007 rows=1 loops=1)
+                    Index Cond: ((id = '3a729b9a-fc51-ef84-8db7-d7f9dfcf8f22'::uuid) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+                    Buffers: shared hit=3
+              ->  Index Scan using contacts_id_workspace_key on contacts c  (cost=0.29..8.30 rows=1 width=107) (actual time=0.006..0.006 rows=1 loops=1)
+                    Index Cond: (id = d.contact_id)
+                    Buffers: shared hit=3
+        ->  Index Scan using companies_id_workspace_key on companies co  (cost=0.29..8.30 rows=1 width=71) (actual time=0.002..0.002 rows=1 loops=1)
+              Index Cond: (id = d.company_id)
+              Buffers: shared hit=3
+  ->  Limit  (cost=11.88..11.89 rows=1 width=57) (actual time=0.016..0.016 rows=0 loops=1)
+        Buffers: shared hit=4
+        ->  Sort  (cost=11.88..11.89 rows=1 width=57) (actual time=0.015..0.015 rows=0 loops=1)
+              Sort Key: t.due_at
+              Sort Method: quicksort  Memory: 25kB
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on tasks t  (cost=4.30..11.87 rows=1 width=57) (actual time=0.012..0.012 rows=0 loops=1)
+                    Recheck Cond: (deal_id = d.id)
+                    Filter: (status = 'open'::crm.task_status)
+                    Rows Removed by Filter: 2
+                    Heap Blocks: exact=2
+                    Buffers: shared hit=4
+                    ->  Bitmap Index Scan on tasks_deal_id_idx  (cost=0.00..4.30 rows=2 width=0) (actual time=0.004..0.004 rows=2 loops=1)
+                          Index Cond: (deal_id = d.id)
+                          Buffers: shared hit=2
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.005..0.006 rows=1 loops=1)
+          Filter: (id = d.owner_id)
+          Rows Removed by Filter: 6
+          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=170
+Planning Time: 0.743 ms
+Execution Time: 0.077 ms
+```
+
+Statement (34.3 ms in the request, incl. 15 ms latency):
+
+```sql
+select c.*, co.name as company_name, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = c.owner_id) as owner_name,
+  (select d.id from crm.deals d where d.contact_id = c.id and d.outcome = 'open') as open_deal_id
+  from crm.contacts c left join crm.companies co on co.id = c.company_id where c.id = $1 and c.workspace_id = $2
+```
+
+```
+Nested Loop Left Join  (cost=0.57..26.01 rows=1 width=413) (actual time=0.020..0.021 rows=1 loops=1)
+  Buffers: shared hit=10
+  ->  Index Scan using contacts_id_workspace_key on contacts c  (cost=0.29..8.31 rows=1 width=348) (actual time=0.004..0.005 rows=1 loops=1)
+        Index Cond: ((id = '8bdc2d37-855f-4463-ea21-9f4c0bc1601f'::uuid) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+        Buffers: shared hit=3
+  ->  Index Scan using companies_id_workspace_key on companies co  (cost=0.29..8.30 rows=1 width=33) (actual time=0.002..0.002 rows=1 loops=1)
+        Index Cond: (id = c.company_id)
+        Buffers: shared hit=3
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.008..0.008 rows=1 loops=1)
+          Filter: (id = c.owner_id)
+          Rows Removed by Filter: 6
+          Buffers: shared hit=1
+  SubPlan 2
+    ->  Index Scan using deals_contact_id_idx on deals d  (cost=0.29..8.30 rows=1 width=16) (actual time=0.003..0.004 rows=1 loops=1)
+          Index Cond: (contact_id = c.id)
+          Filter: (outcome = 'open'::crm.deal_outcome)
+          Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=58
+Planning Time: 0.305 ms
+Execution Time: 0.040 ms
+```
+
+### Pages: Deal page, old (2 rounds, 10 calls) (p95 354 ms, 36 SQL)
+
+Statement (38.7 ms in the request, incl. 15 ms latency):
+
+```sql
+select p.id, p.role, p.is_active, p.created_at,
+  coalesce(rp.email, '') as email,
+  coalesce(nullif(trim(rp.full_name), ''), rp.email, '') as full_name from crm.profiles p left join public.revenueos_profiles rp on rp.id = p.id where p.id = $1
+```
+
+```
+Nested Loop Left Join  (cost=0.00..2.19 rows=1 width=93) (actual time=0.012..0.013 rows=1 loops=1)
+  Buffers: shared hit=2
+  ->  Seq Scan on profiles p  (cost=0.00..1.09 rows=1 width=29) (actual time=0.007..0.008 rows=1 loops=1)
+        Filter: (id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+        Rows Removed by Filter: 6
+        Buffers: shared hit=1
+  ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=43) (actual time=0.003..0.003 rows=1 loops=1)
+        Filter: (id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+        Rows Removed by Filter: 1
+        Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=34
+Planning Time: 0.200 ms
+Execution Time: 0.020 ms
+```
+
+Statement (34.7 ms in the request, incl. 15 ms latency):
+
+```sql
+select w.id,
+  exists (select 1 from crm.workspace_members m where m.workspace_id = w.id and m.user_id = $2) as is_member
+  from crm.workspaces w
+  where w.id = $1 and w.is_active = true
+```
+
+```
+Seq Scan on workspaces w  (cost=0.00..2.31 rows=1 width=17) (actual time=0.020..0.021 rows=1 loops=1)
+  Filter: (is_active AND (id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+  Rows Removed by Filter: 2
+  Buffers: shared hit=2
+  SubPlan 2
+    ->  Seq Scan on workspace_members m  (cost=0.00..1.23 rows=3 width=16) (actual time=0.004..0.005 rows=3 loops=1)
+          Filter: (user_id = 'dc04ae43-ec80-8265-3e8b-c1b4ac831bd0'::uuid)
+          Rows Removed by Filter: 15
+          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=58
+Planning Time: 0.400 ms
+Execution Time: 0.030 ms
+```
+
+Statement (33.1 ms in the request, incl. 15 ms latency):
+
+```sql
+select q.*, count(*) over()::int as total from (select p.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = p.owner_id) as owner_name, names.* from crm.proposals p left join lateral (
+  select nullif(trim(concat_ws(' ', nc.first_name, nc.last_name)), '') as contact_name, nco.name as company_name
+  from (select p.deal_id as deal_id, null::uuid as contact_id) s
+  left join crm.deals nd on nd.id = s.deal_id
+  join crm.contacts nc on nc.id = coalesce(s.contact_id, nd.contact_id)
+  left join crm.companies nco on nco.id = coalesce(nd.company_id, nc.company_id)
+  ) names on true where p.workspace_id = $1 and p.deal_id = $2) q
+  order by q.updated_at desc, q.id
+```
+
+```
+Incremental Sort  (cost=34.37..34.41 rows=2 width=577) (actual time=0.054..0.055 rows=1 loops=1)
+  Sort Key: p.updated_at DESC, p.id
+  Presorted Key: p.updated_at
+  Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 25kB  Peak Memory: 25kB
+  Buffers: shared hit=13
+  ->  WindowAgg  (cost=1.14..34.36 rows=1 width=577) (actual time=0.048..0.050 rows=1 loops=1)
+        Buffers: shared hit=13
+        ->  Nested Loop Left Join  (cost=1.14..33.25 rows=1 width=541) (actual time=0.031..0.033 rows=1 loops=1)
+              Buffers: shared hit=12
+              ->  Index Scan using proposals_deal_id_idx on proposals p  (cost=0.28..8.30 rows=1 width=492) (actual time=0.008..0.008 rows=1 loops=1)
+                    Index Cond: (deal_id = '74372ada-9e8b-f8c3-f0c2-e02813377a98'::uuid)
+                    Filter: (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid)
+                    Buffers: shared hit=3
+              ->  Nested Loop Left Join  (cost=0.86..24.94 rows=1 width=49) (actual time=0.022..0.023 rows=1 loops=1)
+                    Buffers: shared hit=9
+                    ->  Nested Loop  (cost=0.57..16.63 rows=1 width=43) (actual time=0.014..0.015 rows=1 loops=1)
+                          Buffers: shared hit=6
+                          ->  Nested Loop Left Join  (cost=0.29..8.32 rows=1 width=32) (actual time=0.008..0.009 rows=1 loops=1)
+                                Buffers: shared hit=3
+                                ->  Result  (cost=0.00..0.01 rows=1 width=0) (actual time=0.000..0.000 rows=1 loops=1)
+                                ->  Index Scan using deals_id_workspace_key on deals nd  (cost=0.29..8.30 rows=1 width=32) (actual time=0.007..0.008 rows=1 loops=1)
+                                      Index Cond: (id = p.deal_id)
+                                      Buffers: shared hit=3
+                          ->  Index Scan using contacts_id_workspace_key on contacts nc  (cost=0.29..8.30 rows=1 width=43) (actual time=0.006..0.006 rows=1 loops=1)
+                                Index Cond: (id = COALESCE(nd.contact_id))
+                                Buffers: shared hit=3
+                    ->  Index Scan using companies_id_workspace_key on companies nco  (cost=0.29..8.30 rows=1 width=33) (actual time=0.005..0.005 rows=1 loops=1)
+                          Index Cond: (id = COALESCE(nd.company_id, nc.company_id))
+                          Buffers: shared hit=3
+        SubPlan 1
+          ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.007..0.008 rows=1 loops=1)
+                Filter: (id = p.owner_id)
+                Rows Removed by Filter: 6
+                Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=112 dirtied=2
+Planning Time: 0.547 ms
+Execution Time: 0.097 ms
+```
+
+### Pages: Company page, old (2 rounds: tasks of 10 open deals) (p95 354 ms, 21 SQL)
+
+Statement (32.7 ms in the request, incl. 15 ms latency):
+
+```sql
+select co.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = co.owner_id) as owner_name,
+  (select count(*)::int from crm.contacts c where c.company_id = co.id and c.status <> 'merged') as contact_count,
+  (select count(*)::int from crm.deals d where d.company_id = co.id and d.outcome = 'open') as open_deal_count
+  from crm.companies co where co.id = $1 and co.workspace_id = $2
+```
+
+```
+Index Scan using companies_id_workspace_key on companies co  (cost=0.29..29.88 rows=1 width=313) (actual time=0.044..0.044 rows=1 loops=1)
+  Index Cond: ((id = '3eb13325-1b37-9804-9ecb-c3ad010dd488'::uuid) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+  Buffers: shared hit=11
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.006..0.006 rows=0 loops=1)
+          Filter: (id = co.owner_id)
+          Rows Removed by Filter: 7
+          Buffers: shared hit=1
+  SubPlan 2
+    ->  Aggregate  (cost=12.14..12.16 rows=1 width=4) (actual time=0.017..0.018 rows=1 loops=1)
+          Buffers: shared hit=4
+          ->  Bitmap Heap Scan on contacts c  (cost=4.30..12.14 rows=2 width=0) (actual time=0.014..0.015 rows=2 loops=1)
+                Recheck Cond: (company_id = co.id)
+                Filter: (status <> 'merged'::crm.contact_status)
+                Heap Blocks: exact=2
+                Buffers: shared hit=4
+                ->  Bitmap Index Scan on contacts_company_id_idx  (cost=0.00..4.30 rows=2 width=0) (actual time=0.009..0.009 rows=2 loops=1)
+                      Index Cond: (company_id = co.id)
+                      Buffers: shared hit=2
+  SubPlan 3
+    ->  Aggregate  (cost=8.31..8.32 rows=1 width=4) (actual time=0.007..0.008 rows=1 loops=1)
+          Buffers: shared hit=3
+          ->  Index Scan using deals_company_id_idx on deals d  (cost=0.29..8.30 rows=1 width=0) (actual time=0.006..0.007 rows=1 loops=1)
+                Index Cond: (company_id = co.id)
+                Filter: (outcome = 'open'::crm.deal_outcome)
+                Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.196 ms
+Execution Time: 0.099 ms
+```
+
+Statement (32.6 ms in the request, incl. 15 ms latency):
+
+```sql
+with page as (
+  select p.id, p.ord from unnest(array(
+  select d.id from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id where d.workspace_id = $1 and d.company_id = $2 order by d.last_activity_at desc, d.id limit $3 offset $4
+  )) with ordinality as p(id, ord)
+  )
+  select d.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = d.owner_id) as owner_name,
+  c.first_name, c.last_name, c.job_title, c.email, c.phone, c.phone_e164, c.status as contact_status, c.lifecycle_stage,
+  co.name as company_name, co.industry, co.website,
+  na.id as next_task_id, na.task_type as next_task_type, na.title as next_task_title,
+  na.due_at as next_task_due_at, na.owner_id as next_task_owner_id, na.origin as next_task_origin
+  from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id
+  left join lateral (
+  select t.id, t.task_type, t.title, t.due_at, t.owner_id, t.origin
+  from crm.tasks t
+  where t.deal_id = d.id and t.status = 'open'
+  order by t.due_at
+  limit 1
+  ) na on true
+  join page on page.id = d.id
+  order by page.ord
+```
+
+```
+Nested Loop Left Join  (cost=29.37..244.26 rows=10 width=632) (actual time=0.075..0.077 rows=1 loops=1)
+  Buffers: shared hit=20
+  InitPlan 2
+    ->  Limit  (cost=16.62..16.63 rows=1 width=24) (actual time=0.019..0.019 rows=1 loops=1)
+          Buffers: shared hit=6
+          ->  Sort  (cost=16.62..16.63 rows=1 width=24) (actual time=0.018..0.019 rows=1 loops=1)
+                Sort Key: d_1.last_activity_at DESC, d_1.id
+                Sort Method: quicksort  Memory: 25kB
+                Buffers: shared hit=6
+                ->  Nested Loop  (cost=0.57..16.61 rows=1 width=24) (actual time=0.014..0.015 rows=1 loops=1)
+                      Buffers: shared hit=6
+                      ->  Index Scan using deals_company_id_idx on deals d_1  (cost=0.29..8.30 rows=1 width=56) (actual time=0.006..0.007 rows=1 loops=1)
+                            Index Cond: (company_id = '3eb13325-1b37-9804-9ecb-c3ad010dd488'::uuid)
+                            Filter: (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid)
+                            Buffers: shared hit=3
+                      ->  Index Only Scan using contacts_id_workspace_key on contacts c_1  (cost=0.29..8.30 rows=1 width=16) (actual time=0.006..0.006 rows=1 loops=1)
+                            Index Cond: (id = d_1.contact_id)
+                            Heap Fetches: 0
+                            Buffers: shared hit=3
+  ->  Nested Loop Left Join  (cost=0.86..97.73 rows=10 width=543) (actual time=0.053..0.054 rows=1 loops=1)
+        Buffers: shared hit=15
+        ->  Nested Loop  (cost=0.57..92.38 rows=10 width=488) (actual time=0.040..0.040 rows=1 loops=1)
+              Buffers: shared hit=12
+              ->  Nested Loop  (cost=0.29..83.13 rows=10 width=397) (actual time=0.032..0.032 rows=1 loops=1)
+                    Buffers: shared hit=9
+                    ->  Function Scan on unnest p  (cost=0.00..0.10 rows=10 width=24) (actual time=0.025..0.025 rows=1 loops=1)
+                          Buffers: shared hit=6
+                    ->  Index Scan using deals_id_workspace_key on deals d  (cost=0.29..8.30 rows=1 width=389) (actual time=0.006..0.006 rows=1 loops=1)
+                          Index Cond: (id = p.id)
+                          Buffers: shared hit=3
+              ->  Index Scan using contacts_pkey on contacts c  (cost=0.29..0.92 rows=1 width=107) (actual time=0.008..0.008 rows=1 loops=1)
+                    Index Cond: (id = d.contact_id)
+                    Buffers: shared hit=3
+        ->  Index Scan using companies_pkey on companies co  (cost=0.29..0.54 rows=1 width=71) (actual time=0.013..0.013 rows=1 loops=1)
+              Index Cond: (id = d.company_id)
+              Buffers: shared hit=3
+  ->  Limit  (cost=11.88..11.89 rows=1 width=57) (actual time=0.016..0.016 rows=0 loops=1)
+        Buffers: shared hit=4
+        ->  Sort  (cost=11.88..11.89 rows=1 width=57) (actual time=0.015..0.016 rows=0 loops=1)
+              Sort Key: t.due_at
+              Sort Method: quicksort  Memory: 25kB
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on tasks t  (cost=4.30..11.87 rows=1 width=57) (actual time=0.013..0.013 rows=0 loops=1)
+                    Recheck Cond: (deal_id = d.id)
+                    Filter: (status = 'open'::crm.task_status)
+                    Rows Removed by Filter: 2
+                    Heap Blocks: exact=2
+                    Buffers: shared hit=4
+                    ->  Bitmap Index Scan on tasks_deal_id_idx  (cost=0.00..4.30 rows=2 width=0) (actual time=0.005..0.005 rows=2 loops=1)
+                          Index Cond: (deal_id = d.id)
+                          Buffers: shared hit=2
+  SubPlan 1
+    ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.005..0.005 rows=0 loops=1)
+          Filter: (id = d.owner_id)
+          Rows Removed by Filter: 7
+          Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=49
+Planning Time: 0.787 ms
+Execution Time: 0.144 ms
+```
+
+Statement (32.6 ms in the request, incl. 15 ms latency):
+
+```sql
+select t.*, (select coalesce(nullif(trim(rp.full_name), ''), rp.email) from public.revenueos_profiles rp where rp.id = t.owner_id) as owner_name, names.*, count(*) over()::int as total
+  from crm.tasks t left join lateral (
+  select nullif(trim(concat_ws(' ', nc.first_name, nc.last_name)), '') as contact_name, nco.name as company_name
+  from (select t.deal_id as deal_id, t.contact_id as contact_id) s
+  left join crm.deals nd on nd.id = s.deal_id
+  join crm.contacts nc on nc.id = coalesce(s.contact_id, nd.contact_id)
+  left join crm.companies nco on nco.id = coalesce(nd.company_id, nc.company_id)
+  ) names on true
+  where t.workspace_id = $1 and t.deal_id = $2
+  order by t.due_at asc
+  limit $3 offset $4
+```
+
+```
+Limit  (cost=36.85..37.96 rows=1 width=306) (actual time=0.071..0.076 rows=2 loops=1)
+  Buffers: shared hit=24
+  ->  Result  (cost=36.85..37.96 rows=1 width=306) (actual time=0.070..0.076 rows=2 loops=1)
+        Buffers: shared hit=24
+        ->  Sort  (cost=36.85..36.85 rows=1 width=274) (actual time=0.062..0.063 rows=2 loops=1)
+              Sort Key: t.due_at
+              Sort Method: quicksort  Memory: 25kB
+              Buffers: shared hit=22
+              ->  WindowAgg  (cost=5.16..36.84 rows=1 width=274) (actual time=0.053..0.056 rows=2 loops=1)
+                    Buffers: shared hit=22
+                    ->  Nested Loop Left Join  (cost=5.16..36.82 rows=1 width=270) (actual time=0.038..0.048 rows=2 loops=1)
+                          Buffers: shared hit=22
+                          ->  Bitmap Heap Scan on tasks t  (cost=4.30..11.87 rows=1 width=221) (actual time=0.017..0.019 rows=2 loops=1)
+                                Recheck Cond: (deal_id = '1dbb9a72-26c1-d06d-8033-e49d07536382'::uuid)
+                                Filter: (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid)
+                                Heap Blocks: exact=2
+                                Buffers: shared hit=4
+                                ->  Bitmap Index Scan on tasks_deal_id_idx  (cost=0.00..4.30 rows=2 width=0) (actual time=0.009..0.009 rows=2 loops=1)
+                                      Index Cond: (deal_id = '1dbb9a72-26c1-d06d-8033-e49d07536382'::uuid)
+                                      Buffers: shared hit=2
+                          ->  Nested Loop Left Join  (cost=0.86..24.94 rows=1 width=49) (actual time=0.013..0.013 rows=1 loops=2)
+                                Buffers: shared hit=18
+                                ->  Nested Loop  (cost=0.57..16.63 rows=1 width=43) (actual time=0.007..0.008 rows=1 loops=2)
+                                      Buffers: shared hit=12
+                                      ->  Nested Loop Left Join  (cost=0.29..8.32 rows=1 width=32) (actual time=0.004..0.004 rows=1 loops=2)
+                                            Buffers: shared hit=6
+                                            ->  Result  (cost=0.00..0.01 rows=1 width=0) (actual time=0.000..0.000 rows=1 loops=2)
+                                            ->  Index Scan using deals_id_workspace_key on deals nd  (cost=0.29..8.30 rows=1 width=32) (actual time=0.003..0.004 rows=1 loops=2)
+                                                  Index Cond: (id = t.deal_id)
+                                                  Buffers: shared hit=6
+                                      ->  Index Scan using contacts_id_workspace_key on contacts nc  (cost=0.29..8.30 rows=1 width=43) (actual time=0.003..0.003 rows=1 loops=2)
+                                            Index Cond: (id = COALESCE(t.contact_id, nd.contact_id))
+                                            Buffers: shared hit=6
+                                ->  Index Scan using companies_id_workspace_key on companies nco  (cost=0.29..8.30 rows=1 width=33) (actual time=0.003..0.003 rows=1 loops=2)
+                                      Index Cond: (id = COALESCE(nd.company_id, nc.company_id))
+                                      Buffers: shared hit=6
+        SubPlan 1
+          ->  Seq Scan on revenueos_profiles rp  (cost=0.00..1.09 rows=1 width=32) (actual time=0.003..0.004 rows=1 loops=2)
+                Filter: (id = t.owner_id)
+                Rows Removed by Filter: 6
+                Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=42
+Planning Time: 0.502 ms
+Execution Time: 0.125 ms
+```

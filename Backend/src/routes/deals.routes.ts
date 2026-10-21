@@ -12,6 +12,8 @@ import { listTasks } from "../services/tasks.service.js";
 import { listMeetings } from "../services/meetings.service.js";
 import { listProposals } from "../services/proposals.service.js";
 import { listRuns } from "../services/runs.service.js";
+import { contactToDto, getContactOr404, listNotes } from "../services/contacts.service.js";
+import { companyToDto, getCompanyOr404 } from "../services/companies.service.js";
 
 /** Mounted under the workspace-gated crmRouter (routes/index.ts). */
 export const dealsRouter = Router();
@@ -38,6 +40,25 @@ dealsRouter.get(
       req.query,
     );
     res.json(await deals.listDeals(pool, req.workspaceId!, { ...q, missingNextAction: q.missingNextAction === "true" }));
+  }),
+);
+
+/** The board: count + amount per stage over all open deals, with the board's filters (+ first deals per stage). */
+dealsRouter.get(
+  "/board-summary",
+  asyncHandler(async (req, res) => {
+    const q = parseQuery(
+      z.object({
+        ownerId: z.union([z.string().uuid(), z.literal("none")]).optional(),
+        missingNextAction: z.enum(["true", "false"]).optional(),
+        search: z.string().optional(),
+        // Also each stage's first N deals (the board's first page per column).
+        perStage: z.coerce.number().int().min(0).max(50).optional(),
+      }),
+      req.query,
+    );
+    const { perStage, ...filters } = q;
+    res.json(await deals.dealBoardSummary(pool, req.workspaceId!, { ...filters, missingNextAction: q.missingNextAction === "true" }, perStage));
   }),
 );
 
@@ -136,6 +157,20 @@ dealsRouter.get(
 );
 
 // --- Related lists ----------------------------------------------------------------------
+
+/** What the deal page would otherwise fetch after the deal: its contact, the contact's notes and its company. */
+dealsRouter.get(
+  "/:id/related",
+  asyncHandler(async (req, res) => {
+    const deal = await deals.getDealOr404(pool, req.workspaceId!, id(req));
+    const [contact, notes, company] = await Promise.all([
+      getContactOr404(pool, req.workspaceId!, deal.contact_id).then(contactToDto),
+      listNotes(pool, req.workspaceId!, deal.contact_id),
+      deal.company_id ? getCompanyOr404(pool, req.workspaceId!, deal.company_id).then(companyToDto) : null,
+    ]);
+    res.json({ contact, notes, company });
+  }),
+);
 
 dealsRouter.get(
   "/:id/tasks",

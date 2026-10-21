@@ -11,7 +11,7 @@ import {
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackendError } from "@/lib/backend-client";
-import type { Deal } from "@/types";
+import { PIPELINE_STAGES as STAGES, type Deal } from "@/types";
 
 const api = vi.hoisted(() => ({ update: vi.fn(), create: vi.fn() }));
 const toastError = vi.hoisted(() => vi.fn());
@@ -20,10 +20,44 @@ vi.mock("@/lib/backend-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/backend-client")>();
   return { ...actual, backend: { ...actual.backend, deals: { ...actual.backend.deals, ...api } } };
 });
-const deals = vi.hoisted(() => ({ list: [] as Deal[], calls: [] as Record<string, unknown>[] }));
+const deals = vi.hoisted(() => ({
+  list: [] as Deal[],
+  calls: [] as Record<string, unknown>[],
+  // Board: deals the server has beyond the loaded ones (summary only), and "load more".
+  unloaded: {} as Record<string, number>,
+  fetchNextPage: vi.fn(),
+}));
+const openIn = (stage: string) =>
+  deals.list.filter((d) => d.outcome === "open" && d.stage === stage);
 vi.mock("@/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/store")>()),
   useSession: () => ({ users: [], currentUser: null }),
+  useDealBoardSummary: (filters: object, perStage: number) => {
+    deals.calls.push({ ...filters, outcome: "open", summary: true, perStage });
+    const stages = STAGES.map((stage) => ({
+      stage,
+      count: openIn(stage).length + (deals.unloaded[stage] ?? 0),
+      amount: openIn(stage).reduce((n, d) => n + (d.amount ?? 0), 0),
+      deals: openIn(stage),
+    }));
+    return {
+      data: { stages, count: stages.reduce((n, s) => n + s.count, 0), amount: 0 },
+      dataUpdatedAt: 0,
+      isLoading: false,
+      error: null,
+    };
+  },
+  // Off until a column's first "Load more"; the first page comes with the summary.
+  useDealColumn: (filters: object, stage: string, _size: number, enabled: boolean) => {
+    if (enabled) deals.calls.push({ ...filters, outcome: "open", stage, more: true });
+    return {
+      data: enabled ? { pages: [{ data: [], total: 0, offset: 20, limit: 20 }] } : undefined,
+      hasNextPage: enabled && Boolean(deals.unloaded[stage]),
+      isFetching: false,
+      fetchNextPage: deals.fetchNextPage,
+      error: null,
+    };
+  },
   useDeals: (filters: { outcome?: string }) => {
     deals.calls.push(filters);
     return {
@@ -119,13 +153,29 @@ describe("deals board", () => {
     expect(screen.getByText("₹1.5 L")).toBeInTheDocument();
   });
 
+  it("headers count every open deal (not just the loaded cards); a column loads more on demand", async () => {
+    deals.list = [{ ...deal("d1", "Ann", "new"), amount: 100000 }];
+    deals.unloaded = { new: 44 };
+    await renderPage();
+    expect(within(column("New")).getByText("45")).toBeInTheDocument();
+    // The first click turns the column's own query on (from offset 20), the next pages through it.
+    fireEvent.click(within(column("New")).getByRole("button", { name: "Load more (44 more)" }));
+    expect(deals.calls).toContainEqual(expect.objectContaining({ stage: "new", more: true }));
+    fireEvent.click(within(column("New")).getByRole("button", { name: "Load more (44 more)" }));
+    expect(deals.fetchNextPage).toHaveBeenCalled();
+    expect(within(column("Negotiation")).queryByRole("button", { name: /Load more/ })).toBeNull();
+    deals.unloaded = {};
+  });
+
   it("moves a deal with the stage dropdown", async () => {
     deals.list = [deal("d1", "Ann", "new")];
     api.update.mockResolvedValue(deal("d1", "Ann", "negotiation"));
     await renderPage();
     fireEvent.change(screen.getByLabelText("Stage for Ann"), { target: { value: "negotiation" } });
-    // The card shows in its new column at once, while the move is being saved.
+    // The card and both counts change at once, while the move is being saved.
     expect(within(column("Negotiation")).getByText("Ann")).toBeInTheDocument();
+    expect(within(column("Negotiation")).getByText("1")).toBeInTheDocument();
+    expect(within(column("New")).getByText("0")).toBeInTheDocument();
     // react-query calls the API on the next tick.
     await vi.waitFor(() => expect(api.update).toHaveBeenCalledWith("d1", { stage: "negotiation" }));
   });

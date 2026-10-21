@@ -20,16 +20,29 @@ import {
 import { Avatar } from "@/components/common/record-parts";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { StatusBadge } from "@/components/common/status-badge";
-import { backend, type DealFilters } from "@/lib/backend-client";
+import { backend, type BoardFilters, type DealFilters } from "@/lib/backend-client";
 import { downloadCsv } from "@/lib/csv";
 import { fmtDate, isOverdue, money } from "@/lib/format";
 import { label } from "@/lib/labels";
 import { useBulkAssignOwner } from "@/lib/use-bulk-assign";
 import { useStoredColumns, useStoredSort } from "@/lib/use-stored-columns";
 import { cn } from "@/lib/utils";
-import { messageFromError, useCrmMutation, useDeals, useSession } from "@/store";
-import { DEAL_OUTCOMES, type Deal, type DealOutcome, type PipelineStage } from "@/types";
-import { DEAL_DRAG_TYPE, groupDealsByStage, stageTotal } from "./board";
+import {
+  messageFromError,
+  useCrmMutation,
+  useDealBoardSummary,
+  useDealColumn,
+  useDeals,
+  useSession,
+} from "@/store";
+import {
+  DEAL_OUTCOMES,
+  PIPELINE_STAGES,
+  type Deal,
+  type DealOutcome,
+  type PipelineStage,
+} from "@/types";
+import { DEAL_DRAG_TYPE, stageHeaders, uniqueDeals, type StageHeader } from "./board";
 import { DealCard } from "./deal-card";
 import { NewDealDialog } from "./new-deal-dialog";
 import { countLabel } from "@/lib/format";
@@ -37,8 +50,6 @@ import { countLabel } from "@/lib/format";
 const ALL = "all";
 // The API reads ownerId=none as "no owner".
 const UNASSIGNED = "none";
-// The backend's page limit; the board shows open deals only (a few hundred per client).
-const BOARD_LIMIT = 500;
 const LIST_PAGE_SIZE = 50;
 
 type Filters = { owner: string; noNextAction: boolean };
@@ -158,6 +169,8 @@ function Toolbar({ children }: { children: ReactNode }) {
   );
 }
 
+type PendingMove = { deal: Deal; stage: PipelineStage; at: number };
+
 function Board({
   query,
   toolbar,
@@ -167,25 +180,36 @@ function Board({
   toolbar: ReactNode;
   onTotal: (total: number | undefined) => void;
 }) {
-  const { data, isLoading, error } = useDeals({ ...query, outcome: "open", limit: BOARD_LIMIT });
-  useEffect(() => onTotal(data?.total), [data?.total, onTotal]);
-  const [pending, setPending] = useState<Partial<Record<string, PipelineStage>>>({});
+  const filters: BoardFilters = {
+    search: query.search,
+    ownerId: query.ownerId,
+    missingNextAction: query.missingNextAction,
+  };
+  const summary = useDealBoardSummary(filters, COLUMN_PAGE_SIZE);
+  useEffect(() => onTotal(summary.data?.count), [summary.data?.count, onTotal]);
+  const [pending, setPending] = useState<Record<string, PendingMove>>({});
+  const [dragged, setDragged] = useState<Deal | null>(null);
   const [dropTarget, setDropTarget] = useState<PipelineStage | null>(null);
   const update = useCrmMutation(({ id, stage }: { id: string; stage: PipelineStage }) =>
     backend.deals.update(id, { stage }),
   );
 
-  const deals = data?.data ?? [];
-  const columns = groupDealsByStage(deals, pending);
+  // A move counts in the headers until the summary is refetched after it (then it already has it).
+  const unsaved = Object.values(pending).filter((p) => p.at > summary.dataUpdatedAt);
+  const headers = stageHeaders(
+    summary.data?.stages ?? [],
+    unsaved.map((p) => p.deal),
+    Object.fromEntries(unsaved.map((p) => [p.deal.id, p.stage])),
+  );
 
   const move = (deal: Deal, stage: PipelineStage) => {
-    if ((pending[deal.id] ?? deal.stage) === stage) return;
-    setPending((p) => ({ ...p, [deal.id]: stage }));
+    if ((pending[deal.id]?.stage ?? deal.stage) === stage) return;
+    setPending((p) => ({ ...p, [deal.id]: { deal, stage, at: Date.now() } }));
     update.mutate(
       { id: deal.id, stage },
       {
         onError: (err) => toast.error(`${deal.contactName}: ${messageFromError(err)}`),
-        // On success the lists have been refetched; on failure the card goes back.
+        // On success the board has been refetched; on failure the card goes back.
         onSettled: () => setPending(({ [deal.id]: _done, ...rest }) => rest),
       },
     );
@@ -197,70 +221,145 @@ function Board({
         <Toolbar>
           {toolbar}
           <span className="ml-auto text-xs text-muted-foreground">
-            {data && data.total > BOARD_LIMIT
-              ? `Showing ${BOARD_LIMIT} of ${data.total}; narrow with search.`
-              : "Drag a card, or use its stage menu, to move it."}
+            Drag a card, or use its stage menu, to move it.
           </span>
         </Toolbar>
       </Card>
 
-      {isLoading ? (
+      {summary.isLoading ? (
         <LoadingBlock label="Loading deals…" />
-      ) : error ? (
-        <ErrorBlock error={error} />
+      ) : summary.error ? (
+        <ErrorBlock error={summary.error} />
       ) : (
         <div className="flex gap-3 overflow-x-auto pb-2">
-          {[...columns].map(([stage, items]) => (
-            <section
+          {PIPELINE_STAGES.map((stage) => (
+            <BoardColumn
               key={stage}
-              aria-label={`${label(stage)} column`}
-              onDragOver={(e) => {
-                if (!e.dataTransfer.types.includes(DEAL_DRAG_TYPE)) return;
-                e.preventDefault();
-                setDropTarget(stage);
-              }}
+              stage={stage}
+              filters={filters}
+              header={headers.get(stage)!}
+              first={summary.data?.stages.find((s) => s.stage === stage)}
+              pending={pending}
+              highlighted={dropTarget === stage}
+              onDragDeal={setDragged}
+              onDragOver={() => setDropTarget(stage)}
               onDragLeave={() => setDropTarget((t) => (t === stage ? null : t))}
-              onDrop={(e) => {
-                e.preventDefault();
+              onDrop={(id) => {
                 setDropTarget(null);
-                const deal = deals.find((d) => d.id === e.dataTransfer.getData(DEAL_DRAG_TYPE));
-                if (deal) move(deal, stage);
+                if (dragged?.id === id) move(dragged, stage);
               }}
-              className={cn(
-                "flex w-60 shrink-0 flex-col rounded-lg border bg-muted/40",
-                dropTarget === stage && "border-primary bg-primary/5",
-              )}
-            >
-              <header className="border-b px-3 py-2 text-xs">
-                <div className="flex items-center justify-between gap-2 font-semibold">
-                  <span className="truncate">{label(stage)}</span>
-                  <span className="num rounded-full bg-background px-2 py-0.5 font-normal text-muted-foreground">
-                    {items.length}
-                  </span>
-                </div>
-                <div
-                  className="num pt-0.5 text-muted-foreground"
-                  aria-label={`${label(stage)} total`}
-                >
-                  {money(stageTotal(items))}
-                </div>
-              </header>
-              <div className="flex min-h-24 flex-col gap-2 p-2">
-                {items.map((deal) => (
-                  <DealCard
-                    key={deal.id}
-                    deal={deal}
-                    stage={stage}
-                    pending={deal.id in pending}
-                    onMove={(next) => move(deal, next)}
-                  />
-                ))}
-              </div>
-            </section>
+              onMove={move}
+            />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+const COLUMN_PAGE_SIZE = 20;
+
+/** One stage: its first deals (from the board summary), more on "Load more", plus cards being moved in. */
+function BoardColumn({
+  stage,
+  filters,
+  header,
+  first,
+  pending,
+  highlighted,
+  onDragDeal,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onMove,
+}: {
+  stage: PipelineStage;
+  filters: BoardFilters;
+  header: StageHeader;
+  first: { count: number; deals?: Deal[] } | undefined;
+  pending: Record<string, PendingMove>;
+  highlighted: boolean;
+  onDragDeal: (deal: Deal) => void;
+  onDragOver: () => void;
+  onDragLeave: () => void;
+  onDrop: (dealId: string) => void;
+  onMove: (deal: Deal, stage: PipelineStage) => void;
+}) {
+  const [more, setMore] = useState(false);
+  const column = useDealColumn(filters, stage, COLUMN_PAGE_SIZE, more);
+  const loaded = uniqueDeals([
+    ...(first?.deals ?? []),
+    ...(column.data?.pages.flatMap((p) => p.data) ?? []),
+  ]);
+  const canLoadMore = more ? column.hasNextPage : (first?.count ?? 0) > (first?.deals?.length ?? 0);
+  // Cards being moved show in their new column at once, and go back if the move fails.
+  const own = loaded.filter((d) => (pending[d.id]?.stage ?? stage) === stage);
+  const incoming = Object.values(pending)
+    .filter((p) => p.stage === stage && !own.some((d) => d.id === p.deal.id))
+    .map((p) => p.deal);
+  const items = [...incoming, ...own];
+
+  return (
+    <section
+      aria-label={`${label(stage)} column`}
+      onDragStart={(e) => {
+        const deal = loaded.find((d) => d.id === e.dataTransfer.getData(DEAL_DRAG_TYPE));
+        if (deal) onDragDeal(deal);
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes(DEAL_DRAG_TYPE)) return;
+        e.preventDefault();
+        onDragOver();
+      }}
+      onDragLeave={onDragLeave}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDrop(e.dataTransfer.getData(DEAL_DRAG_TYPE));
+      }}
+      className={cn(
+        "flex w-60 shrink-0 flex-col rounded-lg border bg-muted/40",
+        highlighted && "border-primary bg-primary/5",
+      )}
+    >
+      <header className="border-b px-3 py-2 text-xs">
+        <div className="flex items-center justify-between gap-2 font-semibold">
+          <span className="truncate">{label(stage)}</span>
+          <span className="num rounded-full bg-background px-2 py-0.5 font-normal text-muted-foreground">
+            {header.count}
+          </span>
+        </div>
+        <div className="num pt-0.5 text-muted-foreground" aria-label={`${label(stage)} total`}>
+          {money(header.amount)}
+        </div>
+      </header>
+      <div className="flex min-h-24 flex-col gap-2 p-2">
+        {column.error ? (
+          <ErrorBlock error={column.error} />
+        ) : (
+          items.map((deal) => (
+            <DealCard
+              key={deal.id}
+              deal={deal}
+              stage={stage}
+              pending={deal.id in pending}
+              onMove={(next) => onMove(deal, next)}
+            />
+          ))
+        )}
+        {canLoadMore && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={column.isFetching}
+            onClick={() => (more ? void column.fetchNextPage() : setMore(true))}
+          >
+            {column.isFetching
+              ? "Loading…"
+              : `Load more (${Math.max(header.count - own.length, 0)} more)`}
+          </Button>
+        )}
+      </div>
+    </section>
   );
 }
 

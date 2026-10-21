@@ -158,6 +158,45 @@ describe("lists: page first, count separately (PGlite)", () => {
     expect(new Set((await seed.query(`${old} where co.workspace_id = $1`, [ws])).rows.map((r) => `${r.contact_count}/${r.open_deal_count}`)).size).toBeGreaterThan(2);
   });
 
+  it("board summary: count + amount per stage over all open deals, with the board's filters", async () => {
+    // Spread the open deals over a few stages (the list tests compare live, so order checks still hold).
+    await seed.query(
+      `update crm.deals set stage = (array['new', 'contact_attempted', 'negotiation'])[(abs(hashtext(id::text)) % 3) + 1]::crm.pipeline_stage where workspace_id = $1`,
+      [ws],
+    );
+    const cases: [object, string, unknown[]][] = [
+      [{}, `true`, []],
+      [{ ownerId: "none" }, `d.owner_id is null`, []],
+      [{ missingNextAction: true }, `not exists (select 1 from crm.tasks t where t.deal_id = d.id and t.status = 'open')`, []],
+      [{ search: "bob" }, `(concat_ws(' ', c.first_name, c.last_name) ilike $2 or c.email ilike $2 or co.name ilike $2)`, ["%bob%"]],
+    ];
+    for (const [f, where, extra] of cases) {
+      const ref = await seed.query<{ stage: string; count: number; amount: string }>(
+        `select d.stage, count(*)::int as count, coalesce(sum(d.amount), 0)::text as amount
+           from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id
+          where d.workspace_id = $1 and d.outcome = 'open' and ${where} group by d.stage`,
+        [ws, ...extra],
+      );
+      const got = await svc.deals.dealBoardSummary(pool, ws, f);
+      expect(got.stages).toHaveLength(15);
+      expect(got.stages.filter((s) => s.count > 0)).toEqual(
+        expect.arrayContaining(ref.rows.map((r) => ({ stage: r.stage, count: r.count, amount: Number(r.amount) }))),
+      );
+      expect(got.stages.filter((s) => s.count > 0)).toHaveLength(ref.rows.length);
+      expect(got.count).toBe(ref.rows.reduce((n, r) => n + r.count, 0));
+      // The columns page the same deals: each stage's list total equals its summary count.
+      for (const s of got.stages) expect((await svc.deals.listDeals(pool, ws, { ...f, outcome: "open", stage: s.stage, limit: 1 })).total).toBe(s.count);
+      // perStage: each stage's first deals are exactly that column's first page.
+      const withFirst = await svc.deals.dealBoardSummary(pool, ws, f, 3);
+      for (const s of withFirst.stages) {
+        const page = await svc.deals.listDeals(pool, ws, { ...f, outcome: "open", stage: s.stage, limit: 3 });
+        expect({ stage: s.stage, deals: s.deals }).toEqual({ stage: s.stage, deals: page.data });
+      }
+      expect(got.stages[0]).not.toHaveProperty("deals");
+    }
+    expect((await svc.deals.dealBoardSummary(pool, ws, {})).stages.filter((s) => s.count > 0).length).toBeGreaterThan(1);
+  });
+
   it("deals: same rows, order and total for every sort and filter", async () => {
     const from = `from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id
                   left join lateral (select t.id from crm.tasks t where t.deal_id = d.id and t.status = 'open' order by t.due_at limit 1) na on true`;

@@ -384,6 +384,49 @@ describe("companies, contacts, deals (PGlite)", () => {
     expect(events.rows.every((e) => e.actor_source === "user" && e.actor_id === sales)).toBe(true);
   });
 
+  it("record pages in one round: /deals/:id/related, /contacts/:id/related, /tasks?companyId", async () => {
+    const company = (await api("post", "/companies", { body: { name: "Related Co" } })).body;
+    const c = await newContact({ email: "related@x.com", companyId: company.id });
+    const d = await newDeal(c.id);
+    await api("post", `/contacts/${c.id}/notes`, { body: { body: "Hello", dealId: d.id } });
+    await api("post", "/meetings", { body: { dealId: d.id, title: "Intro", at: new Date(Date.now() + 86_400_000).toISOString() } });
+
+    const deal = (await api("get", `/deals/${d.id}/related`)).body;
+    expect(deal).toEqual({
+      contact: (await api("get", `/contacts/${c.id}`)).body,
+      notes: (await api("get", `/contacts/${c.id}/notes`)).body.data,
+      company: (await api("get", `/companies/${company.id}`)).body,
+    });
+    const contact = (await api("get", `/contacts/${c.id}/related`)).body;
+    expect(contact).toEqual({
+      company: (await api("get", `/companies/${company.id}`)).body,
+      openDealMeetings: (await api("get", `/deals/${d.id}/meetings`)).body.data,
+    });
+    expect(contact.openDealMeetings).toHaveLength(1);
+    const lone = await newContact({ email: "lone@x.com" });
+    expect((await api("get", `/contacts/${lone.id}/related`)).body).toEqual({ company: null, openDealMeetings: [] });
+
+    // Tasks by company: on its deals and on its contacts (even with no deal), nothing else.
+    const contactOnly = await seedTask(null, c.id);
+    const elsewhere = await seedTask(null, lone.id);
+    const tasks = (await api("get", `/tasks?companyId=${company.id}&status=open`)).body.data.map((t: { id: string }) => t.id);
+    expect(tasks).toContain(contactOnly);
+    expect(tasks).not.toContain(elsewhere);
+    const dealTasks = (await api("get", `/deals/${d.id}/tasks`)).body.data.filter((t: { status: string }) => t.status === "open");
+    expect(dealTasks.length).toBeGreaterThan(0);
+    for (const t of dealTasks) expect(tasks).toContain(t.id);
+  });
+
+  it("GET /deals/board-summary: every stage in order, open deals only, 400 on a bad filter", async () => {
+    const res = await api("get", "/deals/board-summary");
+    expect(res.status).toBe(200);
+    expect(res.body.stages.map((s: { stage: string }) => s.stage)[0]).toBe("new");
+    expect(res.body.stages).toHaveLength(15);
+    const open = await row(`select count(*)::int n, coalesce(sum(amount), 0)::float8 a from crm.deals where workspace_id = $1 and outcome = 'open'`, [w1]);
+    expect({ count: res.body.count, amount: res.body.amount }).toEqual({ count: open.n, amount: open.a });
+    expect((await api("get", "/deals/board-summary?ownerId=nobody")).status).toBe(400);
+  });
+
   it("lifecycle only moves forward automatically; only an admin can move it back, with a note", async () => {
     const c = await newContact({ email: "life@x.com" });
     expect(c.lifecycleStage).toBe("prospect");

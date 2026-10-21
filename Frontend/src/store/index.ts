@@ -23,6 +23,8 @@ export {
   useCompanyDetail,
   useIndustries,
   useDeals,
+  useDealBoardSummary,
+  useDealColumn,
   useDeal,
   useDealDetail,
   useCrmMutation,

@@ -53,12 +53,12 @@ if (guard) {
 }
 const dbUrl = new URL(LOAD_DB_URL!);
 
-const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv", "mixed", "reads", "lists"];
+const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv", "mixed", "reads", "lists", "board"];
 /** `--only reads`: the slowest reads of the baseline (group: name, as in the report). */
 const SLOW_READS = new Set([
-  "Pages: Company page (4 calls + tasks of 10 open deals)",
-  "Pages: Contact page (11 calls)",
-  "Pages: Deal page (10 calls)",
+  "Pages: Company page, old (2 rounds: tasks of 10 open deals)",
+  "Pages: Contact page, old (2 rounds, 11 calls)",
+  "Pages: Deal page, old (2 rounds, 10 calls)",
   "Companies list: last page (offset 14950)",
   "Contacts list: last page (offset 14950)",
   "Deals list: last page (offset 7950)",
@@ -80,6 +80,8 @@ const READ_AREAS: Record<string, (group: string, name: string) => boolean> = {
   reads: (group, name) => SLOW_READS.has(`${group}: ${name}`),
   // Every sort key, the default order and the last page of the three lists, and the company page.
   lists: (group, name) => (/^(Contacts|Companies|Deals) list$/.test(group) && /^(default|sort=|last page)/.test(name)) || name.startsWith("Company page"),
+  // The deals board (old and new) and the record pages (old rounds and one round).
+  board: (group) => group === "Board" || group === "Pages",
 };
 
 // --- HTTP client ---------------------------------------------------------------------------
@@ -190,6 +192,10 @@ async function bench(group: string, name: string, fn: (i: number) => Promise<Rep
   return row;
 }
 const one = (path: string, who: Who) => async () => [await get(path, who)];
+const STAGE_COUNT = 15; // pipeline stages (PIPELINE_STAGES)
+const BOARD_COLUMN = 20;
+/** The deals board as the app loads it: one request, every stage's count, amount and first deals. */
+const BOARD_PATH = `/deals/board-summary?perStage=${BOARD_COLUMN}`;
 
 // --- Brain payloads ------------------------------------------------------------------------
 const TRANSCRIPT = "AI: Hi, is now a good time?\nProspect: Sure, a couple of minutes.\n".repeat(25);
@@ -392,7 +398,7 @@ async function main() {
   // --- Lists, as a salesperson in workspace A ---
   const list = (group: string, name: string, path: string, who: Who = sam) => bench(group, name, one(path, who));
   const contactN = (i: number) => 1 + ((i * 37) % sA.openDeals);
-  if (want("reads") || want("lists")) {
+  if (want("reads") || want("lists") || want("board")) {
     log("Lists…");
     await list("App shell", "GET /me", "/me");
     await list("App shell", "GET /workspaces", "/workspaces");
@@ -463,16 +469,16 @@ async function main() {
     await list("Admin", "GET /workspaces/:id/members", `/workspaces/${A}/members`, adm);
     await list("Admin", "GET /workspaces/:id/brain-keys", `/workspaces/${A}/brain-keys`, adm);
 
-    // --- Record pages: the calls each page makes (first the record, then the rest in parallel) ---
+    // --- Record pages and the deals board, as the frontend loads them ---
+    // "old" = the frontend before step 7 (some calls wait for the record); "1 round" = now
+    // (needs the /related routes and /tasks?companyId: on older code those rows show 404s).
     log("Pages…");
-    await bench("Pages", "Contact page (11 calls)", async (i) => {
+    const coOf = (n: number) => uid("A", "co", ((n - 1) % sA.companiesWithContacts) + 1);
+    await bench("Pages", "Contact page, old (2 rounds, 11 calls)", async (i) => {
       const n = contactN(i);
       const id = uid("A", "ct", n);
-      const first = await get(`/contacts/${id}`, sam);
-      const companyId = uid("A", "co", ((n - 1) % sA.companiesWithContacts) + 1);
-      const rest = await Promise.all([
-        get(`/companies/${companyId}`, sam),
-        get(`/deals/${uid("A", "dl", n)}/meetings`, sam),
+      const [first, ...rest] = await Promise.all([
+        get(`/contacts/${id}`, sam),
         get(`/contacts/${id}/deals?limit=50`, sam),
         get(`/contacts/${id}/calls`, sam),
         get(`/contacts/${id}/email-activities`, sam),
@@ -481,33 +487,62 @@ async function main() {
         get(`/contacts/${id}/contactability`, sam),
         get(`/tasks?contactId=${id}&status=open&limit=20`, sam),
       ]);
-      return [first, ...rest];
+      // Waited for the contact: its company card and its open deal's meetings.
+      const after = await Promise.all([get(`/companies/${coOf(n)}`, sam), get(`/deals/${uid("A", "dl", n)}/meetings`, sam)]);
+      return [first!, ...rest, ...after];
     });
-    await bench("Pages", "Deal page (10 calls)", async (i) => {
+    await bench("Pages", "Contact page, 1 round (9 calls)", async (i) => {
       const n = contactN(i);
-      const id = uid("A", "dl", n);
-      const first = await get(`/deals/${id}`, sam);
-      const rest = await Promise.all([
-        get(`/deals/${id}/tasks?limit=200`, sam),
-        get(`/deals/${id}/meetings`, sam),
-        get(`/deals/${id}/proposals`, sam),
-        get(`/deals/${id}/runs`, sam),
-        get(`/scheduled-actions?dealId=${id}&limit=500`, sam),
-        get(`/deals/${id}/timeline?limit=100`, sam),
-        get(`/contacts/${uid("A", "ct", n)}`, sam),
-        get(`/contacts/${uid("A", "ct", n)}/notes`, sam),
-        get(`/companies/${uid("A", "co", ((n - 1) % sA.companiesWithContacts) + 1)}`, sam),
+      const id = uid("A", "ct", n);
+      return Promise.all([
+        get(`/contacts/${id}`, sam),
+        get(`/contacts/${id}/related`, sam),
+        get(`/contacts/${id}/deals?limit=50`, sam),
+        get(`/contacts/${id}/calls`, sam),
+        get(`/contacts/${id}/email-activities`, sam),
+        get(`/contacts/${id}/timeline?limit=100`, sam),
+        get(`/contacts/${id}/notes`, sam),
+        get(`/contacts/${id}/contactability`, sam),
+        get(`/tasks?contactId=${id}&status=open&limit=20`, sam),
       ]);
-      return [first, ...rest];
     });
-    await bench("Pages", "Company page (4 calls + tasks of 10 open deals)", async (i) => {
+    const dealCalls = (id: string) => [
+      get(`/deals/${id}`, sam),
+      get(`/deals/${id}/tasks?limit=200`, sam),
+      get(`/deals/${id}/meetings`, sam),
+      get(`/deals/${id}/proposals`, sam),
+      get(`/deals/${id}/runs`, sam),
+      get(`/scheduled-actions?dealId=${id}&limit=500`, sam),
+      get(`/deals/${id}/timeline?limit=100`, sam),
+    ];
+    await bench("Pages", "Deal page, old (2 rounds, 10 calls)", async (i) => {
+      const n = contactN(i);
+      const first = await Promise.all(dealCalls(uid("A", "dl", n)));
+      // Waited for the deal: its contact, the contact's notes, its company.
+      const after = await Promise.all([get(`/contacts/${uid("A", "ct", n)}`, sam), get(`/contacts/${uid("A", "ct", n)}/notes`, sam), get(`/companies/${coOf(n)}`, sam)]);
+      return [...first, ...after];
+    });
+    await bench("Pages", "Deal page, 1 round (8 calls)", async (i) => {
+      const id = uid("A", "dl", contactN(i));
+      return Promise.all([...dealCalls(id), get(`/deals/${id}/related`, sam)]);
+    });
+    const companyCalls = (id: string) => [get(`/companies/${id}`, sam), get(`/companies/${id}/contacts?limit=200`, sam), get(`/companies/${id}/deals?limit=200`, sam), get(`/companies/${id}/timeline?limit=100`, sam)];
+    await bench("Pages", "Company page, old (2 rounds: tasks of 10 open deals)", async (i) => {
       const id = uid("A", "co", 1 + ((i * 53) % sA.companiesWithContacts));
-      const first = await get(`/companies/${id}`, sam);
-      const [contacts, deals, timeline] = await Promise.all([get(`/companies/${id}/contacts?limit=200`, sam), get(`/companies/${id}/deals?limit=200`, sam), get(`/companies/${id}/timeline?limit=100`, sam)]);
-      const openDeals = ((deals.json as { data?: { id: string; outcome: string }[] }).data ?? []).filter((d) => d.outcome === "open").slice(0, 10);
+      const first = await Promise.all(companyCalls(id));
+      const openDeals = ((first[2]!.json as { data?: { id: string; outcome: string }[] }).data ?? []).filter((d) => d.outcome === "open").slice(0, 10);
       const tasks = await Promise.all(openDeals.map((d) => get(`/deals/${d.id}/tasks?limit=200`, sam)));
-      return [first, contacts, deals, timeline, ...tasks];
+      return [...first, ...tasks];
     });
+    await bench("Pages", "Company page, 1 round (5 calls)", async (i) => {
+      const id = uid("A", "co", 1 + ((i * 53) % sA.companiesWithContacts));
+      return Promise.all([...companyCalls(id), get(`/tasks?companyId=${id}&status=open&limit=200`, sam)]);
+    });
+
+    log("Board…");
+    await bench("Board", "old: one request, first 500 open deals", one("/deals?outcome=open&limit=500", sam));
+    await bench("Board", `one request: ${STAGE_COUNT} stage totals + first ${BOARD_COLUMN} per stage`, one(BOARD_PATH, sam));
+    await bench("Board", "load more: next 20 of the biggest column", one(`/deals?outcome=open&stage=new&limit=${BOARD_COLUMN}&offset=${BOARD_COLUMN}`, sam));
   }
 
   // --- Brain reads ---
@@ -577,19 +612,25 @@ async function main() {
     let userErrors = 0;
     let firstUserError: string | undefined;
     let browsing = true;
-    const userRoutes = (i: number) => {
+    // The board as the app loads it: the one-request summary when the API has it, else the old 500-deal request.
+    const newBoard = (await get(BOARD_PATH, sam)).status === 200;
+    log(`Mixed load board: ${newBoard ? `one request, first ${BOARD_COLUMN} per stage` : "old, first 500 open deals"}.`);
+    const board = [newBoard ? BOARD_PATH : `/deals?outcome=open&limit=500`];
+    // One step = one screen: its requests at once.
+    const userSteps = (i: number) => {
       const n = contactN(i);
-      return [`/contacts`, `/deals?outcome=open&limit=500`, `/contacts/${uid("A", "ct", n)}`, `/contacts/${uid("A", "ct", n)}/timeline?limit=100`, `/dashboard/summary`, `/tasks?status=open`];
+      return [[`/contacts`], board, [`/contacts/${uid("A", "ct", n)}`, `/contacts/${uid("A", "ct", n)}/timeline?limit=100`], [`/dashboard/summary`], [`/tasks?status=open`]];
     };
     const users = Array.from({ length: 10 }, async (_, u) => {
       for (let i = 0; browsing; i++) {
-        for (const path of userRoutes(u * 100 + i)) {
+        for (const step of userSteps(u * 100 + i)) {
           if (!browsing) break;
-          const r = await get(path, sam);
-          userTimes.push(r.ms);
-          if (r.status !== 200) {
-            userErrors++;
-            firstUserError ??= `${r.status} ${JSON.stringify(r.json).slice(0, 200)}`;
+          for (const r of await Promise.all(step.map((path) => get(path, sam)))) {
+            userTimes.push(r.ms);
+            if (r.status !== 200) {
+              userErrors++;
+              firstUserError ??= `${r.status} ${JSON.stringify(r.json).slice(0, 200)}`;
+            }
           }
         }
       }
@@ -809,7 +850,7 @@ function section(r: RunResult) {
     lines.push(
       `### Mixed load`,
       ``,
-      `10 users browsing workspace A (contacts list, deals board, contact, timeline, dashboard, tasks) for ${MIXED_MS / 1000} s while contact batches of 500 run 3 at a time, round after round.`,
+      `10 users browsing workspace A (contacts list, deals board as the app loads it, contact + timeline, dashboard, tasks; each screen's requests at once) for ${MIXED_MS / 1000} s while contact batches of 500 run 3 at a time, round after round.`,
       ``,
       `| User requests | p50 | p95 | max | Errors | Brain batches (3 at once) | |`,
       `|---:|---:|---:|---:|---:|---|---|`,

@@ -20,6 +20,7 @@ tasksRouter.get(
         ownerId: z.string().uuid().optional(),
         dealId: z.string().uuid().optional(),
         contactId: z.string().uuid().optional(),
+        companyId: z.string().uuid().optional(),
         status: z.enum(TASK_STATUSES).optional(),
         type: z.enum(TASK_TYPES).optional(),
         overdueOnly: flag.optional(),
