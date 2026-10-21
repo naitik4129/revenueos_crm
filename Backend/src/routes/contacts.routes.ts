@@ -140,6 +140,25 @@ contactsRouter.get(
   }),
 );
 
+// --- Bulk ----------------------------------------------------------------------
+
+const bulkIds = { ids: z.array(z.string().uuid()).min(1).max(500, "At most 500 contacts per request (one page).") };
+const bulkSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("owner"), ...bulkIds, ownerId: z.string().uuid().nullable() }),
+  z.object({ action: z.literal("lifecycle"), ...bulkIds, stage: z.enum(LIFECYCLE_STAGES), note: z.string().optional() }),
+  z.object({ action: z.literal("dnc"), ...bulkIds, reason: z.string().min(1), lift: z.boolean().optional() }),
+  z.object({ action: z.literal("delete"), ...bulkIds, confirm: z.number().int(), force: z.boolean().optional() }),
+]);
+
+/** One action on up to 500 contacts, in one transaction; per id `ok` or `skipped` + reason. */
+contactsRouter.post(
+  "/bulk",
+  asyncHandler(async (req, res) => {
+    const { ids, ...input } = parseBody(bulkSchema, req.body);
+    res.json(await withTransaction((db) => contacts.runContactBulk(db, req.actor!, req.workspaceId!, ids, input)));
+  }),
+);
+
 // --- Notes ---------------------------------------------------------------------
 
 contactsRouter.get(

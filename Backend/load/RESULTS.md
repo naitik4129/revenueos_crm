@@ -7583,3 +7583,34 @@ Planning:
 Planning Time: 0.502 ms
 Execution Time: 0.125 ms
 ```
+
+## Quick run 2026-10-21 06:29 UTC: `--only bulk`
+
+- Postgres 17.11 (local, native), Node v24.18.0, Windows. App pool `max: 10` (`DB_POOL_MAX`, `src/db.ts`), connection timeout 5 s (then 503), statement timeout 15 s.
+- **+15 ms per round trip** to the database and to Supabase Auth (TCP proxy, `load/latency.ts`).
+- Seed: A 15k / B 5k / C 5k contacts. All workspaces: companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334.
+- Requests as a salesperson member of workspace A (admin for Admin rows); 20 timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).
+- Targets: p95 ≤ 1000 ms per request or page; brain batch of 500 ≤ 5 s.
+
+**Summary:** .
+
+### Bulk contact actions (POST /contacts/bulk, 500 ids each, workspace A)
+
+| Action | Time | SQL | Result | |
+|---|---:|---:|---|---|
+| owner (salesperson) | 432 ms | 10 | ok 422, skipped 78 | ✅ |
+| lifecycle forward (salesperson) | 347 ms | 8 | ok 257, skipped 243 | ✅ |
+| lifecycle back (admin, note) | 367 ms | 8 | ok 500, skipped 0 | ✅ |
+| DNC (salesperson) | 483 ms | 9 | ok 500, skipped 0 | ✅ |
+| lift DNC (admin) | 382 ms | 8 | ok 500, skipped 0 | ✅ |
+| delete with force (admin) | 1.6 s | 9 | ok 500, skipped 0 | ✅ |
+
+### Row counts after the run
+
+companies 25,000, contacts 24,500, contact_channels 49,000, external_refs 49,500, deals 13,069, calls 32,670, email_activities 40,828, timeline_events 67,507, tasks 16,338, notes 8,170, meetings 2,445, proposals 1,220, workflow_runs 3,269, scheduled_actions 3,269
+
+### EXPLAIN (ANALYZE, BUFFERS) for anything over 300 ms
+
+Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
+
+Nothing over the threshold.

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Actor } from "../authMiddleware.js";
 import { orderBySql, pageOf, type Queryable } from "../dto.js";
-import { ConflictError, DoNotContactError, ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } from "../errors.js";
+import { AppError, ConflictError, DoNotContactError, ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } from "../errors.js";
 import {
   CONTACT_CHANNEL_STATUS,
   LEAD_SOURCES,
@@ -15,7 +15,8 @@ import { normalizeEmail } from "../domain/email.js";
 import { normalizePhoneE164 } from "../domain/phone.js";
 import { userNameSql } from "./profiles.service.js";
 import { actorEvent, addTimelineEvent, insertTimelineRows, toEventActor, type EventActor } from "./timeline.service.js";
-import { normalizeDomain, writeDeletedAudit } from "./companies.service.js";
+import { normalizeDomain } from "./companies.service.js";
+import { recordAdminAudit } from "./admin-audit.service.js";
 import { createDeal } from "./deals.service.js";
 
 export interface ContactRow {
@@ -314,8 +315,7 @@ export async function updateContact(db: Queryable, actor: Actor, workspaceId: st
           set first_name = $2, last_name = $3, job_title = $4, email = $5, phone = $6, phone_e164 = $7,
               linkedin_url = $8, country = $9, location = $10, source = $11,
               company_id = case when $12 then $13::uuid else company_id end,
-              owner_id = case when $14 then $15::uuid else owner_id end,
-              -- An owner change alone is not activity; any other field that really changes is.
+              -- Any field that really changes is activity (an owner change is not: assignContactOwners).
               -- (Right-hand column names are the row's values before this update.)
               last_activity_at = case
                 when (first_name, last_name, job_title, email, phone, linkedin_url, country, location, source, company_id)
@@ -336,24 +336,12 @@ export async function updateContact(db: Queryable, actor: Actor, workspaceId: st
         merged.source,
         patch.companyId !== undefined,
         patch.companyId ?? null,
-        patch.ownerId !== undefined,
-        patch.ownerId ?? null,
       ],
     )
     .catch(duplicateConflict);
 
-  if (patch.ownerId !== undefined && patch.ownerId !== current.owner_id) {
-    const owner = await db.query<{ name: string | null }>(`select ${userNameSql("$1::uuid")} as name`, [patch.ownerId]);
-    await addTimelineEvent(db, { contactId: id, kind: "system", title: "Contact Assigned", detail: `Owner: ${owner.rows[0]?.name ?? "Unassigned"}`, ...actorEvent(actor) });
-  }
+  if (patch.ownerId !== undefined) single(await assignContactOwners(db, actor, workspaceId, [id], patch.ownerId));
   return getContactOr404(db, workspaceId, id);
-}
-
-/** Permanent delete with an audit snapshot; deals, activity and timeline go with it. */
-export async function deleteContact(db: Queryable, actor: Actor, workspaceId: string, id: string) {
-  const contact = await getContactOr404(db, workspaceId, id);
-  await writeDeletedAudit(db, actor, workspaceId, "contact", id, contactToDto(contact));
-  await db.query(`delete from crm.contacts where id = $1`, [id]);
 }
 
 // --- Notes ------------------------------------------------------------------------
@@ -384,49 +372,6 @@ export async function listNotes(db: Queryable, workspaceId: string, contactId: s
     [contactId],
   );
   return result.rows.map((r) => ({ id: r.id, dealId: r.deal_id ?? undefined, author: r.author ?? "", body: r.body, at: r.created_at.toISOString() }));
-}
-
-// --- Consent: DNC -------------------------------------------------------------------
-
-/**
- * DNC: the 009 trigger writes dnc_events, stops automation on the contact's deals and cancels
- * their runs/actions; deals stay open. Open tasks (the contact's and its deals') are cancelled
- * here so no next action survives. actor: a user, or the brain for an AI-call DNC.
- */
-export async function markDnc(db: Queryable, actor: Actor | EventActor, workspaceId: string, contactId: string, input: { reason: string }) {
-  const reason = input.reason.trim();
-  if (!reason) throw new ValidationError("A reason is required to mark Do Not Contact.");
-  const current = await getContactOr404(db, workspaceId, contactId);
-  if (current.status === "merged") throw new ConflictError("This contact was merged into another contact.");
-  if (current.status === "do_not_contact") return current;
-
-  await db.query(
-    `update crm.contacts
-        set status = 'do_not_contact', dnc_reason = $2, dnc_by = $3, dnc_by_name = $4, dnc_at = now(), last_activity_at = now()
-      where id = $1`,
-    [contactId, reason, "fullName" in actor ? actor.id : null, "fullName" in actor ? actor.fullName : actor.actorName],
-  );
-  await db.query(
-    `update crm.tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = 'Contact marked Do Not Contact'
-      where status = 'open' and (contact_id = $1 or deal_id in (select id from crm.deals where contact_id = $1))`,
-    [contactId],
-  );
-  await addTimelineEvent(db, { contactId, kind: "system", title: "Do Not Contact", detail: reason, ...toEventActor(actor) });
-  return getContactOr404(db, workspaceId, contactId);
-}
-
-/** Lifting DNC is deliberate and reasoned; automation is not resumed (deals stay stopped until a rep restarts them). */
-export async function reactivateFromDnc(db: Queryable, actor: Actor, workspaceId: string, contactId: string, reason: string) {
-  if (!reason.trim()) throw new ValidationError("A reason is required to reactivate a Do Not Contact contact.");
-  const current = await getContactOr404(db, workspaceId, contactId);
-  if (current.status !== "do_not_contact") throw new ConflictError("Contact is not currently Do Not Contact.");
-
-  await db.query(
-    `update crm.contacts set status = 'active', dnc_reason = $2, dnc_by = $3, dnc_by_name = $4, last_activity_at = now() where id = $1`,
-    [contactId, reason.trim(), actor.id, actor.fullName],
-  );
-  await addTimelineEvent(db, { contactId, kind: "system", title: "Do Not Contact Lifted", detail: reason.trim(), ...actorEvent(actor) });
-  return getContactOr404(db, workspaceId, contactId);
 }
 
 // --- Contactability -------------------------------------------------------------------
@@ -505,27 +450,240 @@ export async function advanceLifecycle(db: Queryable, contactId: string, stage: 
   return true;
 }
 
-/**
- * Manual change. Forward: any CRM user. Back: admins only, with a note (kept on the timeline).
- */
-export async function setLifecycleStage(db: Queryable, actor: Actor, workspaceId: string, contactId: string, input: { stage: LifecycleStage; note?: string }) {
-  const current = await getContactOr404(db, workspaceId, contactId);
-  if (current.lifecycle_stage === input.stage) return current;
-  const backwards = lifecycleIndex(input.stage) < lifecycleIndex(current.lifecycle_stage);
-  const note = input.note?.trim();
-  if (backwards) {
-    if (actor.role !== "admin") throw new ForbiddenError("Only an admin can move a lifecycle stage back.");
-    if (!note) throw new ValidationError("A note is required to move a lifecycle stage back.", { field: "note" });
-  }
-  await db.query(`update crm.contacts set lifecycle_stage = $2, lifecycle_changed_at = now() where id = $1`, [contactId, input.stage]);
-  await addTimelineEvent(db, {
-    contactId,
-    kind: "lifecycle",
-    title: `Lifecycle: ${current.lifecycle_stage} -> ${input.stage}${backwards ? " (moved back)" : ""}`,
-    detail: note ?? null,
-    ...actorEvent(actor),
+// --- Actions on many contacts -----------------------------------------------------------
+// Each action runs on a list of ids, set-based: lock the rows, decide every id in code, write in
+// a few statements. The single-contact actions are these with one id (single() below), so a bulk
+// request and a click on one record follow exactly the same rules.
+
+/** Per id: done; already so (a single action treats it as done); or why not. */
+export type ContactActionResult =
+  | { id: string; outcome: "ok" }
+  | { id: string; outcome: "unchanged"; reason: string }
+  | { id: string; outcome: "error"; error: AppError };
+
+interface LockedContact {
+  id: string;
+  status: ContactStatus;
+  owner_id: string | null;
+  lifecycle_stage: LifecycleStage;
+  has_open_deal: boolean;
+}
+type Decision = "ok" | { unchanged: string } | AppError;
+
+/** Locks the workspace's contacts among `ids` (in id order, so two bulk requests never deadlock) and decides each id. */
+async function decideEach(db: Queryable, workspaceId: string, ids: string[], decide: (c: LockedContact) => Decision) {
+  const locked = await db.query<LockedContact>(
+    `select c.id, c.status, c.owner_id, c.lifecycle_stage,
+            exists (select 1 from crm.deals d where d.contact_id = c.id and d.outcome = 'open') as has_open_deal
+       from crm.contacts c where c.workspace_id = $1 and c.id = any($2::uuid[]) order by c.id for update of c`,
+    [workspaceId, ids],
+  );
+  const byId = new Map(locked.rows.map((r) => [r.id, r]));
+  const results = ids.map((id): ContactActionResult => {
+    const contact = byId.get(id);
+    if (!contact) return { id, outcome: "error", error: new NotFoundError("Contact") };
+    const d = decide(contact);
+    return d === "ok" ? { id, outcome: "ok" } : d instanceof AppError ? { id, outcome: "error", error: d } : { id, outcome: "unchanged", reason: d.unchanged };
   });
+  return { results, ok: results.filter((r) => r.outcome === "ok").map((r) => byId.get(r.id)!) };
+}
+
+/** The single-contact form of an action: its error is thrown; done or unchanged returns. */
+function single(results: ContactActionResult[]) {
+  const r = results[0]!;
+  if (r.outcome === "error") throw r.error;
+}
+
+const MERGED = () => new ConflictError("This contact was merged into another contact.");
+
+/** Owner change: not activity (last_activity_at stays), a timeline entry per contact. */
+export async function assignContactOwners(db: Queryable, actor: Actor, workspaceId: string, ids: string[], ownerId: string | null) {
+  const { results, ok } = await decideEach(db, workspaceId, ids, (c) =>
+    c.status === "merged" ? MERGED() : c.owner_id === ownerId ? { unchanged: "Already has this owner." } : "ok",
+  );
+  if (ok.length) {
+    await db.query(`update crm.contacts set owner_id = $2 where id = any($1::uuid[])`, [ok.map((c) => c.id), ownerId]);
+    const owner = await db.query<{ name: string | null }>(`select ${userNameSql("$1::uuid")} as name`, [ownerId]);
+    const detail = `Owner: ${owner.rows[0]?.name ?? "Unassigned"}`;
+    await insertTimelineRows(db, workspaceId, actorEvent(actor), ok.map((c) => ({ contact_id: c.id, event_kind: "system", title: "Contact Assigned", detail })));
+  }
+  return results;
+}
+
+/**
+ * DNC: the 009 trigger writes dnc_events, stops automation on the contacts' deals and cancels
+ * their runs/actions; deals stay open. Open tasks (the contacts' and their deals') are cancelled
+ * here so no next action survives. actor: a user, or the brain for an AI-call DNC.
+ */
+export async function markDncMany(db: Queryable, actor: Actor | EventActor, workspaceId: string, ids: string[], reasonInput: string) {
+  const reason = reasonInput.trim();
+  if (!reason) throw new ValidationError("A reason is required to mark Do Not Contact.");
+  const { results, ok } = await decideEach(db, workspaceId, ids, (c) =>
+    c.status === "merged" ? MERGED() : c.status === "do_not_contact" ? { unchanged: "Already Do Not Contact." } : "ok",
+  );
+  if (ok.length) {
+    const okIds = ok.map((c) => c.id);
+    const user = "fullName" in actor ? actor : null;
+    await db.query(
+      `update crm.contacts
+          set status = 'do_not_contact', dnc_reason = $2, dnc_by = $3, dnc_by_name = $4, dnc_at = now(), last_activity_at = now()
+        where id = any($1::uuid[])`,
+      [okIds, reason, user?.id ?? null, user?.fullName ?? (actor as EventActor).actorName],
+    );
+    await db.query(
+      `update crm.tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = 'Contact marked Do Not Contact'
+        where status = 'open' and (contact_id = any($1::uuid[]) or deal_id in (select id from crm.deals where contact_id = any($1::uuid[])))`,
+      [okIds],
+    );
+    await insertTimelineRows(db, workspaceId, toEventActor(actor), okIds.map((id) => ({ contact_id: id, event_kind: "system", title: "Do Not Contact", detail: reason })));
+  }
+  return results;
+}
+
+export async function markDnc(db: Queryable, actor: Actor | EventActor, workspaceId: string, contactId: string, input: { reason: string }) {
+  single(await markDncMany(db, actor, workspaceId, [contactId], input.reason));
   return getContactOr404(db, workspaceId, contactId);
+}
+
+/** Lifting DNC is deliberate and reasoned; automation is not resumed (deals stay stopped until a rep restarts them). */
+export async function reactivateFromDncMany(db: Queryable, actor: Actor, workspaceId: string, ids: string[], reasonInput: string) {
+  const reason = reasonInput.trim();
+  if (!reason) throw new ValidationError("A reason is required to reactivate a Do Not Contact contact.");
+  const { results, ok } = await decideEach(db, workspaceId, ids, (c) =>
+    c.status !== "do_not_contact" ? new ConflictError("Contact is not currently Do Not Contact.") : "ok",
+  );
+  if (ok.length) {
+    await db.query(
+      `update crm.contacts set status = 'active', dnc_reason = $2, dnc_by = $3, dnc_by_name = $4, last_activity_at = now() where id = any($1::uuid[])`,
+      [ok.map((c) => c.id), reason, actor.id, actor.fullName],
+    );
+    await insertTimelineRows(db, workspaceId, actorEvent(actor), ok.map((c) => ({ contact_id: c.id, event_kind: "system", title: "Do Not Contact Lifted", detail: reason })));
+  }
+  return results;
+}
+
+export async function reactivateFromDnc(db: Queryable, actor: Actor, workspaceId: string, contactId: string, reason: string) {
+  single(await reactivateFromDncMany(db, actor, workspaceId, [contactId], reason));
+  return getContactOr404(db, workspaceId, contactId);
+}
+
+/** Manual change. Forward: any CRM user. Back: admins only, with a note (kept on the timeline). */
+export async function setLifecycleStageMany(db: Queryable, actor: Actor, workspaceId: string, ids: string[], input: { stage: LifecycleStage; note?: string }) {
+  const note = input.note?.trim();
+  const isBack = (c: LockedContact) => lifecycleIndex(input.stage) < lifecycleIndex(c.lifecycle_stage);
+  const { results, ok } = await decideEach(db, workspaceId, ids, (c) => {
+    if (c.lifecycle_stage === input.stage) return { unchanged: "Already at this stage." };
+    if (!isBack(c)) return "ok";
+    if (actor.role !== "admin") return new ForbiddenError("Only an admin can move a lifecycle stage back.");
+    if (!note) return new ValidationError("A note is required to move a lifecycle stage back.", { field: "note" });
+    return "ok";
+  });
+  if (ok.length) {
+    await db.query(`update crm.contacts set lifecycle_stage = $2, lifecycle_changed_at = now() where id = any($1::uuid[])`, [ok.map((c) => c.id), input.stage]);
+    await insertTimelineRows(
+      db,
+      workspaceId,
+      actorEvent(actor),
+      ok.map((c) => ({
+        contact_id: c.id,
+        event_kind: "lifecycle",
+        title: `Lifecycle: ${c.lifecycle_stage} -> ${input.stage}${isBack(c) ? " (moved back)" : ""}`,
+        detail: note ?? null,
+      })),
+    );
+  }
+  return results;
+}
+
+export async function setLifecycleStage(db: Queryable, actor: Actor, workspaceId: string, contactId: string, input: { stage: LifecycleStage; note?: string }) {
+  single(await setLifecycleStageMany(db, actor, workspaceId, [contactId], input));
+  return getContactOr404(db, workspaceId, contactId);
+}
+
+/**
+ * Permanent delete with an audit snapshot per contact; deals, activity and timeline go with it.
+ * A contact with an open deal is skipped unless `force` (the single delete always forces).
+ */
+export async function deleteContactsMany(db: Queryable, actor: Actor, workspaceId: string, ids: string[], opts: { force: boolean }) {
+  const { results, ok } = await decideEach(db, workspaceId, ids, (c) =>
+    c.has_open_deal && !opts.force ? new ConflictError("Has an open deal (delete with force to remove it anyway).") : "ok",
+  );
+  if (ok.length) {
+    const okIds = ok.map((c) => c.id);
+    const rows = await db.query<ContactRow>(`${CONTACT_SELECT} where c.id = any($1::uuid[])`, [okIds]);
+    await db.query(
+      `insert into crm.deleted_records_audit (workspace_id, entity_type, entity_id, snapshot, deleted_by, deleted_by_name)
+       select $1, 'contact', x.id, x.snapshot, $2, $3 from jsonb_to_recordset($4::jsonb) as x(id uuid, snapshot jsonb)`,
+      [workspaceId, actor.id, actor.fullName, JSON.stringify(rows.rows.map((r) => ({ id: r.id, snapshot: contactToDto(r) })))],
+    );
+    await db.query(`delete from crm.contacts where id = any($1::uuid[])`, [okIds]);
+  }
+  return results;
+}
+
+export async function deleteContact(db: Queryable, actor: Actor, workspaceId: string, id: string) {
+  single(await deleteContactsMany(db, actor, workspaceId, [id], { force: true }));
+}
+
+export type ContactBulkInput =
+  | { action: "owner"; ownerId: string | null }
+  | { action: "lifecycle"; stage: LifecycleStage; note?: string }
+  | { action: "dnc"; reason: string; lift?: boolean }
+  | { action: "delete"; confirm: number; force?: boolean };
+
+/**
+ * POST /contacts/bulk: one action on up to 500 contacts (one page), in the caller's transaction.
+ * Request-level rules here (owner is an active member; delete and lifting DNC are admin-only;
+ * delete is confirmed by typing the count), per-contact rules in the actions above. One
+ * admin_audit_events row per request, besides each action's own records.
+ */
+export async function runContactBulk(db: Queryable, actor: Actor, workspaceId: string, idsInput: string[], input: ContactBulkInput) {
+  const ids = [...new Set(idsInput)];
+  const adminOnly = (what: string) => {
+    if (actor.role !== "admin") throw new ForbiddenError(`Only an admin can ${what}.`);
+  };
+  let results: ContactActionResult[];
+  switch (input.action) {
+    case "owner":
+      if (input.ownerId) {
+        const member = await db.query(
+          `select 1 from crm.workspace_members m join crm.profiles p on p.id = m.user_id
+            where m.workspace_id = $1 and m.user_id = $2 and p.is_active`,
+          [workspaceId, input.ownerId],
+        );
+        if (!member.rows[0]) throw new ValidationError("The owner must be an active member of this workspace.", { field: "ownerId" });
+      }
+      results = await assignContactOwners(db, actor, workspaceId, ids, input.ownerId);
+      break;
+    case "lifecycle":
+      results = await setLifecycleStageMany(db, actor, workspaceId, ids, input);
+      break;
+    case "dnc":
+      if (input.lift) adminOnly("lift Do Not Contact in bulk");
+      results = input.lift
+        ? await reactivateFromDncMany(db, actor, workspaceId, ids, input.reason)
+        : await markDncMany(db, actor, workspaceId, ids, input.reason);
+      break;
+    case "delete":
+      adminOnly("delete contacts in bulk");
+      if (input.confirm !== ids.length) throw new ValidationError(`Type ${ids.length} to confirm deleting ${ids.length} contacts.`, { field: "confirm" });
+      results = await deleteContactsMany(db, actor, workspaceId, ids, { force: input.force === true });
+      break;
+  }
+  const out = results.map((r) =>
+    r.outcome === "ok" ? { id: r.id, status: "ok" as const } : { id: r.id, status: "skipped" as const, reason: r.outcome === "error" ? r.error.message : r.reason },
+  );
+  const ok = out.filter((r) => r.status === "ok").length;
+  const { action, ...args } = input;
+  await recordAdminAudit(db, actor, `contacts.bulk.${action}`, "contact", null, {
+    workspaceId,
+    args,
+    count: ids.length,
+    ok,
+    skipped: ids.length - ok,
+    ids,
+  });
+  return { action, results: out, counts: { ok, skipped: ids.length - ok } };
 }
 
 // --- Merge -----------------------------------------------------------------------------------

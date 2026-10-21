@@ -342,6 +342,18 @@ export interface DealFilters extends Page {
   search?: string | undefined;
 }
 
+export type ContactBulkInput =
+  | { action: "owner"; ownerId: string | null }
+  | { action: "lifecycle"; stage: LifecycleStage; note?: string | undefined }
+  | { action: "dnc"; reason: string; lift?: boolean | undefined }
+  | { action: "delete"; confirm: number; force?: boolean | undefined };
+
+export interface ContactBulkResult {
+  action: ContactBulkInput["action"];
+  results: { id: string; status: "ok" | "skipped"; reason?: string }[];
+  counts: { ok: number; skipped: number };
+}
+
 /** The deals board's filters (it always shows open deals). */
 export type BoardFilters = Pick<DealFilters, "ownerId" | "missingNextAction" | "search">;
 
@@ -579,6 +591,9 @@ export const backend = {
       send<{ data: ImportContactsResult }>("POST", "/contacts/import", { rows }),
     notes: (id: string, signal?: AbortSignal) =>
       get<{ data: ContactNote[] }>(`/contacts/${id}/notes`, signal),
+    /** One action on up to 500 contacts (one page); per id ok, or skipped with the reason. */
+    bulk: (ids: string[], input: ContactBulkInput) =>
+      send<ContactBulkResult>("POST", "/contacts/bulk", { ids, ...input }),
     /** The contact page's company card and open-deal meetings, fetched with the contact. */
     related: (id: string, signal?: AbortSignal) =>
       get<{ company: Company | null; openDealMeetings: Meeting[] }>(

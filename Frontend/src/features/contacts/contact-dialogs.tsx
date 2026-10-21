@@ -68,7 +68,7 @@ export function ErrorNotice({ error }: { error: unknown }) {
   );
 }
 
-function Shell({
+export function Shell({
   open,
   onOpenChange,
   title,

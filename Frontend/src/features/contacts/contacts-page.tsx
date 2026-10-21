@@ -24,7 +24,6 @@ import { backend } from "@/lib/backend-client";
 import { downloadCsv } from "@/lib/csv";
 import { fmtDate } from "@/lib/format";
 import { label } from "@/lib/labels";
-import { useBulkAssignOwner } from "@/lib/use-bulk-assign";
 import { useStoredColumns, useStoredSort } from "@/lib/use-stored-columns";
 import { useContacts, useSession } from "@/store";
 import {
@@ -35,6 +34,8 @@ import {
   type LifecycleStage,
 } from "@/types";
 import { CompanyLink } from "@/features/companies/company-link";
+import { ContactBulkActions } from "./contact-bulk";
+import { useContactBulk } from "./use-contact-bulk";
 import { ImportContactsDialog } from "./import-contacts-dialog";
 import { countLabel } from "@/lib/format";
 
@@ -138,10 +139,6 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
   const [importOpen, setImportOpen] = useState(false);
   const [visible, setVisible] = useStoredColumns("contacts.columns", DEFAULT_COLUMNS);
   const [sort, setSort] = useStoredSort("contacts.sort", SORTS);
-  const assignOwner = useBulkAssignOwner(
-    (id, ownerId) => backend.contacts.update(id, { ownerId }),
-    "contact",
-  );
 
   // Any filter change starts again at the first page.
   useEffect(() => setOffset(0), [search, filters, sort]);
@@ -160,6 +157,11 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
   });
   const contacts = data?.data ?? [];
   const total = data?.total ?? 0;
+  // One request for the whole selection (POST /contacts/bulk), owner included.
+  const bulk = useContactBulk(
+    contacts.filter((c) => selected.includes(c.id)),
+    () => setSelected([]),
+  );
 
   const views = VIEWS.filter((v) => v.id !== "mine" || currentUser);
   const activeView =
@@ -228,6 +230,7 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
         }
       />
       <ImportContactsDialog open={importOpen} onOpenChange={setImportOpen} />
+      {bulk.summary}
 
       <div className="px-6 py-4">
         <Card className="overflow-hidden p-0">
@@ -236,11 +239,17 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
               <BulkBar
                 count={selected.length}
                 users={users}
-                assigning={assignOwner.isPending}
-                onAssign={(ownerId) => assignOwner.assign(selected, ownerId, () => setSelected([]))}
+                assigning={bulk.pending}
+                onAssign={(ownerId) => bulk.run({ action: "owner", ownerId })}
                 onExport={exportSelected}
                 onClear={() => setSelected([])}
-              />
+              >
+                <ContactBulkActions
+                  bulk={bulk}
+                  count={selected.length}
+                  isAdmin={currentUser?.role === "Admin"}
+                />
+              </BulkBar>
             ) : (
               <>
                 <SearchBox

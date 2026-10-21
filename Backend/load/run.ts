@@ -53,7 +53,7 @@ if (guard) {
 }
 const dbUrl = new URL(LOAD_DB_URL!);
 
-const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv", "mixed", "reads", "lists", "board"];
+const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv", "mixed", "reads", "lists", "board", "bulk"];
 /** `--only reads`: the slowest reads of the baseline (group: name, as in the report). */
 const SLOW_READS = new Set([
   "Pages: Company page, old (2 rounds: tasks of 10 open deals)",
@@ -588,6 +588,34 @@ async function main() {
     log(`CSV: ${(ms / 1000).toFixed(1)} s, ${statements.length} SQL, ${summary}`);
   }
 
+  // --- Bulk contact actions (POST /contacts/bulk), 500 ids each, workspace A, once each ---
+  const bulk: BulkRow[] = [];
+  if (want("bulk")) {
+    log("Bulk contact actions (500 each)…");
+    // Two sets of 500 active contacts: one for owner/lifecycle/DNC, one to delete (with open deals: force).
+    const pick = async (offset: number) =>
+      (await direct.query<{ id: string }>(`select id from crm.contacts where workspace_id = $1 and status = 'active' order by id limit 500 offset $2`, [A, offset])).rows.map((r) => r.id);
+    const [ids, toDelete] = [await pick(0), await pick(500)];
+    const samId = USERS[1]!.id;
+    const steps: [string, Who, object][] = [
+      ["owner (salesperson)", sam, { action: "owner", ids, ownerId: samId }],
+      ["lifecycle forward (salesperson)", sam, { action: "lifecycle", ids, stage: "engaged" }],
+      ["lifecycle back (admin, note)", adm, { action: "lifecycle", ids, stage: "prospect", note: "Load test" }],
+      ["DNC (salesperson)", sam, { action: "dnc", ids, reason: "Load test" }],
+      ["lift DNC (admin)", adm, { action: "dnc", ids, reason: "Load test", lift: true }],
+      ["delete with force (admin)", adm, { action: "delete", ids: toDelete, confirm: toDelete.length, force: true }],
+    ];
+    for (const [name, who, body] of steps) {
+      startTrace();
+      const r = await call("POST", "/contacts/bulk", who, body);
+      const statements = stopTrace().length;
+      const counts = (r.json as { counts?: { ok: number; skipped: number } }).counts;
+      const row = { name, ms: r.ms, statements, result: counts ? `ok ${counts.ok}, skipped ${counts.skipped}` : `HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 160)}` };
+      bulk.push(row);
+      log(`bulk ${name}: ${fu(r.ms)}, ${statements} SQL, ${row.result}`);
+    }
+  }
+
   // --- Brain batches: 27 one after another, then 3 at once during the mixed load, then handovers.
   // Quick mode (--only brain-…) runs the first QUICK_BATCHES of one route.
   const count = (full: number) => (FULL ? full : Math.min(full, QUICK_BATCHES));
@@ -703,7 +731,7 @@ async function main() {
   if (sb) explains.push(`### Brain batch with the most SQL: ${sb.route} (${sb.statements.length} SQL)\n\n${await explainTop(direct, sb.statements)}`);
 
   const after = await tableCounts(direct);
-  const result = { startedAt, version, seeded, after, csv: csv && { ms: csv.ms, statements: csv.statements.length, summary: csv.summary }, mixed, checks, explains };
+  const result = { startedAt, version, seeded, after, csv: csv && { ms: csv.ms, statements: csv.statements.length, summary: csv.summary }, mixed, bulk, checks, explains };
   if (FULL) writeFileSync(RESULTS_FILE, report(result));
   else appendFileSync(RESULTS_FILE, `\n${section(result)}`);
   log(`${FULL ? "Wrote" : "Appended to"} ${RESULTS_FILE}`);
@@ -769,6 +797,12 @@ interface MixedResult {
   firstError?: string;
   batchMs: number[];
 }
+interface BulkRow {
+  name: string;
+  ms: number;
+  statements: number;
+  result: string;
+}
 interface RunResult {
   startedAt: Date;
   version: string;
@@ -776,6 +810,7 @@ interface RunResult {
   after: Record<string, number>;
   csv: { ms: number; statements: number; summary: string } | null;
   mixed: MixedResult | null;
+  bulk: BulkRow[];
   checks: FeedCheck[];
   explains: string[];
 }
@@ -842,6 +877,16 @@ function section(r: RunResult) {
       ...batchRows.map(
         (b) => `| ${b.route} | ${b.batch} | ${(b.ms / 1000).toFixed(1)} s | ${b.statements ?? "not traced"} | ${b.counts} | ${b.fallbacks} | ${b.errors || b.fallbacks ? "❌" : ok(b.ms, BRAIN_TARGET_MS)} |`,
       ),
+      ``,
+    );
+  }
+  if (r.bulk.length) {
+    lines.push(
+      `### Bulk contact actions (POST /contacts/bulk, 500 ids each, workspace A)`,
+      ``,
+      `| Action | Time | SQL | Result | |`,
+      `|---|---:|---:|---|---|`,
+      ...r.bulk.map((b) => `| ${b.name} | ${fu(b.ms)} | ${b.statements} | ${b.result} | ${b.result.startsWith("HTTP") ? "❌" : ok(b.ms, BRAIN_TARGET_MS)} |`),
       ``,
     );
   }

@@ -154,6 +154,7 @@ export function BulkBar({
   onAssign,
   onExport,
   onClear,
+  children,
 }: {
   count: number;
   users: { id: string; name: string }[];
@@ -161,6 +162,8 @@ export function BulkBar({
   onAssign: (ownerId: string | null) => void;
   onExport: () => void;
   onClear: () => void;
+  /** More actions for this list (contacts: lifecycle, DNC, delete). */
+  children?: ReactNode;
 }) {
   return (
     <>
@@ -188,6 +191,7 @@ export function BulkBar({
       <Button size="sm" variant="outline" className="gap-1.5" onClick={onExport}>
         <Download className="size-4" /> Export CSV
       </Button>
+      {children}
       <Button size="sm" variant="ghost" className="ml-auto gap-1.5" onClick={onClear}>
         <X className="size-4" /> Clear selection
       </Button>

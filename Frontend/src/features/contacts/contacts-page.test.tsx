@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -12,6 +12,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const calls = vi.hoisted(() => ({
   list: [] as Record<string, unknown>[],
   update: vi.fn(async (id: string, input: unknown) => ({ id, ...(input as object) })),
+  // POST /contacts/bulk: every id ok unless listed in `skip`.
+  skip: {} as Record<string, string>,
+  bulk: vi.fn(async (ids: string[], input: { action: string }) => {
+    const results = ids.map((id) =>
+      calls.skip[id] ? { id, status: "skipped", reason: calls.skip[id] } : { id, status: "ok" },
+    );
+    const ok = results.filter((r) => r.status === "ok").length;
+    return { action: input.action, results, counts: { ok, skipped: ids.length - ok } };
+  }),
+  role: "Salesperson",
 }));
 
 const contact = (id: string, firstName: string) => ({
@@ -34,7 +44,7 @@ vi.mock("@/store", () => ({
   messageFromError: (error: unknown) => (error instanceof Error ? error.message : "Failed"),
   useSession: () => ({
     users: [{ id: "u-sam", name: "Sam" }],
-    currentUser: { id: "u-me", name: "Me", role: "Salesperson", initials: "ME" },
+    currentUser: { id: "u-me", name: "Me", role: calls.role, initials: "ME" },
   }),
   useContacts: (params: Record<string, unknown>) => {
     calls.list.push(params);
@@ -47,6 +57,8 @@ vi.mock("@/store", () => ({
   },
   useCrmMutation: (fn: (input: unknown) => Promise<unknown>) => ({
     isPending: false,
+    error: null,
+    reset: () => undefined,
     mutateAsync: fn,
     mutate: (input: unknown, opts?: { onSuccess?: (r: unknown) => void }) =>
       void fn(input).then((r) => opts?.onSuccess?.(r)),
@@ -54,7 +66,7 @@ vi.mock("@/store", () => ({
 }));
 
 vi.mock("@/lib/backend-client", () => ({
-  backend: { contacts: { update: calls.update } },
+  backend: { contacts: { update: calls.update, bulk: calls.bulk } },
 }));
 
 import { ContactsPage } from "./contacts-page";
@@ -62,6 +74,9 @@ import { ContactsPage } from "./contacts-page";
 beforeEach(() => {
   calls.list.length = 0;
   calls.update.mockClear();
+  calls.bulk.mockClear();
+  calls.skip = {};
+  calls.role = "Salesperson";
   localStorage.clear();
 });
 afterEach(cleanup);
@@ -148,16 +163,62 @@ describe("ContactsPage", () => {
     await waitFor(() => expect(calls.list.at(-1)?.["hasOpenDeal"]).toBeUndefined());
   });
 
-  it("assigns an owner to every selected contact", async () => {
+  it("assigns an owner to every selected contact in one bulk request", async () => {
     await renderPage();
     fireEvent.click(screen.getByRole("checkbox", { name: "Select all on this page" }));
     expect(screen.getByText("2 selected")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Assign owner/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Sam" }));
-    await waitFor(() => expect(calls.update).toHaveBeenCalledTimes(2));
-    expect(calls.update).toHaveBeenCalledWith("c1", { ownerId: "u-sam" });
-    expect(calls.update).toHaveBeenCalledWith("c2", { ownerId: "u-sam" });
+    await waitFor(() =>
+      expect(calls.bulk).toHaveBeenCalledWith(["c1", "c2"], { action: "owner", ownerId: "u-sam" }),
+    );
+    expect(calls.update).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByText("2 selected")).not.toBeInTheDocument());
+  });
+
+  it("marks the selection Do Not Contact with a reason and lists the skipped ones", async () => {
+    calls.skip = { c2: "Already Do Not Contact." };
+    await renderPage();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all on this page" }));
+    // Lifting DNC and deleting are for admins only.
+    expect(screen.queryByRole("button", { name: "Lift DNC" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Do Not Contact" }));
+    const confirm = screen.getByRole("button", { name: "Mark Do Not Contact" });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "Asked to stop" } });
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(calls.bulk).toHaveBeenCalledWith(["c1", "c2"], {
+        action: "dnc",
+        reason: "Asked to stop",
+        lift: undefined,
+      }),
+    );
+    expect(await screen.findByText("1 updated, 1 skipped")).toBeInTheDocument();
+    const summary = screen.getByRole("dialog");
+    expect(within(summary).getByText("Ravi Test")).toBeInTheDocument();
+    expect(within(summary).getByText("Already Do Not Contact.")).toBeInTheDocument();
+    expect(within(summary).queryByText("Asha Test")).toBeNull();
+  });
+
+  it("an admin deletes the selection after typing the count", async () => {
+    calls.role = "Admin";
+    await renderPage();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all on this page" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const confirm = screen.getAllByRole("button", { name: "Delete" }).at(-1)!;
+    fireEvent.change(screen.getByLabelText("Type 2 to confirm"), { target: { value: "1" } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Type 2 to confirm"), { target: { value: "2" } });
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(calls.bulk).toHaveBeenCalledWith(["c1", "c2"], {
+        action: "delete",
+        confirm: 2,
+        force: undefined,
+      }),
+    );
   });
 
   it("hides a column unticked in the column chooser and remembers it", async () => {
