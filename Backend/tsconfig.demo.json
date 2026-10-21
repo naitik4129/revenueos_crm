@@ -1,6 +1,6 @@
 {
-  // Typechecks the demo (demo/) with the code it uses. No output: demo/ is never built.
+  // Typechecks the demo (demo/) and the load test (load/) with the code they use. No output: neither is ever built.
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": true },
-  "include": ["src", "tests", "demo"]
+  "include": ["src", "tests", "demo", "load"]
 }

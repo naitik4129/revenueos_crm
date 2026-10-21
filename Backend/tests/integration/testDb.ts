@@ -4,11 +4,11 @@ import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 
-const MIGRATIONS_DIR = fileURLToPath(new URL("../../../Supabase/migrations", import.meta.url));
+export const MIGRATIONS_DIR =fileURLToPath(new URL("../../../Supabase/migrations", import.meta.url));
 
 // Stand-ins for what the shared Supabase project already has. Columns match the real
 // public.revenueos_* tables (checked 2026-10-16); only the ones the CRM reads.
-const SUPABASE_STANDINS = `
+export const SUPABASE_STANDINS = `
   create role anon;
   create role authenticated;
   create schema auth;

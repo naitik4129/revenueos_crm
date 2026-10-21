@@ -27,6 +27,7 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT
 - RLS enabled on every `crm` table with **no policies** (backend-only access); `crm` not exposed via the Data API.
 - **No citext, no new extensions.** Case-insensitive uniqueness via `lower()` unique indexes. `pgcrypto` is already enabled.
 - Storage buckets **`crm-template-attachments`** and **`crm-proposal-documents`** are created by hand in the Supabase dashboard (not by SQL — `storage.buckets` is another schema).
+- **Supabase facts** (read via MCP, 2026-10-19): Postgres **17.11** (engine 17), region **ap-south-1** (Mumbai) → host the backend and worker in Mumbai. `max_connections` **60** (3 reserved), **20 already in use** by the platform/brain/Supabase services; `shared_buffers` 256 MB, `work_mem` 3.5 MB, `statement_timeout` 2 min (looks like Micro compute). Pooler (Supavisor) client limit per Supabase's compute table is **200** for Micro; the **pool size** is a dashboard setting (Database settings → Connection pooling) the MCP can't read; the human checks it. `crm` schema not created yet. Installed extensions: `pgcrypto`, `uuid-ossp`, `pg_stat_statements`, `supabase_vault`, `plpgsql`. **`pg_trgm` is available but not installed**; using it would break the "no new extensions" rule, so it needs the human's and the platform developers' OK.
 
 ### Users and auth
 - Shared Supabase Auth (`auth.users`) with the platform and brain.
@@ -110,6 +111,7 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT
 - **Safety net**: if a send still finds its template missing or inactive, the worker skips it (action `skipped`, timeline note), the run moves on, and `notifyOwnerOrMembers` warns the deal owner — with no owner, every active salesperson member; admins never (same rule as handovers): "Workflow X skipped a send: template missing/inactive".
 
 ### Small gaps pass decisions (2026-10-19)
+**Paused after step 1** (gap 2, commit `549f98e`) for the scale + sending safety pass below; resume at step 2 when that pass is done.
 Steps, one per "go": 1 gap 2 (has open deal) → 2 gap 7 (meetings by contact) → 3 gap 10 (tasks by company) → 4 gap 9 (last contacted / next task due) → 5 gap 14 rest (proposal status groups) → 6 gaps 15, 16 (one definition each) → 7 gap 6 half (log a hand-sent email/WhatsApp from the record page). No migrations.
 - **Last contacted** = the latest outgoing contact: a call (human or AI, any outcome); a campaign email sent by the brain (`email_activities.sent_at`); an email or WhatsApp sent by a workflow or logged by hand. The last two are timeline events matched on `event_kind` in (`email`, `whatsapp`) **and** `actor_source` in (`automation`, `user`) — kind alone also covers incoming WhatsApp replies (`system`) and brain email events (`brain`). Dry-run sends are excluded by `metadata.dryRun = true`, which the worker sets from now on (nothing has run in production, so no old events need it). No title matching. Replies, notes and field edits don't count.
 - **Next task due** = the earliest open task for the contact, on the contact or any of its deals; red when overdue.
@@ -117,6 +119,82 @@ Steps, one per "go": 1 gap 2 (has open deal) → 2 gap 7 (meetings by contact) �
 - **"Awaiting decision"** (dashboard card, `GET /proposals/summary`, the tab) = sent + revision requested, everywhere.
 - **"Meetings today"** = today's meetings that are not cancelled or failed, everywhere (dashboard card and `GET /meetings?when=today`); they still show under Upcoming.
 - **Step 7**: the record page's Email action logs the send through `POST /contacts/:id/communications` and still opens the mail app (`mailto:`).
+
+### Scale + sending safety pass (2026-10-19)
+Goal: the CRM ready for the brain at **10-15k leads per workspace**, with safe sending. Targets: every API request **under 1 s (p95)**, a brain batch of 500 **under 5 s**.
+
+**Mailboxes**: brain cold email (Email Tool) and CRM nurture email **must use different mailboxes** (and ideally different sending domains), so cold-outreach bounces/complaints never hurt nurture deliverability. A setup rule for each workspace's email connection (not enforced in code).
+
+**Scale audit** (read from code, not measured; the load test confirms):
+| # | Where | Problem | Fix | Size |
+|---|---|---|---|---|
+| 1 | `brain.service.ts` `runBatch` | 500 items run one after another, one transaction each (~8-12 queries) ≈ 5k round trips: ~5 s at 1 ms, ~100 s at 20 ms; holds 1 of 10 pool connections throughout | Items 6-8 at a time; retry once on unique clash (same email twice in a batch); backend in Mumbai | M |
+| 2 | `db.ts` pool | `max: 10`, no `connectionTimeoutMillis`, no `statement_timeout`: a busy pool queues forever | Connection timeout → 503, statement timeout ~15 s, pool size from env; budget against the 60 max connections | S |
+| 3 | `deals-page.tsx` `BOARD_LIMIT`, `board.ts` | Board loads 500 of 5k open deals: columns and totals **wrong** (known `shortcut:`) | `GET /deals/board-summary` (count + amount per stage); each column pages itself ("load more") | M |
+| 4 | `brain.service.ts` `listSuppressions` | (a) Scans `contact_channels` of **every** workspace; the "lifted" part matches almost every channel row. (b) **Wrong results**: cursor `> since` on `changed_at` skips ties at a page edge (a bulk DNC in one transaction gives every row the same `now()`) | Filter by workspace first (join contacts); cursor `(changed_at, contact_id)` as an opaque `next`; index `dnc_events (action, created_at)` | M |
+| 5 | `contacts.routes.ts` `/import`, `importContacts` | Up to 2000 rows in one transaction, row by row: minutes on a remote DB, long locks, HTTP timeouts | Client splits into chunks of 500, one request each (all-or-nothing per chunk), progress bar | M |
+| 6 | `dashboard.service.ts` | Counts on `calls`, `email_activities` have no `(workspace_id, date)` index: whole-table scans across all clients | Migration 014 indexes: `calls (workspace_id, occurred_at)`, `email_activities (workspace_id, sent_at)`, `(workspace_id, replied_at) where replied_at is not null`. Live counts stay (no cache) | S |
+| 7 | `listContacts` / `listDeals` / `listCompanies` | `count(*) over()` builds and sorts the whole filtered set (with per-row subqueries) before the 50-row page | Separate count query; plain ORDER BY + LIMIT; indexes `(workspace_id, created_at desc)`, `(workspace_id, last_activity_at desc)` on contacts and deals | M |
+| 8 | `companies.service.ts` `COMPANY_SELECT` | Two count subqueries for **every** company before filter/sort/limit (`from (…) co`) | Filter + page first, counts for the page rows; sort by count via one grouped join | S |
+| 9 | Search `ilike '%x%'` (contacts, deals, companies) | Whole-workspace scan; fine at 15k (~20-60 ms) | Measure first. Over 300 ms → `pg_trgm` (needs OK, see Supabase facts) or prefix search on `lower(email)`/name | S |
+| 10 | `automation.service.ts` `claimDueActionIds` | `or status = 'executing' …` defeats the partial index: full scan of `scheduled_actions` every 10 s, table only grows | Two claims (or UNION) + index `(last_attempt_at) where status = 'executing'` | S |
+| 11 | Worker (`WORKER_BATCH_SIZE` 20 / 10 s) | ~7k actions/hour is enough for 5k deals, but the 20 run **in parallel**: bursts with no spacing | Throughput fine; spacing/caps in the sending safety steps | — |
+| 12 | Company page (`contact-hooks.ts`) | Contacts/deals capped at 200, timeline at 100, no "load more" | Timeline "load more"; leave the rest | S |
+| 13 | Gap 9 (last contacted / next task due), not built | Naively 3-4 subqueries per row over calls, email_activities, timeline_events | Compute for the page rows only, on the existing contact_id indexes | — |
+| 14 | `app.ts` brain body limit 25 MB | Batches with long transcripts (up to 500k chars each) can exceed it | Document it; the brain splits by bytes | S |
+
+**Load test plan**
+- **DB**: local **native PostgreSQL 17** (same major as Supabase 17.11), not PGlite (single session: no concurrency, unrealistic timings). Reuses `testDb.ts`'s stand-in `auth`/`public` tables + migrations 000-013, pointed at `LOAD_DB_URL`. Remote latency simulated in the harness (~15 ms per query, a wrapper around `pg`), so no extra tool. Optional later: one run against a Supabase staging branch the human creates.
+- **Seed** (`Backend/load/seed.ts`, never built or shipped, like `demo/`): 3 workspaces, one full size (15k contacts, 15k companies, 5k open + 3k closed deals, 100k activity rows over calls / email_activities / timeline / tasks / notes, 2k scheduled actions) and two at 5k (to expose cross-workspace scans). `generate_series` SQL.
+- **Runner** (`Backend/load/run.ts`): real app over HTTP, signed in as admin and salesperson, each route 20×, p50/p95, `EXPLAIN (ANALYZE, BUFFERS)` for anything over 300 ms. Covers: lists (contacts/companies/deals with every sort key, search, `ownerId=none`, `hasOpenDeal`, offset page 300; tasks, meetings, proposals, runs, scheduled actions); contact/deal/company pages (every call each makes) + timelines; dashboard + today's queue; brain 30 × 500 per route (companies, contacts, calls, email-events) + 500 handovers, one after another and 3 at a time; `/suppressions` with/without `since` + the tie test; CSV import 2000 rows; mixed: 10 users browsing during a brain batch (pool starvation).
+- Results saved as a dated table in `Backend/load/RESULTS.md` (baseline, then after each fix).
+- As built (step 1): brain batches = 30 in total (8 companies, 8 contacts, 7 calls, 7 email-events; the last 3 contact batches run at once during the mixed load) + 1 handover batch, all in workspace A after the read benchmarks; Supabase Auth also gets the +15 ms; queries traced by wrapping `pg.Client.prototype.query` from the harness (no app change).
+
+**Bulk actions (gap 4) design**
+- `POST /contacts/bulk` `{ action: owner | lifecycle | dnc | delete, ids, ...args }`, **ids only, max 500** (one page; "select all on this page"); no "all matching filter" in v1.
+- One transaction per request, per-id results (`ok` / `skipped` + reason); each id goes through the same service function as the single action.
+- Owner: active workspace member; does not move last activity; replaces the one-PATCH-per-record loop in `use-bulk-assign.ts` for contacts.
+- Lifecycle: forward only for salespeople; moving back is admin-only with a required note → timeline per contact.
+- DNC: reason required; same path as single DNC (dnc_events, automation stop, channels). Lifting DNC in bulk: admin-only.
+- Delete: admin-only, confirm by typing the count; `deleted_records_audit` per row; contacts with an open deal are skipped unless `force`.
+- Audit: one `admin_audit_events` row per request (action, count, ids, actor) + the existing per-record rows. No rate limit in v1.
+
+**Sending safety: today vs missing**
+Email (`email.provider.ts`, `automation-runner.ts`):
+| Rule | Today | Missing |
+|---|---|---|
+| Per-mailbox daily cap + warm-up ramp | none | `daily_cap`, `ramp_start`, `ramp_step_per_day`, `ramp_started_at`; count today's (IST) sends before each send, defer when over |
+| Random spacing, working hours | none (20 sends in parallel per tick) | `min/max_gap_seconds` + working window (IST, weekdays); outside it defer to the next window |
+| Auto-pause on bounce ~3% / complaints + admin alert | **no bounce/complaint feed** (no Resend webhook; SMTP 5xx only fails that send) | Resend webhook (signature checked) → channel `permanent_bounce` / `unsubscribed`; rolling 7-day bounce rate (min 50 sends); over threshold or any complaint → `paused` + reason + notify admins |
+| Bounced/unsubscribed never again | yes: `sendBlockReason` blocks `permanent_bounce`, `unsubscribed`, `invalid` before every send; brain bounce/unsubscribe events set the channel | Workflow sends' own bounces (needs the webhook) |
+| Unsubscribe link in every email | none | Signed-token link + `List-Unsubscribe` / `List-Unsubscribe-Post` headers; public `/u/:token` sets the channel to `unsubscribed` |
+| Address check before send | format only (`normalizeEmail`) | Syntax + MX lookup (Node `dns`, cached per domain); no MX → channel `invalid` |
+
+WhatsApp (Baileys, `baileys.manager.ts` claim):
+| Rule | Today | Missing |
+|---|---|---|
+| Engaged only, never cold | partly: only deals enroll (prospects never), but a hand-made deal can be cold | Gate: inbound WhatsApp reply, connected call, or an `opt_in` on the WhatsApp channel; else skip + log |
+| Per-number daily cap + ramp | `daily_cap` (default 200), no ramp | Ramp like email; lower default for new numbers |
+| Random gaps | yes: `min/max_delay_seconds` (5-15 s) | Defaults to ~45-120 s |
+| Working hours | none | Same window settings as email |
+| Auto-pause on failures/blocks/disconnect | emergency switch; WhatsApp reachout/new-chat restriction defers; disconnected = no sends | Daily failure/block counter → auto-pause + admin alert; terminal disconnect (logout) → pause + alert |
+| "STOP" reply = DNC | none (message text is not read; body never stored) | Check inbound text **at receive time** for STOP / UNSUBSCRIBE / "band karo" (still not stored) → WhatsApp channel `opted_out` + timeline |
+
+All channels: limits per workspace in a new `crm.send_policies` (one row per workspace × channel; migration 015), admin-editable in a new `/admin` "Sending" tab; enforced in the worker inside the claim before every provider call (pause → hours → cap/ramp → gap → consent); every block/deferral logged with its reason on the action (timeline when skipped). Shared stop list with the brain = `/suppressions` (DNC + blocked channels, incl. WhatsApp `opted_out` from STOP), after fix 4.
+
+**Order** (one step per "go"; re-measure with the harness after each scale step):
+1. Load test harness + seed + **baseline** measurement (`RESULTS.md`).
+2. Migration 014 (indexes: items 4, 6, 7, 10) + pool timeouts (item 2); re-measure.
+3. Suppressions cursor + workspace filter (item 4).
+4. Brain batch concurrency (item 1).
+5. List counts + company counts (items 7, 8).
+6. Deals board summary + column paging (item 3).
+7. CSV import chunks (item 5).
+8. Bulk contacts endpoint + UI (gap 4).
+9. Migration 015 send policies + worker enforcement (caps, ramp, hours, gaps, pause).
+10. Resend webhook, bounce/complaint auto-pause, unsubscribe link + headers, MX check.
+11. WhatsApp engaged-only gate, STOP → opted out, failure auto-pause.
+12. Admin "Sending" tab.
 
 ### Kept features
 CSV import, calls + routing, nurture workflows + worker, templates + attachments, email (Resend/SMTP), WhatsApp (Baileys), Google Calendar, meetings, proposals, tasks, DNC, merge, delete + audit, notifications, dashboard, workspaces, admin users.
@@ -218,5 +296,5 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
 
 ## Commands
 
-Backend (`cd Backend`): `npm run typecheck` (also typechecks `demo/`), `npm run lint`, `npm run test:run` (includes PGlite integration tests and the demo guard tests), `npm run build`, `npm run demo`.
+Backend (`cd Backend`): `npm run typecheck` (also typechecks `demo/` and `load/`), `npm run lint`, `npm run test:run` (includes PGlite integration tests and the demo/load guard tests), `npm run build`, `npm run demo`, `npm run load` (load test: rebuilds + seeds the local `crm_load` database named by `LOAD_DB_URL` in `Backend/.env`, refuses any other host or database, ~1 h, writes `load/RESULTS.md`; code in `Backend/load/`, never built or shipped).
 Frontend (`cd Frontend`): `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run test:run`, `npm run build` (the build regenerates `src/routeTree.gen.ts`).

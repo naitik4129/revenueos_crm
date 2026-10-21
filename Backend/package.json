@@ -13,6 +13,7 @@
     "worker": "node dist/src/worker.js",
     "worker:dev": "tsx watch src/worker.ts",
     "demo": "node --env-file=demo/demo.env --import tsx demo/start.ts",
+    "load": "tsx load/run.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.demo.json",
     "test": "vitest",
     "test:run": "vitest run",
