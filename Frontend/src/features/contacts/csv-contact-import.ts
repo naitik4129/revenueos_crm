@@ -3,8 +3,46 @@ import type { ImportContactRow } from "@/lib/backend-client";
 import { validateContact } from "@/lib/contact-validation";
 import { CONTACT_SOURCES } from "@/types";
 import { downloadCsv } from "@/lib/csv";
+import { messageFromError } from "@/store/query";
+import type { ImportContactsResult } from "@/types";
 
 export const MAX_IMPORT_ROWS = 2000;
+/** The server takes at most 500 rows per request, each request all-or-nothing. */
+export const IMPORT_CHUNK_ROWS = 500;
+
+/**
+ * Sends the rows in chunks of IMPORT_CHUNK_ROWS, one after another, and merges the results.
+ * Chunks already sent stay imported; if one fails, its rows and the rest are reported as failed.
+ */
+export async function importInChunks(
+  rows: ImportContactRow[],
+  send: (chunk: ImportContactRow[]) => Promise<ImportContactsResult>,
+  onProgress: (done: number) => void,
+): Promise<ImportContactsResult & { error: string | null }> {
+  const total: ImportContactsResult & { error: string | null } = {
+    created: [],
+    duplicates: [],
+    failed: [],
+    totalRows: rows.length,
+    error: null,
+  };
+  for (let at = 0; at < rows.length; at += IMPORT_CHUNK_ROWS) {
+    const chunk = rows.slice(at, at + IMPORT_CHUNK_ROWS);
+    try {
+      const data = await send(chunk);
+      total.created.push(...data.created);
+      total.duplicates.push(...data.duplicates);
+      total.failed.push(...data.failed);
+      onProgress(at + chunk.length);
+    } catch (error) {
+      total.error = messageFromError(error);
+      const reason = `Not imported: ${total.error}`;
+      total.failed.push(...rows.slice(at).map((r) => ({ rowNumber: r.rowNumber, reason })));
+      break;
+    }
+  }
+  return total;
+}
 
 const BOM_CHAR = String.fromCharCode(0xfeff);
 /** "First Name", "first_name" and "FIRST NAME" all become "first name". */

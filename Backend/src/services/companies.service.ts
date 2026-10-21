@@ -236,22 +236,3 @@ export async function writeDeletedAudit(
     [workspaceId, entityType, entityId, JSON.stringify(snapshot), actor.id, actor.fullName],
   );
 }
-
-/** For CSV import: same domain, else same name (case-insensitive), else a new company. */
-export async function findOrCreateCompany(
-  db: Queryable,
-  actor: Actor,
-  workspaceId: string,
-  input: { name: string; website?: string | null; industry?: string | null },
-): Promise<string> {
-  const domain = normalizeDomain(input.website);
-  const found = await db.query<{ id: string }>(
-    `select id from crm.companies
-      where workspace_id = $1 and (($2::text is not null and lower(domain) = $2) or lower(name) = lower($3))
-      order by (lower(domain) = $2) desc nulls last, created_at asc
-      limit 1`,
-    [workspaceId, domain, input.name.trim()],
-  );
-  if (found.rows[0]) return found.rows[0].id;
-  return (await createCompany(db, actor, workspaceId, { ...input, source: null })).id;
-}

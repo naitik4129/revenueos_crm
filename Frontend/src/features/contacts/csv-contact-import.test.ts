@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseContactsCsv, previewRowError, rowWantsDeal } from "./csv-contact-import";
+import {
+  importInChunks,
+  parseContactsCsv,
+  previewRowError,
+  rowWantsDeal,
+} from "./csv-contact-import";
 
 describe("parseContactsCsv", () => {
   it("maps columns by name in any order, including the deal columns", () => {
@@ -49,5 +54,54 @@ describe("row checks", () => {
     expect(rowWantsDeal({ rowNumber: 2, firstName: "A", createDeal: "YES" })).toBe(true);
     expect(rowWantsDeal({ rowNumber: 2, firstName: "A", dealTitle: "SEO" })).toBe(true);
     expect(rowWantsDeal({ rowNumber: 2, firstName: "A", createDeal: "no" })).toBe(false);
+  });
+});
+
+describe("importInChunks", () => {
+  const rows = Array.from({ length: 1200 }, (_, i) => ({ rowNumber: i + 2, firstName: `P${i}` }));
+
+  it("sends chunks of 500 in order and merges the results", async () => {
+    const sizes: number[] = [];
+    const progress: number[] = [];
+    const result = await importInChunks(
+      rows,
+      async (chunk) => {
+        sizes.push(chunk.length);
+        return {
+          created: chunk.slice(1).map((r) => `id-${r.rowNumber}`),
+          duplicates: [{ rowNumber: chunk[0]!.rowNumber, reason: "dup" }],
+          failed: [],
+          totalRows: chunk.length,
+        };
+      },
+      (done) => progress.push(done),
+    );
+    expect(sizes).toEqual([500, 500, 200]);
+    expect(progress).toEqual([500, 1000, 1200]);
+    expect(result.created).toHaveLength(1197);
+    expect(result.duplicates.map((d) => d.rowNumber)).toEqual([2, 502, 1002]);
+    expect(result).toMatchObject({ totalRows: 1200, error: null });
+  });
+
+  it("keeps earlier chunks and reports the failed chunk and the rest as not imported", async () => {
+    let calls = 0;
+    const result = await importInChunks(
+      rows,
+      async (chunk) => {
+        if (++calls === 2) throw new Error("Server down");
+        return {
+          created: chunk.map((r) => `id-${r.rowNumber}`),
+          duplicates: [],
+          failed: [],
+          totalRows: chunk.length,
+        };
+      },
+      () => {},
+    );
+    expect(calls).toBe(2);
+    expect(result.created).toHaveLength(500);
+    expect(result.failed).toHaveLength(700);
+    expect(result.failed[0]).toEqual({ rowNumber: 502, reason: "Not imported: Server down" });
+    expect(result.error).toBe("Server down");
   });
 });

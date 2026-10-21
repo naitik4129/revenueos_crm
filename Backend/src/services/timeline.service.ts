@@ -81,6 +81,27 @@ export const BRAIN_ACTOR = { actorId: null, actorName: "RevenueOS Brain", actorS
 /** Who an event is attributed to when it is not always a signed-in user. */
 export type EventActor = Pick<AddTimelineEventInput, "actorId" | "actorName" | "actorSource">;
 
+export interface TimelineInsertRow {
+  company_id?: string | null;
+  contact_id?: string | null;
+  occurred_at?: string | null;
+  event_kind: string;
+  title: string;
+  detail?: string | null;
+  related_call_id?: string | null;
+}
+
+/** Many events by one actor in one statement (set-based writes). Subjects must be in this workspace. */
+export async function insertTimelineRows(db: Queryable, workspaceId: string, actor: EventActor, rows: TimelineInsertRow[]) {
+  if (!rows.length) return;
+  await db.query(
+    `insert into crm.timeline_events (workspace_id, company_id, contact_id, occurred_at, event_kind, title, detail, actor_id, actor_name, actor_source, related_call_id)
+     select $1, x.company_id, x.contact_id, coalesce(x.occurred_at, now()), x.event_kind, x.title, x.detail, $2, $3, $4, x.related_call_id
+       from jsonb_to_recordset($5::jsonb) as x(company_id uuid, contact_id uuid, occurred_at timestamptz, event_kind text, title text, detail text, related_call_id uuid)`,
+    [workspaceId, actor.actorId ?? null, actor.actorName, actor.actorSource, JSON.stringify(rows)],
+  );
+}
+
 /** A user -> user event; the brain/system -> as given; nobody -> automation. */
 export function toEventActor(actor: Actor | EventActor | null): EventActor {
   return !actor ? AUTOMATION_ACTOR : "fullName" in actor ? actorEvent(actor) : actor;

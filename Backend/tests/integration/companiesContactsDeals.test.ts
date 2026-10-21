@@ -341,6 +341,49 @@ describe("companies, contacts, deals (PGlite)", () => {
     ]);
   });
 
+  it("CSV import takes at most 500 rows per request and matches companies by domain, then name", async () => {
+    // Its own workspace, so these rows stay out of the other tests' lists.
+    const w3 = (await seed.query(`insert into crm.workspaces (name, slug) values ('Three', 'three') returning id`)).rows[0].id;
+    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [w3, sales]);
+    const big = Array.from({ length: 501 }, (_, i) => ({ rowNumber: i + 2, firstName: "Big", email: `big${i}@x.com` }));
+    const tooMany = await api("post", "/contacts/import", { ws: w3, body: { rows: big } });
+    expect(tooMany.status).toBe(400);
+    expect(JSON.stringify(tooMany.body)).toContain("At most 500 rows per request");
+
+    const stored = await seed.query(`insert into crm.companies (workspace_id, name, domain) values ($1, 'Stored', 'stored.com') returning id`, [w3]);
+    const res = await api("post", "/contacts/import", {
+      ws: w3,
+      body: {
+        rows: [
+          { rowNumber: 2, firstName: "Al", email: "al@one.com", company: "Stored Inc", website: "https://www.stored.com/about" },
+          { rowNumber: 3, firstName: "Bo", email: "bo@new.com", company: "New Co", website: "new.com", industry: "Chunkware" },
+          { rowNumber: 4, firstName: "Cy", email: "cy@new.com", company: "New Company", website: "new.com" },
+          { rowNumber: 5, firstName: "Di", email: "di@new.com", company: "new co" },
+        ],
+      },
+    });
+    expect(res.status).toBe(201);
+    const made = await seed.query(
+      `select c.first_name, co.name, co.domain, co.industry from crm.contacts c join crm.companies co on co.id = c.company_id
+        where c.id = any($1::uuid[]) order by c.first_name`,
+      [res.body.data.created],
+    );
+    expect(made.rows).toEqual([
+      { first_name: "Al", name: "Stored", domain: "stored.com", industry: null },
+      { first_name: "Bo", name: "New Co", domain: "new.com", industry: "Chunkware" },
+      { first_name: "Cy", name: "New Co", domain: "new.com", industry: "Chunkware" },
+      { first_name: "Di", name: "New Co", domain: "new.com", industry: "Chunkware" },
+    ]);
+    expect(stored.rows).toHaveLength(1);
+    const events = await seed.query(
+      `select title, actor_source, actor_id from crm.timeline_events where contact_id = any($1::uuid[]) or company_id in (select id from crm.companies where domain = 'new.com')`,
+      [res.body.data.created],
+    );
+    expect(events.rows.filter((e) => e.title === "Contact Created")).toHaveLength(4);
+    expect(events.rows.filter((e) => e.title === "Company Created")).toHaveLength(1);
+    expect(events.rows.every((e) => e.actor_source === "user" && e.actor_id === sales)).toBe(true);
+  });
+
   it("lifecycle only moves forward automatically; only an admin can move it back, with a note", async () => {
     const c = await newContact({ email: "life@x.com" });
     expect(c.lifecycleStage).toBe("prospect");

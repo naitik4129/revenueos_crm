@@ -29,6 +29,7 @@ const LATENCY_MS = 15;
 const RUNS = 20;
 const TARGET_MS = 1000;
 const BRAIN_TARGET_MS = 5000;
+const CSV_TARGET_MS = 10_000;
 const EXPLAIN_OVER_MS = 300;
 const RESULTS_FILE = fileURLToPath(new URL("./RESULTS.md", import.meta.url));
 
@@ -51,7 +52,7 @@ if (guard) {
 }
 const dbUrl = new URL(LOAD_DB_URL!);
 
-const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv"];
+const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv", "mixed"];
 const QUICK_BATCHES = 3;
 const onlyAt = process.argv.indexOf("--only");
 const ONLY = onlyAt >= 0 ? (process.argv[onlyAt + 1] ?? "") : undefined;
@@ -226,6 +227,7 @@ const emailBatch = (b: number) =>
     occurredAt: new Date(Date.now() - i * 1000).toISOString(),
   }));
 /** Contacts whose seeded deal is closed (A: 5001-8000), so handovers create or reopen deals. */
+/** 500 handovers, sent as 10 requests of 50 (the route's cap). */
 const handoverBatch = () =>
   Array.from({ length: 500 }, (_, i) => ({
     source: "quickicp",
@@ -507,13 +509,23 @@ async function main() {
       industry: "Retail",
       source: "linkedin",
     }));
+    // Like the client: chunks of 500, one request each, one after another.
     startTrace();
-    const r = await call("POST", "/contacts/import", sam, { rows: csvRows });
+    const totals = { created: 0, duplicates: 0, failed: 0 };
+    const chunkMs: number[] = [];
+    let httpError = "";
+    for (let at = 0; at < csvRows.length && !httpError; at += 500) {
+      const r = await call("POST", "/contacts/import", sam, { rows: csvRows.slice(at, at + 500) });
+      chunkMs.push(r.ms);
+      const data = (r.json as { data?: { created: unknown[]; duplicates: unknown[]; failed: unknown[] } }).data;
+      if (!data) httpError = `HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 200)}`;
+      else for (const k of ["created", "duplicates", "failed"] as const) totals[k] += data[k].length;
+    }
     const statements = stopTrace();
-    const data = (r.json as { data?: { created: unknown[]; duplicates: unknown[]; failed: unknown[] } }).data;
-    const summary = data ? `created ${data.created.length}, duplicates ${data.duplicates.length}, failed ${data.failed.length}` : `HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 200)}`;
-    csv = { ms: r.ms, statements, summary };
-    log(`CSV: ${(r.ms / 1000).toFixed(1)} s, ${statements.length} SQL, ${summary}`);
+    const ms = chunkMs.reduce((a, b) => a + b, 0);
+    const summary = `${chunkMs.length} chunks of 500 (${chunkMs.map((c) => `${(c / 1000).toFixed(1)} s`).join(", ")}): ${httpError || `created ${totals.created}, duplicates ${totals.duplicates}, failed ${totals.failed}`}`;
+    csv = { ms, statements, summary };
+    log(`CSV: ${(ms / 1000).toFixed(1)} s, ${statements.length} SQL, ${summary}`);
   }
 
   // --- Brain batches: 27 one after another, then 3 at once during the mixed load, then handovers.
@@ -532,7 +544,7 @@ async function main() {
 
   // --- Mixed load: 10 users browsing while 3 contact batches run at once ---
   let mixed: MixedResult | null = null;
-  if (FULL) {
+  if (want("mixed")) {
     log("Mixed load: 10 users + 3 concurrent brain batches…");
     // The fake auth's sessions last an hour and the run is longer: sign in again first.
     sam.token = await token("sam@load.local");
@@ -566,7 +578,10 @@ async function main() {
     sam.token = await token("sam@load.local");
   }
 
-  if (want("brain-handovers")) await brainBatch("handovers", "1/1", handoverBatch(), keyA, true);
+  if (want("brain-handovers")) {
+    const all = handoverBatch();
+    for (let b = 0; b < all.length / 50; b++) await brainBatch("handovers", `${b + 1}/10 (50 items)`, all.slice(b * 50, (b + 1) * 50), keyA, true);
+  }
 
   // --- Suppressions checks (workspace C): follow `next` until hasMore is false ---
   const checks: FeedCheck[] = [];
@@ -753,7 +768,7 @@ function section(r: RunResult) {
       ``,
     );
   }
-  if (r.csv) lines.push(`### CSV import (2,000 rows, one request, workspace A)`, ``, `${fu(r.csv.ms)}, ${r.csv.statements} SQL, ${r.csv.summary}. ${ok(r.csv.ms, TARGET_MS)}`, ``);
+  if (r.csv) lines.push(`### CSV import (2,000 rows, workspace A)`, ``, `${fu(r.csv.ms)}, ${r.csv.statements} SQL, ${r.csv.summary}. ${ok(r.csv.ms, CSV_TARGET_MS)}`, ``);
   if (r.mixed) {
     lines.push(
       `### Mixed load`,

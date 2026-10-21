@@ -16,7 +16,7 @@ import { AppError, NotFoundError, ValidationError } from "../errors.js";
 import { EMAIL_STATUSES, LIFECYCLE_STAGES, type EmailStatus, type LifecycleStage } from "../domain/enums.js";
 import { normalizeDomain } from "./companies.service.js";
 import { markDnc } from "./contacts.service.js";
-import { BRAIN_ACTOR } from "./timeline.service.js";
+import { BRAIN_ACTOR, insertTimelineRows, type TimelineInsertRow } from "./timeline.service.js";
 import { cleanContact, type BulkHandler, type callItem, type companyItem, type ContactData, type contactItem, type emailEventItem, type ItemOutcome } from "./brain.service.js";
 
 type Outcome = ItemOutcome | { error: AppError };
@@ -28,25 +28,8 @@ const fill = <V>(current: V | null, incoming: V | null | undefined) => current ?
 
 // --- Shared writes ------------------------------------------------------------------------------
 
-interface TimelineRow {
-  company_id?: string | null;
-  contact_id?: string | null;
-  occurred_at?: string | null;
-  event_kind: string;
-  title: string;
-  detail?: string | null;
-  related_call_id?: string | null;
-}
-
-async function insertTimeline(db: Queryable, workspaceId: string, rows: TimelineRow[]) {
-  if (!rows.length) return;
-  await db.query(
-    `insert into crm.timeline_events (workspace_id, company_id, contact_id, occurred_at, event_kind, title, detail, actor_id, actor_name, actor_source, related_call_id)
-     select $1, x.company_id, x.contact_id, coalesce(x.occurred_at, now()), x.event_kind, x.title, x.detail, null, $2, $3, x.related_call_id
-       from jsonb_to_recordset($4::jsonb) as x(company_id uuid, contact_id uuid, occurred_at timestamptz, event_kind text, title text, detail text, related_call_id uuid)`,
-    [workspaceId, BRAIN_ACTOR.actorName, BRAIN_ACTOR.actorSource, json(rows)],
-  );
-}
+type TimelineRow = TimelineInsertRow;
+const insertTimeline = (db: Queryable, workspaceId: string, rows: TimelineRow[]) => insertTimelineRows(db, workspaceId, BRAIN_ACTOR, rows);
 
 async function insertRefs(db: Queryable, workspaceId: string, kind: "company" | "contact", rows: { id: string; source: string; external_id: string }[]) {
   if (!rows.length) return;

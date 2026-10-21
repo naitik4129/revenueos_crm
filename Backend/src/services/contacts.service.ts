@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Actor } from "../authMiddleware.js";
 import { orderBySql, type Queryable } from "../dto.js";
 import { ConflictError, DoNotContactError, ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } from "../errors.js";
@@ -13,8 +14,8 @@ import { lifecycleIndex } from "../domain/pipeline.js";
 import { normalizeEmail } from "../domain/email.js";
 import { normalizePhoneE164 } from "../domain/phone.js";
 import { userNameSql } from "./profiles.service.js";
-import { actorEvent, addTimelineEvent, toEventActor, type EventActor } from "./timeline.service.js";
-import { findOrCreateCompany, writeDeletedAudit } from "./companies.service.js";
+import { actorEvent, addTimelineEvent, insertTimelineRows, toEventActor, type EventActor } from "./timeline.service.js";
+import { normalizeDomain, writeDeletedAudit } from "./companies.service.js";
 import { createDeal } from "./deals.service.js";
 
 export interface ContactRow {
@@ -602,9 +603,13 @@ export interface ImportRowOutcome {
 
 /**
  * Partial import: invalid rows and duplicates (same email/phone as an existing contact in this
- * workspace, or an earlier row in the file) are skipped and reported. Each row's company is
+ * workspace, or an earlier row in the request) are skipped and reported. Each row's company is
  * matched by domain/name or created. New contacts are prospects; only rows that ask for a deal
  * (rowWantsDeal) also get an open deal, which makes them qualified.
+ *
+ * Set-based (the client sends at most 500 rows per request): one read for duplicates, one for
+ * companies, then one insert each for companies, contacts and their timeline entries. Rows that
+ * ask for a deal go through createDeal one by one (task, lifecycle, workflow enrollment).
  */
 export async function importContacts(
   db: Queryable,
@@ -614,7 +619,6 @@ export async function importContacts(
 ) {
   const failed: ImportRowOutcome[] = [];
   const duplicates: ImportRowOutcome[] = [];
-  const created: string[] = [];
 
   const valid: { row: ImportContactRowInput; fields: ValidatedContactFields }[] = [];
   for (const row of rows) {
@@ -625,6 +629,8 @@ export async function importContacts(
     }
   }
 
+  // The brain batches' lock (runBatch): no brain batch creates the same email or domain between our read and insert.
+  await db.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`crm.brain:${workspaceId}`]);
   const emails = [...new Set(valid.flatMap((v) => (v.fields.email ? [v.fields.email] : [])))];
   const phones = [...new Set(valid.flatMap((v) => (v.fields.phoneE164 ? [v.fields.phoneE164] : [])))];
   const existing = await db.query<{ email: string | null; phone_e164: string | null }>(
@@ -636,8 +642,8 @@ export async function importContacts(
   const seenPhones = new Set(existing.rows.flatMap((r) => (r.phone_e164 ? [r.phone_e164] : [])));
   const dbEmails = new Set(seenEmails);
   const dbPhones = new Set(seenPhones);
-  const companyIds = new Map<string, string>();
 
+  const toCreate: { row: ImportContactRowInput; fields: ValidatedContactFields }[] = [];
   for (const { row, fields } of valid) {
     const email = fields.email;
     const phone = fields.phoneE164;
@@ -651,20 +657,99 @@ export async function importContacts(
     }
     if (email) seenEmails.add(email);
     if (phone) seenPhones.add(phone);
-
-    let companyId: string | null = null;
-    const companyName = row.company?.trim();
-    if (companyName) {
-      const key = companyName.toLowerCase();
-      companyId = companyIds.get(key) ?? (await findOrCreateCompany(db, actor, workspaceId, { name: companyName, website: row.website, industry: row.industry }));
-      companyIds.set(key, companyId);
-    }
-
-    const id = await insertContact(db, actor, workspaceId, fields, companyId, defaultOwner(actor));
-    await addTimelineEvent(db, { contactId: id, kind: "system", title: "Contact Created", detail: `Source: ${fields.source} (CSV import)`, ...actorEvent(actor) });
-    if (rowWantsDeal(row)) await createDeal(db, actor, workspaceId, { contactId: id, serviceInterest: row.dealTitle });
-    created.push(id);
+    toCreate.push({ row, fields });
   }
 
-  return { created, duplicates, failed, totalRows: rows.length };
+  const companyIds = await resolveImportCompanies(db, actor, workspaceId, toCreate.map((t) => t.row));
+  const created = toCreate.map(({ row, fields }) => ({
+    id: randomUUID(),
+    company_id: companyIds.get(row.company?.trim().toLowerCase() ?? "") ?? null,
+    first_name: fields.firstName,
+    last_name: fields.lastName,
+    job_title: fields.jobTitle,
+    email: fields.email,
+    phone: fields.phone,
+    phone_e164: fields.phoneE164,
+    linkedin_url: fields.linkedinUrl,
+    country: fields.country,
+    location: fields.location,
+    source: fields.source,
+  }));
+  if (created.length) {
+    await db
+      .query(
+        `insert into crm.contacts
+          (id, workspace_id, company_id, first_name, last_name, job_title, email, phone, phone_e164, linkedin_url, country, location, owner_id, source, created_by)
+         select x.id, $1, x.company_id, x.first_name, x.last_name, x.job_title, x.email, x.phone, x.phone_e164, x.linkedin_url, x.country, x.location,
+                $2, x.source::crm.lead_source, $3
+           from jsonb_to_recordset($4::jsonb) as x(id uuid, company_id uuid, first_name text, last_name text, job_title text, email text, phone text,
+                                                   phone_e164 text, linkedin_url text, country text, location text, source text)`,
+        [workspaceId, defaultOwner(actor), actor.id, JSON.stringify(created)],
+      )
+      .catch(duplicateConflict);
+    await insertTimelineRows(
+      db,
+      workspaceId,
+      actorEvent(actor),
+      created.map((c) => ({ contact_id: c.id, event_kind: "system", title: "Contact Created", detail: `Source: ${c.source} (CSV import)` })),
+    );
+  }
+  for (const [i, { row }] of toCreate.entries()) {
+    if (rowWantsDeal(row)) await createDeal(db, actor, workspaceId, { contactId: created[i]!.id, serviceInterest: row.dealTitle });
+  }
+
+  return { created: created.map((c) => c.id), duplicates, failed, totalRows: rows.length };
+}
+
+/**
+ * Companies for a whole import: per company name (its first row's website/industry), the
+ * company with that domain, else with that name (oldest first), else a new one. Returns lower(name) -> id.
+ */
+async function resolveImportCompanies(db: Queryable, actor: Actor, workspaceId: string, rows: ImportContactRowInput[]) {
+  const wanted = new Map<string, { name: string; domain: string | null; website: string | null; industry: string | null }>();
+  for (const row of rows) {
+    const name = row.company?.trim();
+    if (!name || wanted.has(name.toLowerCase())) continue;
+    wanted.set(name.toLowerCase(), { name, domain: normalizeDomain(row.website), website: row.website?.trim() || null, industry: row.industry?.trim() || null });
+  }
+  const ids = new Map<string, string>();
+  if (!wanted.size) return ids;
+
+  const domains = [...new Set([...wanted.values()].flatMap((w) => (w.domain ? [w.domain] : [])))];
+  const found = await db.query<{ id: string; domain: string | null; name: string }>(
+    `select id, lower(domain) as domain, lower(name) as name from crm.companies
+      where workspace_id = $1 and (lower(domain) = any($2::text[]) or lower(name) = any($3::text[]))
+      order by created_at, id`,
+    [workspaceId, domains, [...wanted.keys()]],
+  );
+  const byDomain = new Map<string, string>();
+  const byName = new Map<string, string>();
+  for (const r of found.rows) {
+    if (r.domain && !byDomain.has(r.domain)) byDomain.set(r.domain, r.id);
+    if (!byName.has(r.name)) byName.set(r.name, r.id);
+  }
+
+  // A company made earlier in this import is matched by domain too (domains are unique per workspace).
+  const fresh: { id: string; name: string; domain: string | null; website: string | null; industry: string | null }[] = [];
+  for (const [key, w] of wanted) {
+    const id = (w.domain && byDomain.get(w.domain)) || byName.get(key);
+    if (id) {
+      ids.set(key, id);
+      continue;
+    }
+    const company = { id: randomUUID(), ...w };
+    fresh.push(company);
+    ids.set(key, company.id);
+    if (w.domain) byDomain.set(w.domain, company.id);
+  }
+  if (fresh.length) {
+    await db.query(
+      `insert into crm.companies (id, workspace_id, name, domain, website, industry, created_by)
+       select x.id, $1, x.name, x.domain, x.website, x.industry, $2
+         from jsonb_to_recordset($3::jsonb) as x(id uuid, name text, domain text, website text, industry text)`,
+      [workspaceId, actor.id, JSON.stringify(fresh)],
+    );
+    await insertTimelineRows(db, workspaceId, actorEvent(actor), fresh.map((c) => ({ company_id: c.id, event_kind: "system", title: "Company Created" })));
+  }
+  return ids;
 }

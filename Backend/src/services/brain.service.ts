@@ -23,6 +23,7 @@ import { addTimelineEvent, BRAIN_ACTOR } from "./timeline.service.js";
 export const BRAIN_SOURCES = ["quickicp", "quickhowl", "email_tool"] as const;
 export const EMAIL_EVENTS = EMAIL_STATUSES;
 export const MAX_BATCH = 500;
+export const MAX_HANDOVER_BATCH = 50;
 
 // --- Payloads ---------------------------------------------------------------------------
 

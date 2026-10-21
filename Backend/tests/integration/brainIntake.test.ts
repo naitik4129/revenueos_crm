@@ -425,8 +425,11 @@ describe("brain intake API (PGlite)", () => {
     });
   });
 
-  it("rejects a batch over 500 items and reports item errors as code + short message only", async () => {
+  it("rejects a batch over 500 items (handovers: 50) and reports item errors as code + short message only", async () => {
     expect((await brain("/contacts", Array(501).fill(ann))).status).toBe(400);
+    const tooMany = await brain("/handovers", Array(51).fill({ source: "quickicp", externalId: "h-cap", contact: ann, summary: "Fit" }));
+    expect(tooMany.status).toBe(400);
+    expect(JSON.stringify(tooMany.body)).toContain("At most 50 items per request.");
     const res = await brain("/contacts", [{ source: "quickicp", externalId: "p-20" }, { ...ann, externalId: "p-1" }, { source: "quickicp" }]);
     expect(res.body.results.map((r: { status: string }) => r.status)).toEqual(["error", "updated", "error"]);
     expect(res.body.results[0].error).toEqual({ code: "not_found", message: expect.stringMatching(/^Contact/) });

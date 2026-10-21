@@ -88,7 +88,8 @@ const importSchema = z.object({
       }),
     )
     .min(1, "The file has no data rows to import.")
-    .max(2000, "This file has more than 2000 rows - split it and import in batches."),
+    // The app sends a file in chunks of 500 (one transaction each).
+    .max(500, "At most 500 rows per request - send the file in chunks of 500."),
 });
 
 contactsRouter.post(

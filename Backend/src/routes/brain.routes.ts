@@ -25,13 +25,20 @@ export const requireBrainKey = asyncHandler(async (req: Request, _res: Response,
 
 brainRouter.use(requireBrainKey);
 
-const batch = z.object({ items: z.array(z.unknown()).min(1).max(brain.MAX_BATCH, `At most ${brain.MAX_BATCH} items per request.`) });
+const batch = (max: number) => z.object({ items: z.array(z.unknown()).min(1).max(max, `At most ${max} items per request.`) });
 
-function batchRoute<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>, handle: Parameters<typeof brain.runBatch<T>>[3], opts: brain.BatchOptions<T>) {
+function batchRoute<T>(
+  path: string,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  handle: Parameters<typeof brain.runBatch<T>>[3],
+  opts: brain.BatchOptions<T>,
+  max = brain.MAX_BATCH,
+) {
+  const body = batch(max);
   brainRouter.post(
     path,
     asyncHandler(async (req, res) => {
-      const { items } = parseBody(batch, req.body);
+      const { items } = parseBody(body, req.body);
       res.json(await brain.runBatch(req.workspaceId!, items, schema, handle, opts));
     }),
   );
@@ -42,8 +49,8 @@ batchRoute("/companies", brain.companyItem, brain.upsertCompany, { label: "compa
 batchRoute("/contacts", brain.contactItem, brain.upsertContact, { label: "contacts", bulk: bulk.bulkContacts });
 batchRoute("/calls", brain.callItem, brain.upsertCall, { label: "calls", bulk: bulk.bulkCalls });
 batchRoute("/email-events", brain.emailEventItem, brain.upsertEmailEvent, { label: "email-events", bulk: bulk.bulkEmailEvents });
-// Few and many-sided (deals, owners, notifications): per item, 4 at a time.
-batchRoute("/handovers", brain.handoverItem, brain.applyHandover, { label: "handovers", concurrency: 4, groupKey: brain.handoverKey });
+// Few and many-sided (deals, owners, notifications): per item, 4 at a time, at most 50 per request (~12 s).
+batchRoute("/handovers", brain.handoverItem, brain.applyHandover, { label: "handovers", concurrency: 4, groupKey: brain.handoverKey }, brain.MAX_HANDOVER_BATCH);
 
 brainRouter.get(
   "/suppressions",

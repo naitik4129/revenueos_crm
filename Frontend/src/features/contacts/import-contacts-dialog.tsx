@@ -16,6 +16,7 @@ import { messageFromError, useCrmMutation } from "@/store";
 import type { ImportContactsResult } from "@/types";
 import {
   downloadSampleCsv,
+  importInChunks,
   parseContactsCsv,
   previewRowError,
   rowWantsDeal,
@@ -36,7 +37,15 @@ export function ImportContactsDialog({
   const [fileError, setFileError] = useState<string | null>(null);
   const [parsed, setParsed] = useState<ParsedContactsCsv | null>(null);
   const [result, setResult] = useState<ImportContactsResult | null>(null);
-  const importRows = useCrmMutation((rows: ImportContactRow[]) => backend.contacts.importCsv(rows));
+  const [imported, setImported] = useState(0);
+  // One mutation for the whole file, so the lists refresh once at the end.
+  const importRows = useCrmMutation((rows: ImportContactRow[]) =>
+    importInChunks(
+      rows,
+      async (chunk) => (await backend.contacts.importCsv(chunk)).data,
+      setImported,
+    ),
+  );
 
   const step = result ? "results" : parsed ? "preview" : "select";
   const rows = parsed?.rows ?? [];
@@ -48,6 +57,7 @@ export function ImportContactsDialog({
     setFileError(null);
     setParsed(null);
     setResult(null);
+    setImported(0);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
   const close = () => {
@@ -68,10 +78,13 @@ export function ImportContactsDialog({
   }
 
   async function submit() {
+    setImported(0);
     try {
-      const { data } = await importRows.mutateAsync(rows);
+      const data = await importRows.mutateAsync(rows);
       setResult(data);
-      toast.success(`Imported ${data.created.length} of ${data.totalRows} rows.`);
+      if (data.error)
+        toast.error(`Import stopped: ${data.error} ${data.created.length} rows were imported.`);
+      else toast.success(`Imported ${data.created.length} of ${data.totalRows} rows.`);
     } catch (error) {
       toast.error(messageFromError(error));
     }
@@ -191,6 +204,7 @@ export function ImportContactsDialog({
                 </p>
               )}
             </ScrollArea>
+            {importRows.isPending && <ImportProgress done={imported} total={rows.length} />}
           </div>
         )}
 
@@ -255,7 +269,7 @@ export function ImportContactsDialog({
           )}
           {step === "preview" && (
             <>
-              <Button variant="ghost" onClick={reset}>
+              <Button variant="ghost" disabled={importRows.isPending} onClick={reset}>
                 Back
               </Button>
               <Button disabled={importRows.isPending} onClick={() => void submit()}>
@@ -269,6 +283,27 @@ export function ImportContactsDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ImportProgress({ done, total }: { done: number; total: number }) {
+  const percent = total ? Math.round((done / total) * 100) : 0;
+  return (
+    <div className="space-y-1">
+      <div
+        role="progressbar"
+        aria-label="Import progress"
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-valuenow={done}
+        className="h-2 overflow-hidden rounded-full bg-muted"
+      >
+        <div className="h-full bg-primary transition-all" style={{ width: `${percent}%` }} />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {done} of {total} rows sent
+      </p>
+    </div>
   );
 }
 
