@@ -1,4 +1,5 @@
 import type { Queryable } from "../dto.js";
+import { ValidationError } from "../errors.js";
 import { sendBlockReason } from "./consent.service.js";
 import { notifyAdmins } from "./notifications.service.js";
 
@@ -166,4 +167,90 @@ export async function autoPauseChannel(db: Queryable, workspaceId: string, chann
     href: "/admin",
   });
   return true;
+}
+
+// --- Admin "Sending" tab ---
+
+/** The highest daily cap an admin may set (the table allows more; this is the safe limit). */
+export const SAFE_MAX_DAILY_CAP: Record<SendChannel, number> = { email: 500, whatsapp: 250 };
+
+export function sendPolicyToDto(row: SendPolicyRow, now = new Date()) {
+  const today = istParts(now).date;
+  return {
+    channel: row.channel,
+    paused: row.paused,
+    pauseReason: row.pause_reason,
+    pausedAt: row.paused_at?.toISOString() ?? null,
+    dailyCap: row.daily_cap,
+    safeMaxDailyCap: SAFE_MAX_DAILY_CAP[row.channel],
+    rampStart: row.ramp_start,
+    rampStepPerDay: row.ramp_step_per_day,
+    rampStartedAt: row.ramp_started_at?.toISOString() ?? null,
+    /** 1 on the first sending day; null until the first send. */
+    rampDay: row.ramp_started_at ? Math.max(0, istDaysBetween(row.ramp_started_at, now)) + 1 : null,
+    todayCap: capForDay(row, now),
+    sentToday: row.counter_day === today ? row.sent_today : 0,
+    minGapSeconds: row.min_gap_seconds,
+    maxGapSeconds: row.max_gap_seconds,
+    windowStart: row.window_start,
+    windowEnd: row.window_end,
+    windowDays: row.window_days,
+    nextSendAt: row.next_send_at && row.next_send_at > now ? row.next_send_at.toISOString() : null,
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+export interface SendPolicyPatch {
+  paused?: boolean;
+  pauseReason?: string;
+  dailyCap?: number;
+  rampStart?: number;
+  rampStepPerDay?: number;
+  minGapSeconds?: number;
+  maxGapSeconds?: number;
+  windowStart?: string;
+  windowEnd?: string;
+  windowDays?: number[];
+  /** Start the warm-up again from day 1 at the next send. */
+  restartRamp?: boolean;
+}
+
+/** Admin edit of one channel's policy: checks the result as a whole, then saves it. */
+export async function updateSendPolicy(db: Queryable, actorId: string, workspaceId: string, channel: SendChannel, patch: SendPolicyPatch) {
+  const row = await getSendPolicy(db, workspaceId, channel, true);
+  const next = {
+    dailyCap: patch.dailyCap ?? row.daily_cap,
+    rampStart: patch.rampStart ?? row.ramp_start,
+    rampStepPerDay: patch.rampStepPerDay ?? row.ramp_step_per_day,
+    minGap: patch.minGapSeconds ?? row.min_gap_seconds,
+    maxGap: patch.maxGapSeconds ?? row.max_gap_seconds,
+    windowStart: patch.windowStart ?? row.window_start,
+    windowEnd: patch.windowEnd ?? row.window_end,
+    windowDays: patch.windowDays ?? row.window_days,
+  };
+  const problems: string[] = [];
+  const max = SAFE_MAX_DAILY_CAP[channel];
+  if (next.dailyCap > max) problems.push(`Daily cap can be at most ${max} for ${label(channel)}.`);
+  if (next.rampStart > next.dailyCap) problems.push("Ramp start can't be above the daily cap.");
+  if (next.minGap > next.maxGap) problems.push("Minimum gap can't be above the maximum gap.");
+  if (toMinute(next.windowStart) >= toMinute(next.windowEnd)) problems.push("Sending hours must start before they end.");
+  if (new Set(next.windowDays).size !== next.windowDays.length) problems.push("Each sending day can be listed once.");
+  if (patch.paused && !patch.pauseReason?.trim() && !row.paused) problems.push("Say why the channel is paused.");
+  if (problems.length) throw new ValidationError(problems.join(" "), { problems });
+
+  const paused = patch.paused ?? row.paused;
+  const pauseReason = !paused ? null : patch.paused && !row.paused ? patch.pauseReason!.trim() : (patch.pauseReason?.trim() || row.pause_reason);
+  await db.query(
+    `update crm.send_policies
+        set daily_cap = $3, ramp_start = $4, ramp_step_per_day = $5, min_gap_seconds = $6, max_gap_seconds = $7,
+            window_start = $8, window_end = $9, window_days = $10, paused = $11, pause_reason = $12,
+            paused_at = case when $11 and not paused then now() when not $11 then null else paused_at end,
+            ramp_started_at = case when $13 then null else ramp_started_at end, updated_by = $14
+      where workspace_id = $1 and channel = $2`,
+    [
+      workspaceId, channel, next.dailyCap, next.rampStart, next.rampStepPerDay, next.minGap, next.maxGap,
+      next.windowStart, next.windowEnd, [...next.windowDays].sort((a, b) => a - b), paused, pauseReason, patch.restartRamp === true, actorId,
+    ],
+  );
+  return getSendPolicy(db, workspaceId, channel);
 }

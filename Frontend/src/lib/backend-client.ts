@@ -426,6 +426,49 @@ export interface BrainKey {
   revokedAt: string | null;
 }
 
+export type SendChannel = "email" | "whatsapp";
+
+/** One channel's sending policy for a workspace (Admin → Sending). */
+export interface SendPolicy {
+  channel: SendChannel;
+  paused: boolean;
+  pauseReason: string | null;
+  pausedAt: string | null;
+  dailyCap: number;
+  safeMaxDailyCap: number;
+  rampStart: number;
+  rampStepPerDay: number;
+  rampStartedAt: string | null;
+  /** 1 on the first sending day; null until the first send. */
+  rampDay: number | null;
+  todayCap: number;
+  sentToday: number;
+  minGapSeconds: number;
+  maxGapSeconds: number;
+  /** HH:MM, Asia/Kolkata. */
+  windowStart: string;
+  windowEnd: string;
+  /** ISO weekdays, 1 = Monday. */
+  windowDays: number[];
+  nextSendAt: string | null;
+  updatedAt: string;
+}
+
+export type SendPolicyPatch = Partial<
+  Pick<
+    SendPolicy,
+    | "paused"
+    | "dailyCap"
+    | "rampStart"
+    | "rampStepPerDay"
+    | "minGapSeconds"
+    | "maxGapSeconds"
+    | "windowStart"
+    | "windowEnd"
+    | "windowDays"
+  > & { pauseReason: string; restartRamp: boolean }
+>;
+
 export interface EmailConnection {
   provider: "resend" | "smtp" | null;
   enabled: boolean;
@@ -503,6 +546,12 @@ export const backend = {
         send<AdminUser>("POST", "/admin/users", input),
       update: (id: string, input: { role?: CrmRole; active?: boolean }) =>
         send<AdminUser>("PATCH", `/admin/users/${id}`, input),
+    },
+    sending: {
+      get: (workspaceId: string, signal?: AbortSignal) =>
+        get<Record<SendChannel, SendPolicy>>(`/admin/sending/${workspaceId}`, signal),
+      update: (workspaceId: string, channel: SendChannel, input: SendPolicyPatch) =>
+        send<SendPolicy>("PATCH", `/admin/sending/${workspaceId}/${channel}`, input),
     },
   },
   workspaces: {

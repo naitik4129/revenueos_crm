@@ -32,6 +32,7 @@ describe("send policies (PGlite)", () => {
   let db: Db;
   let policy: Policy;
   let sam: string;
+  let admin: string;
   let ws: string;
   let contactId: string;
   let n = 0;
@@ -56,6 +57,9 @@ describe("send policies (PGlite)", () => {
     sam = (await seed.query(`insert into auth.users (email) values ('sam@x.com') returning id`)).rows[0].id;
     await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, 'Sam', 'sam@x.com')`, [sam]);
     await seed.query(`insert into crm.profiles (id, role) values ($1, 'salesperson')`, [sam]);
+    admin = (await seed.query(`insert into auth.users (email) values ('admin@x.com') returning id`)).rows[0].id;
+    await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, 'Asha', 'admin@x.com')`, [admin]);
+    await seed.query(`insert into crm.profiles (id, role) values ($1, 'admin')`, [admin]);
     ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
     await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sam]);
     contactId = (await api("post", "/contacts", { firstName: "Ravi", email: "ravi@acme.com", phone: "+919876543210" })).body.id;
@@ -157,5 +161,71 @@ describe("send policies (PGlite)", () => {
     expect(sendEmail).toHaveBeenCalledTimes(1);
     expect(await one(`select status from crm.scheduled_actions where deal_id = $1`, [deal])).toEqual({ status: "completed" });
     expect((await one(`select sent_today from crm.send_policies where channel = 'email'`)).sent_today).toBe(1);
+  });
+
+  describe("admin Sending API (step 12)", () => {
+    const as = (user: string, method: "get" | "patch", path: string, body?: object) => {
+      const r = request(app)[method](`/api/v1/admin/sending${path}`).set("Authorization", `Bearer ${user}`);
+      return body ? r.send(body) : r;
+    };
+
+    it("admins only; an unknown workspace is 404", async () => {
+      expect((await as(sam, "get", `/${ws}`)).status).toBe(403);
+      expect((await as(sam, "patch", `/${ws}/email`, { dailyCap: 30 })).status).toBe(403);
+      expect((await as(admin, "get", "/6f1c2a9e-1b2c-4d3e-8f90-123456789abc")).status).toBe(404);
+    });
+
+    it("shows both channels with today's count, today's cap and the ramp day", async () => {
+      const fresh = await as(admin, "get", `/${ws}`);
+      expect(fresh.status).toBe(200);
+      expect(fresh.body.email).toMatchObject({ channel: "email", paused: false, dailyCap: 50, safeMaxDailyCap: 500, todayCap: 20, sentToday: 0, rampDay: null, windowStart: "09:00", windowEnd: "19:00", windowDays: [1, 2, 3, 4, 5] });
+      expect(fresh.body.whatsapp).toMatchObject({ channel: "whatsapp", dailyCap: 60, safeMaxDailyCap: 250, minGapSeconds: 45, maxGapSeconds: 120 });
+
+      await setPolicy(`window_start = '00:00', window_end = '24:00', window_days = '{1,2,3,4,5,6,7}', min_gap_seconds = 0, max_gap_seconds = 0`);
+      await check(new Date());
+      await check(new Date());
+      await seed.query(`update crm.send_policies set ramp_started_at = now() - interval '2 days' where channel = 'email'`);
+      expect((await as(admin, "get", `/${ws}`)).body.email).toMatchObject({ sentToday: 2, rampDay: 3, todayCap: 30 });
+    });
+
+    it("refuses unsafe or inconsistent values with every reason", async () => {
+      const bad = async (channel: string, body: object) => {
+        const res = await as(admin, "patch", `/${ws}/${channel}`, body);
+        expect(res.status).toBe(400);
+        return res.body.error.message as string;
+      };
+      expect(await bad("email", { dailyCap: 501 })).toBe("Daily cap can be at most 500 for Email.");
+      expect(await bad("whatsapp", { dailyCap: 251, rampStart: 300 })).toBe("Daily cap can be at most 250 for WhatsApp. Ramp start can't be above the daily cap.");
+      expect(await bad("email", { minGapSeconds: 200, maxGapSeconds: 100 })).toBe("Minimum gap can't be above the maximum gap.");
+      expect(await bad("email", { windowStart: "18:00", windowEnd: "09:00" })).toBe("Sending hours must start before they end.");
+      expect(await bad("email", { windowDays: [1, 1] })).toBe("Each sending day can be listed once.");
+      expect(await bad("email", { paused: true })).toBe("Say why the channel is paused.");
+      await bad("email", { windowStart: "9am" });
+      await bad("email", { windowDays: [] });
+      await bad("email", { dailyCap: 0 });
+      await bad("email", { sentToday: 0 });
+      await bad("email", {});
+      expect((await as(admin, "patch", `/${ws}/sms`, { dailyCap: 10 })).status).toBe(400);
+    });
+
+    it("saves every field, pauses with a reason, resumes, restarts the ramp; each change is audited", async () => {
+      const body = { dailyCap: 120, rampStart: 30, rampStepPerDay: 10, minGapSeconds: 90, maxGapSeconds: 240, windowStart: "10:00", windowEnd: "18:30", windowDays: [6, 1, 3] };
+      const saved = await as(admin, "patch", `/${ws}/email`, body);
+      expect(saved.status).toBe(200);
+      expect(saved.body).toMatchObject({ ...body, windowDays: [1, 3, 6] });
+
+      const paused = await as(admin, "patch", `/${ws}/email`, { paused: true, pauseReason: "  New domain warming up  " });
+      expect(paused.body).toMatchObject({ paused: true, pauseReason: "New domain warming up", pausedAt: expect.any(String) });
+      expect(await check(new Date())).toMatchObject({ ok: false, reason: "Email sending is paused: New domain warming up" });
+
+      await seed.query(`update crm.send_policies set ramp_started_at = now() - interval '5 days' where channel = 'email'`);
+      const resumed = await as(admin, "patch", `/${ws}/email`, { paused: false, restartRamp: true });
+      expect(resumed.body).toMatchObject({ paused: false, pauseReason: null, pausedAt: null, rampStartedAt: null, rampDay: null, todayCap: 30 });
+      expect((await one(`select updated_by from crm.send_policies where channel = 'email'`)).updated_by).toBe(admin);
+
+      const audits = (await seed.query(`select action, target_id, metadata from crm.admin_audit_events where action like 'sending.%' order by created_at`)).rows;
+      expect(audits.map((a) => a.action)).toEqual(["sending.email.update", "sending.email.update", "sending.email.update"]);
+      expect(audits[2]).toMatchObject({ target_id: ws, metadata: { paused: false, restartRamp: true } });
+    });
   });
 });
