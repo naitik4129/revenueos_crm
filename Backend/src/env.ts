@@ -24,6 +24,11 @@ const EnvSchema = z.object({
 
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
+  // Database connections per process (CLAUDE.md "Supabase facts": 60 max, ~37 free). API 10 + worker 4
+  // = 14, 28 while a deploy runs old and new side by side.
+  DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(10),
+  WORKER_DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(4),
+
   // The platform's own Google OAuth app, shared by every workspace so users
   // connect Google Calendar with one click instead of registering their own
   // client. All three must be set together (checked in loadEnv).

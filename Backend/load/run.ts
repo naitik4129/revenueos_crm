@@ -30,6 +30,7 @@ const RUNS = 20;
 const TARGET_MS = 1000;
 const BRAIN_TARGET_MS = 5000;
 const CSV_TARGET_MS = 10_000;
+const MIXED_MS = 60_000;
 const EXPLAIN_OVER_MS = 300;
 const RESULTS_FILE = fileURLToPath(new URL("./RESULTS.md", import.meta.url));
 
@@ -52,7 +53,17 @@ if (guard) {
 }
 const dbUrl = new URL(LOAD_DB_URL!);
 
-const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv", "mixed"];
+const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv", "mixed", "reads"];
+/** `--only reads`: the slowest reads of the baseline (group: name, as in the report). */
+const SLOW_READS = new Set([
+  "Pages: Company page (4 calls + tasks of 10 open deals)",
+  "Pages: Contact page (11 calls)",
+  "Pages: Deal page (10 calls)",
+  "Companies list: last page (offset 14950)",
+  "Contacts list: last page (offset 14950)",
+  "Deals list: last page (offset 7950)",
+  "Dashboard: GET /dashboard/summary",
+]);
 const QUICK_BATCHES = 3;
 const onlyAt = process.argv.indexOf("--only");
 const ONLY = onlyAt >= 0 ? (process.argv[onlyAt + 1] ?? "") : undefined;
@@ -126,6 +137,7 @@ const pct = (sorted: number[], p: number) => sorted[Math.min(sorted.length - 1, 
 
 /** Runs `fn` once to warm up, then RUNS times traced; one request (or one page) at a time. */
 async function bench(group: string, name: string, fn: (i: number) => Promise<Reply[]>, runs = RUNS, target = TARGET_MS) {
+  if (ONLY === "reads" && !SLOW_READS.has(`${group}: ${name}`)) return;
   await fn(0);
   const times: number[] = [];
   const counts: number[] = [];
@@ -261,7 +273,7 @@ function countFallbacks() {
   };
 }
 
-async function brainBatch(route: string, label: string, items: unknown[], key: string, traced: boolean) {
+async function brainBatch(route: string, label: string, items: unknown[], key: string, traced: boolean, record = true) {
   if (traced) startTrace();
   const before = fallbacks;
   const r = await call("POST", `/brain/v1/${route}`, { brainKey: key }, { items });
@@ -269,7 +281,7 @@ async function brainBatch(route: string, label: string, items: unknown[], key: s
   const body = r.json as { counts?: Record<string, number> } | null;
   const counts = body?.counts ? Object.entries(body.counts).map(([k, v]) => `${k} ${v}`).join(", ") : `HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 120)}`;
   const row = { route, batch: label, ms: r.ms, statements: statements?.length ?? null, counts, errors: r.status === 200 ? (body?.counts?.error ?? 0) : items.length, fallbacks: fallbacks - before };
-  batchRows.push(row);
+  if (record) batchRows.push(row);
   if (statements && (!slowestBatch || statements.length > slowestBatch.statements.length)) slowestBatch = { route, statements };
   log(`brain ${route} ${label}: ${(r.ms / 1000).toFixed(1)} s, ${row.statements ?? "?"} SQL, ${counts}${row.fallbacks ? `, ${row.fallbacks} FALLBACK(S)` : ""}`);
   return row;
@@ -342,6 +354,9 @@ async function main() {
   installTracer();
   countFallbacks();
   const { pool } = await import("../src/db.js");
+  const live = (await pool.query<{ statement_timeout: string }>(`show statement_timeout`)).rows[0]!.statement_timeout;
+  if (live !== "15s") throw new Error(`App pool statement_timeout is ${live}, expected 15s.`);
+  log(`App pool: max ${pool.options.max}, statement_timeout ${live}.`);
   const { createApp } = await import("../src/app.js");
   const { createBrainKey } = await import("../src/services/brain-keys.service.js");
   const server: Server = await new Promise((resolve) => {
@@ -369,7 +384,7 @@ async function main() {
   // --- Lists, as a salesperson in workspace A ---
   const list = (group: string, name: string, path: string, who: Who = sam) => bench(group, name, one(path, who));
   const contactN = (i: number) => 1 + ((i * 37) % sA.openDeals);
-  if (FULL) {
+  if (want("reads")) {
     log("Lists…");
     await list("App shell", "GET /me", "/me");
     await list("App shell", "GET /workspaces", "/workspaces");
@@ -569,12 +584,19 @@ async function main() {
         }
       }
     });
-    const concurrent = await Promise.all([5, 6, 7].map((b) => brainBatch("contacts", `${b + 1}/8 (3 at once, mixed load)`, contactBatch(b), keyA, false)));
+    // MIXED_MS of browsing; meanwhile contact batches run 3 at a time, again and again (batches 5-17 in turn:
+    // the first round of each creates and fills, later ones re-send, like the brain re-sending a list).
+    const concurrent: BatchRow[] = [];
+    const until = performance.now() + MIXED_MS;
+    for (let round = 0; performance.now() < until; round++) {
+      const bs = [0, 1, 2].map((k) => 5 + ((round * 3 + k) % 13));
+      concurrent.push(...(await Promise.all(bs.map((b) => brainBatch("contacts", `mixed round ${round + 1}`, contactBatch(b), keyA, false, false)))));
+    }
     browsing = false;
     await Promise.all(users);
     const userSorted = [...userTimes].sort((a, b) => a - b);
     mixed = { requests: userSorted.length, p50: pct(userSorted, 0.5), p95: pct(userSorted, 0.95), max: userSorted.at(-1) ?? 0, errors: userErrors, firstError: firstUserError, batchMs: concurrent.map((r) => r.ms) };
-    log(`Mixed: ${mixed.requests} user requests, p50 ${mixed.p50.toFixed(0)} ms, p95 ${mixed.p95.toFixed(0)} ms, max ${mixed.max.toFixed(0)} ms, ${mixed.errors} errors${firstUserError ? ` (first: ${firstUserError})` : ""}`);
+    log(`Mixed (${MIXED_MS / 1000} s): ${concurrent.length} brain batches, ${mixed.requests} user requests, p50 ${mixed.p50.toFixed(0)} ms, p95 ${mixed.p95.toFixed(0)} ms, max ${mixed.max.toFixed(0)} ms, ${mixed.errors} errors${firstUserError ? ` (first: ${firstUserError})` : ""}`);
     sam.token = await token("sam@load.local");
   }
 
@@ -708,6 +730,10 @@ interface RunResult {
 }
 
 const f = (ms: number) => (ms >= 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)}`);
+const batchSummary = (ms: number[]) => {
+  const sorted = [...ms].sort((a, b) => a - b);
+  return `${ms.length} batches, p50 ${fu(pct(sorted, 0.5))}, max ${fu(sorted.at(-1) ?? 0)}`;
+};
 const fu = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
 const ok = (ms: number, target: number) => (ms <= target ? "✅" : "❌");
 const when = (d: Date) => d.toISOString().slice(0, 16).replace("T", " ");
@@ -737,7 +763,7 @@ function section(r: RunResult) {
   const lines = [
     FULL ? `## Run ${when(r.startedAt)} UTC: full` : `## Quick run ${when(r.startedAt)} UTC: \`--only ${ONLY}\``,
     ``,
-    `- Postgres ${r.version} (local, native), Node ${process.version}, Windows. App pool \`max: 10\` as in \`src/db.ts\`.`,
+    `- Postgres ${r.version} (local, native), Node ${process.version}, Windows. App pool \`max: ${process.env.DB_POOL_MAX ?? 10}\` (\`DB_POOL_MAX\`, \`src/db.ts\`), connection timeout 5 s (then 503), statement timeout 15 s.`,
     `- **+${LATENCY_MS} ms per round trip** to the database and to Supabase Auth (TCP proxy, \`load/latency.ts\`).`,
     `- Seed: ${WORKSPACES.map((w) => `${w.key} ${w.contacts / 1000}k`).join(" / ")} contacts. All workspaces: ${Object.entries(r.seeded).map(([k, v]) => `${k} ${v.toLocaleString("en-US")}`).join(", ")}.`,
     `- Requests as a salesperson member of workspace A (admin for Admin rows); ${RUNS} timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).`,
@@ -773,11 +799,11 @@ function section(r: RunResult) {
     lines.push(
       `### Mixed load`,
       ``,
-      `10 users browsing workspace A (contacts list, deals board, contact, timeline, dashboard, tasks) while 3 contact batches of 500 run at once.`,
+      `10 users browsing workspace A (contacts list, deals board, contact, timeline, dashboard, tasks) for ${MIXED_MS / 1000} s while contact batches of 500 run 3 at a time, round after round.`,
       ``,
-      `| User requests | p50 | p95 | max | Errors | Brain batches (3 at once) |`,
-      `|---:|---:|---:|---:|---:|---|`,
-      `| ${r.mixed.requests} | ${f(r.mixed.p50)} | ${f(r.mixed.p95)} | ${f(r.mixed.max)} | ${r.mixed.errors ? `${r.mixed.errors} ❌ (first: ${r.mixed.firstError?.replace(/\|/g, "/")})` : 0} | ${r.mixed.batchMs.map((ms) => `${(ms / 1000).toFixed(1)} s`).join(", ")} |`,
+      `| User requests | p50 | p95 | max | Errors | Brain batches (3 at once) | |`,
+      `|---:|---:|---:|---:|---:|---|---|`,
+      `| ${r.mixed.requests} | ${f(r.mixed.p50)} | ${f(r.mixed.p95)} | ${f(r.mixed.max)} | ${r.mixed.errors ? `${r.mixed.errors} ❌ (first: ${r.mixed.firstError?.replace(/\|/g, "/")})` : 0} | ${batchSummary(r.mixed.batchMs)} | ${r.mixed.errors ? "❌" : ok(r.mixed.p95, TARGET_MS)} |`,
       ``,
     );
   }

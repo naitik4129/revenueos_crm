@@ -205,17 +205,22 @@ async function buildContext(db: Queryable, action: ScheduledActionRow): Promise<
  * are reclaimed. Returns ids only: each action's eligibility is computed right before it runs.
  */
 export async function claimDueActionIds(db: Queryable, limit: number): Promise<string[]> {
+  // Two claims, one per partial index (an `or` across them scans the whole table), then the earliest $1 of both.
   const claimed = await db.query<{ id: string }>(
-    `update crm.scheduled_actions
+    `with due as (
+       select id, scheduled_for from crm.scheduled_actions
+        where status in ('pending', 'due') and scheduled_for <= now()
+        order by scheduled_for asc limit $1
+          for update skip locked
+     ), stuck as (
+       select id, scheduled_for from crm.scheduled_actions
+        where status = 'executing' and last_attempt_at < now() - interval '15 minutes'
+        order by last_attempt_at asc limit $1
+          for update skip locked
+     )
+     update crm.scheduled_actions
         set status = 'executing', last_attempt_at = now()
-      where id in (
-        select id from crm.scheduled_actions
-         where (status in ('pending', 'due') and scheduled_for <= now())
-            or (status = 'executing' and last_attempt_at < now() - interval '15 minutes')
-         order by scheduled_for asc
-         limit $1
-         for update skip locked
-      )
+      where id in (select id from (select * from due union all select * from stuck) s order by scheduled_for asc limit $1)
       returning id`,
     [limit],
   );

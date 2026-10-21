@@ -1,3 +1,5 @@
+// First, before db.ts builds the pool: this process gets the worker's pool size and timeout.
+import "./workerProcess.js";
 import { pool } from "./db.js";
 import { workerEnv as env } from "./workerEnv.js";
 import { runAutomationTick } from "./services/automation-runner.js";

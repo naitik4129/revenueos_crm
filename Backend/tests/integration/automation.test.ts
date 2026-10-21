@@ -343,6 +343,22 @@ describe("automation and worker (PGlite)", () => {
       return { ...deal, runId: run.id as string, actionId };
     }
 
+    it("the app pool cancels statements after 15 s; the claim has an index per branch (014)", async () => {
+      // PGlite (one shared session) ignores per-connection settings; the load run checks the live value on Postgres 17.
+      expect(db.pool.options).toMatchObject({ statement_timeout: 15_000, connectionTimeoutMillis: 5_000, max: 10 });
+      const idx = await seed.query(`select indexname from pg_indexes where schemaname = 'crm' and tablename = 'scheduled_actions' order by 1`);
+      expect(idx.rows.map((r) => r.indexname)).toEqual(expect.arrayContaining(["scheduled_actions_due_idx", "scheduled_actions_executing_idx"]));
+    });
+
+    it("an action left executing is claimed again after 15 minutes, not before", async () => {
+      const { actionId } = await claimedEmail();
+      await seed.query(`update crm.scheduled_actions set last_attempt_at = now() - interval '5 minutes' where id = $1`, [actionId]);
+      expect(await claimAll()).not.toContain(actionId);
+      await seed.query(`update crm.scheduled_actions set last_attempt_at = now() - interval '20 minutes' where id = $1`, [actionId]);
+      expect(await claimAll()).toContain(actionId);
+      expect(await one(`select status, last_attempt_at > now() - interval '1 minute' as fresh from crm.scheduled_actions where id = $1`, [actionId])).toEqual({ status: "executing", fresh: true });
+    });
+
     it("DNC contact: the action is skipped and the run stopped", async () => {
       const { contactId, runId, actionId } = await claimedEmail();
       await api("post", `/contacts/${contactId}/dnc`, { reason: "Asked to stop" });

@@ -10,11 +10,22 @@ pg.types.setTypeParser(1082, (value) => value);
 // single dedicated connection per transaction, which is exactly what
 // pool.connect() + client.query gives us below — pool.query() alone would
 // not guarantee the same underlying connection across statements.
+//
+// Busy pool: the API waits at most 5 s for a connection, then answers 503 (errorMiddleware); the
+// worker waits up to 30 s (nobody is waiting on it). Any statement over 15 s is cancelled.
+const isWorker = process.env.CRM_PROCESS === "worker";
 export const pool = new Pool({
   connectionString: env.DATABASE_URL,
-  max: 10,
+  max: isWorker ? env.WORKER_DB_POOL_MAX : env.DB_POOL_MAX,
   idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: isWorker ? 30_000 : 5_000,
+  statement_timeout: 15_000,
 });
+
+/** pg-pool's error when no connection frees up within connectionTimeoutMillis. */
+export const isPoolTimeout = (err: unknown) => err instanceof Error && err.message === "timeout exceeded when trying to connect";
+/** Postgres cancelled the statement (statement_timeout). */
+export const isStatementTimeout = (err: unknown) => (err as { code?: string } | null)?.code === "57014";
 
 /**
  * Runs `fn` inside a single Postgres transaction: BEGIN, then either COMMIT
