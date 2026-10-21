@@ -195,7 +195,7 @@ All channels: limits per workspace in a new `crm.send_policies` (one row per wor
 6. List counts + company counts (items 7, 8). Done: contacts, companies and deals lists use `pageOf` (`dto.ts`): ids paged first (cheap columns, ORDER BY + LIMIT/OFFSET), then the full select for those rows only, kept in that order; the total is a separate `count(*)` run alongside (two pool connections for a moment). Companies: filters read `companies` only, the two count subqueries run for the page rows only; sorting by a count joins one grouped count (`COUNT_JOINS`). Deals join the next-task lateral only for `missingNextAction`. `listPaging.test.ts` pages every sort key both ways and the main filters 7 rows at a time against the old one-query lists: same rows, order, totals, counts.
 7. Deals board summary + column paging (item 3), parallel page loads. Done: `GET /deals/board-summary` (`ownerId`, `missingNextAction`, `search`, `perStage` 0-50) = count + amount per stage over every open deal, all 15 stages in order, and with `perStage` each stage's first deals (the list's default order). The board loads in **one request** (`perStage=20`): a first try with the summary plus 15 column requests at once put the 10-user mixed load at p95 1.9 s (pool queueing), so don't split it again. A column's own query (`/deals?outcome=open&stage=…` from offset 20, 20 at a time) starts at its first "Load more"; headers come from the summary, with moves still being saved applied until the summary is refetched (`stageHeaders`); the 500-deal limit is gone. Record pages load in one round: `GET /deals/:id/related` (contact, the contact's notes, company), `GET /contacts/:id/related` (company, the open deal's meetings), `GET /tasks?companyId=` (tasks on the company's deals or its contacts; replaces the first-10-deals shortcut, gap 10 done). `missingNextAction` is now `not exists` an open task (same rows as the next-task join).
 8. Bulk contacts endpoint + UI (gap 4). Done: `POST /contacts/bulk` (`runContactBulk`), as designed above. Each action is one set-based function over a list of ids (`assignContactOwners`, `setLifecycleStageMany`, `markDncMany`, `reactivateFromDncMany`, `deleteContactsMany`: lock in id order, decide per id, write in a few statements) and the **single actions are those functions with one id**, so both follow the same rules (500 per-id service calls would take ~30 s at 15 ms a round trip). Per id `ok`, or `skipped` + reason (already so, not found, merged, not allowed, open deal). Request-level checks: owner = active member (the single PATCH does not check this), lifting DNC and delete admin-only, delete `confirm` = the count. One `admin_audit_events` row per request (`contacts.bulk.<action>`). UI: bulk bar on the contacts page (Assign owner now one request; Lifecycle, Do Not Contact, admin Lift DNC and Delete with typed count + force), skipped list with names and reasons. Companies and deals still assign owners one PATCH each (`use-bulk-assign.ts`). Load: 500 ids per action 0.35-0.5 s, delete with force 1.6 s.
-9. Migration 015 send policies + worker enforcement (caps, ramp, hours, gaps, pause).
+9. Migration 015 send policies + worker enforcement (caps, ramp, hours, gaps, pause). Done: `crm.send_policies` (one row per workspace × `email`/`whatsapp`, created with defaults on first use: email cap 50, ramp 20 +5/day, gap 60-180 s; WhatsApp cap 60, ramp 20 +5/day, gap 45-120 s; both 09:00-19:00 IST Mon-Fri). `checkSendPolicy` (`send-policy.service.ts`) runs in its own transaction with the row locked before every **real workflow send**: paused (retry in 1 h) → hours (next window) → cap/ramp (next day's window) → gap (`next_send_at`) → consent (skip + timeline). An allowed send reserves its slot (`sent_today` for the IST `counter_day`, `next_send_at` = now + random gap; ramp starts at the first send), so parallel sends never burst. Deferrals keep the reason in `last_error` and use no retry. Dry runs and human-triggered sends (proposal/meeting) skip the policy; WhatsApp still has the manager's own claim (cap, spacing) on top.
 10. Resend webhook, bounce/complaint auto-pause, unsubscribe link + headers, MX check.
 11. WhatsApp engaged-only gate, STOP → opted out, failure auto-pause.
 12. Admin "Sending" tab.
@@ -203,7 +203,7 @@ All channels: limits per workspace in a new `crm.send_policies` (one row per wor
 ### Kept features
 CSV import, calls + routing, nurture workflows + worker, templates + attachments, email (Resend/SMTP), WhatsApp (Baileys), Google Calendar, meetings, proposals, tasks, DNC, merge, delete + audit, notifications, dashboard, workspaces, admin users.
 
-## Tables (35, all in `crm`)
+## Tables (36, all in `crm`)
 
 Identity
 1. `profiles` — CRM access record (role, is_active).
@@ -254,6 +254,9 @@ Brain intake (011)
 34. `email_activities` — one row per campaign email per contact; status = highest event so far.
 35. `brain_api_keys` — per-workspace service keys (hash only).
 
+Sending (015)
+36. `send_policies` — per workspace × channel: pause, daily cap + ramp, gaps, IST working window, today's counter.
+
 011 also adds `contacts.lifecycle_stage` (+ linkedin_url, country, location), `companies.headcount/linkedin_url/location`, AI-call fields on `calls`, `workspaces.default_owner_id`, and drops `external_source/external_id` from companies and contacts (replaced by `external_refs`).
 
 Enums live in `crm` too.
@@ -275,6 +278,7 @@ Enums live in `crm` too.
 13. `013_crm_deal_amount.sql` — `deals.amount` (numeric, ≥ 0, nullable) + `currency` (INR only, by check); the brain handover's `amount` fills an empty one.
 14. `014_crm_scale_indexes.sql` — scale indexes: `calls (workspace_id, occurred_at)`, `email_activities (workspace_id, sent_at)` and `(workspace_id, replied_at)` where replied, contacts and deals `(workspace_id, created_at desc)` and `(workspace_id, last_activity_at desc)`, `scheduled_actions (last_attempt_at) where status = 'executing'`. Indexes only; written, not run yet.
 15. `014a_crm_suppressions_indexes.sql` — indexes for the suppressions change feed: `contact_channels (updated_at)`, `dnc_events (created_at) where action = 'reactivated'`. Indexes only; written, not run yet.
+16. `015_crm_send_policies.sql` — `crm.send_policies` (sending limits per workspace × channel). Written, not run yet.
 
 Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the human runs it first).
 

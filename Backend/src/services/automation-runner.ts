@@ -1,4 +1,4 @@
-import { pool, withTransaction } from "../db.js";
+import { withTransaction } from "../db.js";
 import { renderTemplate } from "../domain/templateRenderer.js";
 import { htmlToWhatsAppText } from "../domain/htmlToWhatsAppText.js";
 import { sendEmail } from "../providers/email.provider.js";
@@ -6,7 +6,7 @@ import { sendWhatsApp } from "../providers/whatsapp.provider.js";
 import { PermanentProviderError, ProviderDeferredError } from "../providers/provider-errors.js";
 import { supabaseAdmin } from "../supabaseAdmin.js";
 import * as automation from "./automation.service.js";
-import { sendBlockReason } from "./consent.service.js";
+import { checkSendPolicy } from "./send-policy.service.js";
 import { TEMPLATE_ATTACHMENTS_BUCKET } from "./workflows.service.js";
 import { claimQueuedProposalWhatsappSends, processQueuedProposalWhatsappSend } from "./proposalSending.service.js";
 import { claimQueuedMeetingWhatsappSends, processQueuedMeetingWhatsappSend } from "./meetingScheduledNotification.service.js";
@@ -40,9 +40,15 @@ async function dispatchMessage(ctx: automation.ActionContext, opts: RunnerOption
     return { outcome: "success", providerMessageId: "DRY_RUN" };
   }
 
-  // Consent once more, immediately before the provider call.
-  const blocked = await sendBlockReason(pool, ctx.deal.contactId, isEmail ? "email" : "whatsapp");
-  if (blocked) return { blocked };
+  // Sending policy (pause, hours, cap/ramp, gap) and consent once more, immediately before the provider call.
+  const verdict = await withTransaction((db) =>
+    checkSendPolicy(db, { workspaceId: ctx.workspaceId, channel: isEmail ? "email" : "whatsapp", contactId: ctx.deal.contactId }),
+  );
+  if (!verdict.ok && verdict.kind === "skip") return { blocked: verdict.reason };
+  if (!verdict.ok) {
+    opts.log?.(`[worker] Deferred action ${ctx.action.id} until ${verdict.retryAt.toISOString()}: ${verdict.reason}`);
+    return { outcome: "deferred", error: verdict.reason, retryAt: verdict.retryAt };
+  }
 
   if (isEmail) {
     const attachments = await Promise.all(

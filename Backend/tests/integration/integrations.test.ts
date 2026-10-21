@@ -82,6 +82,12 @@ describe("integrations (PGlite, providers mocked)", () => {
 
     emailTemplate = (await api("post", "/templates", { name: "Email", channel: "email", subject: "Hi {{contact.firstName}}", body: "<p>Hello {{contact.firstName}}</p>" })).body.id;
     whatsappTemplate = (await api("post", "/templates", { name: "WA", channel: "whatsapp", body: "<p>Hello {{contact.firstName}}</p>" })).body.id;
+    // Sending policies wide open (any hour, no gap): these tests are about the providers, sendPolicy.test.ts about the limits.
+    await seed.query(
+      `insert into crm.send_policies (workspace_id, channel, daily_cap, ramp_start, min_gap_seconds, max_gap_seconds, window_start, window_end, window_days)
+       select w, ch, 2000, 2000, 0, 0, '00:00', '24:00', '{1,2,3,4,5,6,7}' from unnest($1::uuid[]) w, unnest('{email,whatsapp}'::text[]) ch`,
+      [[w1, w2]],
+    );
   }, 60_000);
 
   beforeEach(() => {
