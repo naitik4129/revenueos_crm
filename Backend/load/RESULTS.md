@@ -1200,3 +1200,559 @@ companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000
 Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
 
 Nothing over the threshold.
+
+## Quick run 2026-10-21 04:49 UTC: `--only brain-companies`
+
+- Postgres 17.11 (local, native), Node v24.18.0, Windows. App pool `max: 10` as in `src/db.ts`.
+- **+15 ms per round trip** to the database and to Supabase Auth (TCP proxy, `load/latency.ts`).
+- Seed: A 15k / B 5k / C 5k contacts. All workspaces: companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334.
+- Requests as a salesperson member of workspace A (admin for Admin rows); 20 timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).
+- Targets: p95 ≤ 1000 ms per request or page; brain batch of 500 ≤ 5 s.
+
+**Summary:** 0 of 3 brain batches over 5 s, 0 fallback(s) to one transaction per item.
+
+### Brain batches (500 items each, workspace A)
+
+| Route | Batch | Time | SQL | Result | Fallbacks | |
+|---|---|---:|---:|---|---:|---|
+| companies | 1/3 | 0.4 s | 9 | created 500, updated 0, unchanged 0, error 0 | 0 | ✅ |
+| companies | 2/3 | 0.4 s | 9 | created 500, updated 0, unchanged 0, error 0 | 0 | ✅ |
+| companies | 3/3 | 0.4 s | 9 | created 500, updated 0, unchanged 0, error 0 | 0 | ✅ |
+
+### Row counts after the run
+
+companies 26,500, contacts 25,000, contact_channels 50,000, external_refs 51,500, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 68,166, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334
+
+### EXPLAIN (ANALYZE, BUFFERS) for anything over 300 ms
+
+Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
+
+### Brain batch with the most SQL: companies (9 SQL)
+
+Statement (67.8 ms in the request, incl. 15 ms latency):
+
+```sql
+insert into crm.companies (id, workspace_id, name, domain, website, industry, location, city, country, headcount, phone, linkedin_url, source)
+  select x.id, $1, x.name, x.domain, x.website, x.industry, x.location, x.city, x.country, x.headcount, x.phone, x.linkedin_url, 'brain'
+  from jsonb_to_recordset($2::jsonb) as x(id uuid, name text, domain text, website text, industry text, location text, city text, country text, headcount integer, phone text, linkedin_url text)
+```
+
+```
+(not run: duplicate key value violates unique constraint "companies_pkey")
+Insert on companies  (cost=0.00..1.50 rows=0 width=0)
+  ->  Function Scan on jsonb_to_recordset x  (cost=0.00..1.50 rows=100 width=384)
+```
+
+Statement (63.9 ms in the request, incl. 15 ms latency):
+
+```sql
+insert into crm.external_refs (workspace_id, company_id, source, external_id)
+  select $1, x.id, x.source, x.external_id from jsonb_to_recordset($2::jsonb) as x(id uuid, source text, external_id text)
+  on conflict do nothing
+```
+
+```
+Insert on external_refs  (cost=0.00..1.50 rows=0 width=0) (actual time=13.437..13.437 rows=0 loops=1)
+  Conflict Resolution: NOTHING
+  Tuples Inserted: 0
+  Conflicting Tuples: 500
+  Buffers: shared hit=3000
+  ->  Function Scan on jsonb_to_recordset x  (cost=0.00..1.50 rows=100 width=136) (actual time=1.783..3.528 rows=500 loops=1)
+Planning Time: 0.154 ms
+Execution Time: 13.537 ms
+```
+
+Statement (57.6 ms in the request, incl. 15 ms latency):
+
+```sql
+select 'ref' as kind, r.source as a, r.external_id as b, r.company_id as id
+  from crm.external_refs r join unnest($2::text[], $3::text[]) p(s, e) on r.source = p.s and r.external_id = p.e
+  where r.workspace_id = $1 and r.company_id is not null
+  union all
+  select 'domain', lower(co.domain), null, co.id from crm.companies co where co.workspace_id = $1 and lower(co.domain) = any($4::text[])
+```
+
+```
+Append  (cost=1540.75..2846.08 rows=14479 width=112) (actual time=8.708..23.220 rows=1000 loops=1)
+  Buffers: shared hit=1324
+  ->  Hash Join  (cost=1540.75..1550.76 rows=1 width=64) (actual time=8.707..8.976 rows=500 loops=1)
+        Hash Cond: ((p.s = r.source) AND (p.e = r.external_id))
+        Buffers: shared hit=664
+        ->  Function Scan on p  (cost=0.01..5.00 rows=500 width=64) (actual time=0.083..0.136 rows=500 loops=1)
+        ->  Hash  (cost=1308.41..1308.41 rows=15489 width=32) (actual time=8.606..8.606 rows=16500 loops=1)
+              Buckets: 32768 (originally 16384)  Batches: 1 (originally 1)  Memory Usage: 1313kB
+              Buffers: shared hit=664
+              ->  Seq Scan on external_refs r  (cost=0.00..1308.41 rows=15489 width=32) (actual time=1.133..4.996 rows=16500 loops=1)
+                    Filter: ((company_id IS NOT NULL) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+                    Rows Removed by Filter: 35000
+                    Buffers: shared hit=664
+  ->  Seq Scan on companies co  (cost=1.25..1222.92 rows=14478 width=112) (actual time=12.410..14.191 rows=500 loops=1)
+        Filter: ((workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid) AND (lower(domain) = ANY ('{lt-0-0.example,lt-0-1.example,lt-0-2.example,lt-0-3.example,lt-0-4.example,lt-0-5.example,lt-0-6.example,lt-0-7.example,lt-0-8.example,lt-0-9.example,lt-0-10.example,lt-0-11.example,lt-0-12.example,lt-0-13.example,lt-0-14.example,lt-0-15.example,lt-0-16.example,lt-0-17.example,lt-0-18.example,lt-0-19.example,lt-0-20.example,lt-0-21.example,lt-0-22.example,lt-0-23.example,lt-0-24.example,lt-0-25.example,lt-0-26.example,lt-0-27.example,lt-0-28.example,lt-0-29.example,lt-0-30.example,lt-0-31.example,lt-0-32.example,lt-0-33.example,lt-0-34.example,lt-0-35.example,lt-0-36.example,lt-0-37.example,lt-0-38.example,lt-0-39.example,lt-0-40.example,lt-0-41.example,lt-0-42.example,lt-0-43.example,lt-0-44.example,lt-0-45.example,lt-0-46.example,lt-0-47.example,lt-0-48.example,lt-0-49.example,lt-0-50.example,lt-0-51.example,lt-0-52.example,lt-0-53.example,lt-0-54.example,lt-0-55.example,lt-0-56.example,lt-0-57.example,lt-0-58.example,lt-0-59.example,lt-0-60.example,lt-0-61.example,lt-0-62.example,lt-0-63.example,lt-0-64.example,lt-0-65.example,lt-0-66.example,lt-0-67.example,lt-0-68.example,lt-0-69.example,lt-0-70.example,lt-0-71.example,lt-0-72.example,lt-0-73.example,lt-0-74.example,lt-0-75.example,lt-0-76.example,lt-0-77.example,lt-0-78.example,lt-0-79.example,lt-0-80.example,lt-0-81.example,lt-0-82.example,lt-0-83.example,lt-0-84.example,lt-0-85.example,lt-0-86.example,lt-0-87.example,lt-0-88.example,lt-0-89.example,lt-0-90.example,lt-0-91.example,lt-0-92.example,lt-0-93.example,lt-0-94.example,lt-0-95.example,lt-0-96.example,lt-0-97.example,lt-0-98.example,lt-0-99.example,lt-0-100.example,lt-0-101.example,lt-0-102.example,lt-0-103.example,lt-0-104.example,lt-0-105.example,lt-0-106.example,lt-0-107.example,lt-0-108.example,lt-0-109.example,lt-0-110.example,lt-0-111.example,lt-0-112.example,lt-0-113.example,lt-0-114.example,lt-0-115.example,lt-0-116.example,lt-0-117.example,lt-0-118.example,lt-0-119.example,lt-0-120.example,lt-0-121.example,lt-0-122.example,lt-0-123.example,lt-0-124.example,lt-0-125.example,lt-0-126.example,lt-0-127.example,lt-0-128.example,lt-0-129.example,lt-0-130.example,lt-0-131.example,lt-0-132.example,lt-0-133.example,lt-0-134.example,lt-0-135.example,lt-0-136.example,lt-0-137.example,lt-0-138.example,lt-0-139.example,lt-0-140.example,lt-0-141.example,lt-0-142.example,lt-0-143.example,lt-0-144.example,lt-0-145.example,lt-0-146.example,lt-0-147.example,lt-0-148.example,lt-0-149.example,lt-0-150.example,lt-0-151.example,lt-0-152.example,lt-0-153.example,lt-0-154.example,lt-0-155.example,lt-0-156.example,lt-0-157.example,lt-0-158.example,lt-0-159.example,lt-0-160.example,lt-0-161.example,lt-0-162.example,lt-0-163.example,lt-0-164.example,lt-0-165.example,lt-0-166.example,lt-0-167.example,lt-0-168.example,lt-0-169.example,lt-0-170.example,lt-0-171.example,lt-0-172.example,lt-0-173.example,lt-0-174.example,lt-0-175.example,lt-0-176.example,lt-0-177.example,lt-0-178.example,lt-0-179.example,lt-0-180.example,lt-0-181.example,lt-0-182.example,lt-0-183.example,lt-0-184.example,lt-0-185.example,lt-0-186.example,lt-0-187.example,lt-0-188.example,lt-0-189.example,lt-0-190.example,lt-0-191.example,lt-0-192.example,lt-0-193.example,lt-0-194.example,lt-0-195.example,lt-0-196.example,lt-0-197.example,lt-0-198.example,lt-0-199.example,lt-0-200.example,lt-0-201.example,lt-0-202.example,lt-0-203.example,lt-0-204.example,lt-0-205.example,lt-0-206.example,lt-0-207.example,lt-0-208.example,lt-0-209.example,lt-0-210.example,lt-0-211.example,lt-0-212.example,lt-0-213.example,lt-0-214.example,lt-0-215.example,lt-0-216.example,lt-0-217.example,lt-0-218.example,lt-0-219.example,lt-0-220.example,lt-0-221.example,lt-0-222.example,lt-0-223.example,lt-0-224.example,lt-0-225.example,lt-0-226.example,lt-0-227.example,lt-0-228.example,lt-0-229.example,lt-0-230.example,lt-0-231.example,lt-0-232.example,lt-0-233.example,lt-0-234.example,lt-0-235.example,lt-0-236.example,lt-0-237.example,lt-0-238.example,lt-0-239.example,lt-0-240.example,lt-0-241.example,lt-0-242.example,lt-0-243.example,lt-0-244.example,lt-0-245.example,lt-0-246.example,lt-0-247.example,lt-0-248.example,lt-0-249.example,lt-0-250.example,lt-0-251.example,lt-0-252.example,lt-0-253.example,lt-0-254.example,lt-0-255.example,lt-0-256.example,lt-0-257.example,lt-0-258.example,lt-0-259.example,lt-0-260.example,lt-0-261.example,lt-0-262.example,lt-0-263.example,lt-0-264.example,lt-0-265.example,lt-0-266.example,lt-0-267.example,lt-0-268.example,lt-0-269.example,lt-0-270.example,lt-0-271.example,lt-0-272.example,lt-0-273.example,lt-0-274.example,lt-0-275.example,lt-0-276.example,lt-0-277.example,lt-0-278.example,lt-0-279.example,lt-0-280.example,lt-0-281.example,lt-0-282.example,lt-0-283.example,lt-0-284.example,lt-0-285.example,lt-0-286.example,lt-0-287.example,lt-0-288.example,lt-0-289.example,lt-0-290.example,lt-0-291.example,lt-0-292.example,lt-0-293.example,lt-0-294.example,lt-0-295.example,lt-0-296.example,lt-0-297.example,lt-0-298.example,lt-0-299.example,lt-0-300.example,lt-0-301.example,lt-0-302.example,lt-0-303.example,lt-0-304.example,lt-0-305.example,lt-0-306.example,lt-0-307.example,lt-0-308.example,lt-0-309.example,lt-0-310.example,lt-0-311.example,lt-0-312.example,lt-0-313.example,lt-0-314.example,lt-0-315.example,lt-0-316.example,lt-0-317.example,lt-0-318.example,lt-0-319.example,lt-0-320.example,lt-0-321.example,lt-0-322.example,lt-0-323.example,lt-0-324.example,lt-0-325.example,lt-0-326.example,lt-0-327.example,lt-0-328.example,lt-0-329.example,lt-0-330.example,lt-0-331.example,lt-0-332.example,lt-0-333.example,lt-0-334.example,lt-0-335.example,lt-0-336.example,lt-0-337.example,lt-0-338.example,lt-0-339.example,lt-0-340.example,lt-0-341.example,lt-0-342.example,lt-0-343.example,lt-0-344.example,lt-0-345.example,lt-0-346.example,lt-0-347.example,lt-0-348.example,lt-0-349.example,lt-0-350.example,lt-0-351.example,lt-0-352.example,lt-0-353.example,lt-0-354.example,lt-0-355.example,lt-0-356.example,lt-0-357.example,lt-0-358.example,lt-0-359.example,lt-0-360.example,lt-0-361.example,lt-0-362.example,lt-0-363.example,lt-0-364.example,lt-0-365.example,lt-0-366.example,lt-0-367.example,lt-0-368.example,lt-0-369.example,lt-0-370.example,lt-0-371.example,lt-0-372.example,lt-0-373.example,lt-0-374.example,lt-0-375.example,lt-0-376.example,lt-0-377.example,lt-0-378.example,lt-0-379.example,lt-0-380.example,lt-0-381.example,lt-0-382.example,lt-0-383.example,lt-0-384.example,lt-0-385.example,lt-0-386.example,lt-0-387.example,lt-0-388.example,lt-0-389.example,lt-0-390.example,lt-0-391.example,lt-0-392.example,lt-0-393.example,lt-0-394.example,lt-0-395.example,lt-0-396.example,lt-0-397.example,lt-0-398.example,lt-0-399.example,lt-0-400.example,lt-0-401.example,lt-0-402.example,lt-0-403.example,lt-0-404.example,lt-0-405.example,lt-0-406.example,lt-0-407.example,lt-0-408.example,lt-0-409.example,lt-0-410.example,lt-0-411.example,lt-0-412.example,lt-0-413.example,lt-0-414.example,lt-0-415.example,lt-0-416.example,lt-0-417.example,lt-0-418.example,lt-0-419.example,lt-0-420.example,lt-0-421.example,lt-0-422.example,lt-0-423.example,lt-0-424.example,lt-0-425.example,lt-0-426.example,lt-0-427.example,lt-0-428.example,lt-0-429.example,lt-0-430.example,lt-0-431.example,lt-0-432.example,lt-0-433.example,lt-0-434.example,lt-0-435.example,lt-0-436.example,lt-0-437.example,lt-0-438.example,lt-0-439.example,lt-0-440.example,lt-0-441.example,lt-0-442.example,lt-0-443.example,lt-0-444.example,lt-0-445.example,lt-0-446.example,lt-0-447.example,lt-0-448.example,lt-0-449.example,lt-0-450.example,lt-0-451.example,lt-0-452.example,lt-0-453.example,lt-0-454.example,lt-0-455.example,lt-0-456.example,lt-0-457.example,lt-0-458.example,lt-0-459.example,lt-0-460.example,lt-0-461.example,lt-0-462.example,lt-0-463.example,lt-0-464.example,lt-0-465.example,lt-0-466.example,lt-0-467.example,lt-0-468.example,lt-0-469.example,lt-0-470.example,lt-0-471.example,lt-0-472.example,lt-0-473.example,lt-0-474.example,lt-0-475.example,lt-0-476.example,lt-0-477.example,lt-0-478.example,lt-0-479.example,lt-0-480.example,lt-0-481.example,lt-0-482.example,lt-0-483.example,lt-0-484.example,lt-0-485.example,lt-0-486.example,lt-0-487.example,lt-0-488.example,lt-0-489.example,lt-0-490.example,lt-0-491.example,lt-0-492.example,lt-0-493.example,lt-0-494.example,lt-0-495.example,lt-0-496.example,lt-0-497.example,lt-0-498.example,lt-0-499.example}'::text[])))
+        Rows Removed by Filter: 26000
+        Buffers: shared hit=660
+Planning:
+  Buffers: shared hit=28
+Planning Time: 0.575 ms
+Execution Time: 23.497 ms
+```
+
+## Quick run 2026-10-21 04:49 UTC: `--only brain-contacts`
+
+- Postgres 17.11 (local, native), Node v24.18.0, Windows. App pool `max: 10` as in `src/db.ts`.
+- **+15 ms per round trip** to the database and to Supabase Auth (TCP proxy, `load/latency.ts`).
+- Seed: A 15k / B 5k / C 5k contacts. All workspaces: companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334.
+- Requests as a salesperson member of workspace A (admin for Admin rows); 20 timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).
+- Targets: p95 ≤ 1000 ms per request or page; brain batch of 500 ≤ 5 s.
+
+**Summary:** 0 of 3 brain batches over 5 s, 0 fallback(s) to one transaction per item.
+
+### Brain batches (500 items each, workspace A)
+
+| Route | Batch | Time | SQL | Result | Fallbacks | |
+|---|---|---:|---:|---|---:|---|
+| contacts | 1/3 | 0.5 s | 11 | created 250, updated 250, unchanged 0, error 0 | 0 | ✅ |
+| contacts | 2/3 | 0.5 s | 11 | created 250, updated 250, unchanged 0, error 0 | 0 | ✅ |
+| contacts | 3/3 | 0.5 s | 11 | created 250, updated 250, unchanged 0, error 0 | 0 | ✅ |
+
+### Row counts after the run
+
+companies 25,000, contacts 25,750, contact_channels 50,000, external_refs 50,750, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 67,416, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334
+
+### EXPLAIN (ANALYZE, BUFFERS) for anything over 300 ms
+
+Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
+
+### Brain batch with the most SQL: contacts (11 SQL)
+
+Statement (100.9 ms in the request, incl. 15 ms latency):
+
+```sql
+select 'ref' as kind, r.source as a, r.external_id as b, r.contact_id as id
+  from crm.external_refs r join unnest($2::text[], $3::text[]) p(s, e) on r.source = p.s and r.external_id = p.e
+  where r.workspace_id = $1 and r.contact_id is not null
+  union all
+  select 'company', r.source, r.external_id, r.company_id
+  from crm.external_refs r join unnest($4::text[], $5::text[]) p(s, e) on r.source = p.s and r.external_id = p.e
+  where r.workspace_id = $1 and r.company_id is not null
+  union all
+  select 'email', lower(c.email), null, c.id from crm.contacts c where c.workspace_id = $1 and lower(c.email) = any($6::text[])
+  union all
+  select 'phone', c.phone_e164, null, c.id from crm.contacts c where c.workspace_id = $1 and c.phone_e164 = any($7::text[])
+```
+
+```
+Gather  (cost=2517.35..5048.11 rows=11632 width=112) (actual time=6.182..181.723 rows=1000 loops=1)
+  Workers Planned: 2
+  Workers Launched: 2
+  Buffers: shared hit=1840
+  ->  Parallel Append  (cost=1517.35..2884.91 rows=4847 width=112) (actual time=0.197..23.394 rows=333 loops=3)
+        Buffers: shared hit=1840
+        ->  Hash Join  (cost=1519.06..1529.07 rows=1 width=64) (actual time=14.335..14.929 rows=500 loops=1)
+              Hash Cond: ((p.s = r.source) AND (p.e = r.external_id))
+              Buffers: shared hit=654
+              ->  Function Scan on p  (cost=0.01..5.00 rows=500 width=64) (actual time=0.141..0.259 rows=500 loops=1)
+              ->  Hash  (cost=1288.70..1288.70 rows=15357 width=32) (actual time=13.951..13.952 rows=15750 loops=1)
+                    Buckets: 16384  Batches: 1  Memory Usage: 1119kB
+                    Buffers: shared hit=654
+                    ->  Seq Scan on external_refs r  (cost=0.00..1288.70 rows=15357 width=32) (actual time=0.059..8.401 rows=15750 loops=1)
+                          Filter: ((contact_id IS NOT NULL) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+                          Rows Removed by Filter: 35000
+                          Buffers: shared hit=654
+        ->  Hash Join  (cost=1517.35..1522.36 rows=1 width=64) (actual time=15.828..15.830 rows=0 loops=1)
+              Hash Cond: ((p_1.s = r_1.source) AND (p_1.e = r_1.external_id))
+              Buffers: shared hit=654
+              ->  Function Scan on p_1  (cost=0.01..2.50 rows=250 width=64) (actual time=0.056..0.082 rows=250 loops=1)
+              ->  Hash  (cost=1288.70..1288.70 rows=15243 width=32) (actual time=15.600..15.601 rows=15000 loops=1)
+                    Buckets: 16384  Batches: 1  Memory Usage: 1084kB
+                    Buffers: shared hit=654
+                    ->  Seq Scan on external_refs r_1  (cost=0.00..1288.70 rows=15243 width=32) (actual time=1.857..8.798 rows=15000 loops=1)
+                          Filter: ((company_id IS NOT NULL) AND (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid))
+                          Rows Removed by Filter: 35750
+                          Buffers: shared hit=654
+        ->  Bitmap Heap Scan on contacts c  (cost=187.24..1338.31 rows=11381 width=112) (actual time=35.328..38.647 rows=250 loops=1)
+              Recheck Cond: (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid)
+              Filter: (lower(email) = ANY ('{brain.0.0@lt-0-0.example,brain.0.2@lt-0-2.example,brain.0.4@lt-0-4.example,brain.0.6@lt-0-6.example,brain.0.8@lt-0-8.example,brain.0.10@lt-0-10.example,brain.0.12@lt-0-12.example,brain.0.14@lt-0-14.example,brain.0.16@lt-0-16.example,brain.0.18@lt-0-18.example,brain.0.20@lt-0-20.example,brain.0.22@lt-0-22.example,brain.0.24@lt-0-24.example,brain.0.26@lt-0-26.example,brain.0.28@lt-0-28.example,brain.0.30@lt-0-30.example,brain.0.32@lt-0-32.example,brain.0.34@lt-0-34.example,brain.0.36@lt-0-36.example,brain.0.38@lt-0-38.example,brain.0.40@lt-0-40.example,brain.0.42@lt-0-42.example,brain.0.44@lt-0-44.example,brain.0.46@lt-0-46.example,brain.0.48@lt-0-48.example,brain.0.50@lt-0-50.example,brain.0.52@lt-0-52.example,brain.0.54@lt-0-54.example,brain.0.56@lt-0-56.example,brain.0.58@lt-0-58.example,brain.0.60@lt-0-60.example,brain.0.62@lt-0-62.example,brain.0.64@lt-0-64.example,brain.0.66@lt-0-66.example,brain.0.68@lt-0-68.example,brain.0.70@lt-0-70.example,brain.0.72@lt-0-72.example,brain.0.74@lt-0-74.example,brain.0.76@lt-0-76.example,brain.0.78@lt-0-78.example,brain.0.80@lt-0-80.example,brain.0.82@lt-0-82.example,brain.0.84@lt-0-84.example,brain.0.86@lt-0-86.example,brain.0.88@lt-0-88.example,brain.0.90@lt-0-90.example,brain.0.92@lt-0-92.example,brain.0.94@lt-0-94.example,brain.0.96@lt-0-96.example,brain.0.98@lt-0-98.example,brain.0.100@lt-0-100.example,brain.0.102@lt-0-102.example,brain.0.104@lt-0-104.example,brain.0.106@lt-0-106.example,brain.0.108@lt-0-108.example,brain.0.110@lt-0-110.example,brain.0.112@lt-0-112.example,brain.0.114@lt-0-114.example,brain.0.116@lt-0-116.example,brain.0.118@lt-0-118.example,brain.0.120@lt-0-120.example,brain.0.122@lt-0-122.example,brain.0.124@lt-0-124.example,brain.0.126@lt-0-126.example,brain.0.128@lt-0-128.example,brain.0.130@lt-0-130.example,brain.0.132@lt-0-132.example,brain.0.134@lt-0-134.example,brain.0.136@lt-0-136.example,brain.0.138@lt-0-138.example,brain.0.140@lt-0-140.example,brain.0.142@lt-0-142.example,brain.0.144@lt-0-144.example,brain.0.146@lt-0-146.example,brain.0.148@lt-0-148.example,brain.0.150@lt-0-150.example,brain.0.152@lt-0-152.example,brain.0.154@lt-0-154.example,brain.0.156@lt-0-156.example,brain.0.158@lt-0-158.example,brain.0.160@lt-0-160.example,brain.0.162@lt-0-162.example,brain.0.164@lt-0-164.example,brain.0.166@lt-0-166.example,brain.0.168@lt-0-168.example,brain.0.170@lt-0-170.example,brain.0.172@lt-0-172.example,brain.0.174@lt-0-174.example,brain.0.176@lt-0-176.example,brain.0.178@lt-0-178.example,brain.0.180@lt-0-180.example,brain.0.182@lt-0-182.example,brain.0.184@lt-0-184.example,brain.0.186@lt-0-186.example,brain.0.188@lt-0-188.example,brain.0.190@lt-0-190.example,brain.0.192@lt-0-192.example,brain.0.194@lt-0-194.example,brain.0.196@lt-0-196.example,brain.0.198@lt-0-198.example,brain.0.200@lt-0-200.example,brain.0.202@lt-0-202.example,brain.0.204@lt-0-204.example,brain.0.206@lt-0-206.example,brain.0.208@lt-0-208.example,brain.0.210@lt-0-210.example,brain.0.212@lt-0-212.example,brain.0.214@lt-0-214.example,brain.0.216@lt-0-216.example,brain.0.218@lt-0-218.example,brain.0.220@lt-0-220.example,brain.0.222@lt-0-222.example,brain.0.224@lt-0-224.example,brain.0.226@lt-0-226.example,brain.0.228@lt-0-228.example,brain.0.230@lt-0-230.example,brain.0.232@lt-0-232.example,brain.0.234@lt-0-234.example,brain.0.236@lt-0-236.example,brain.0.238@lt-0-238.example,brain.0.240@lt-0-240.example,brain.0.242@lt-0-242.example,brain.0.244@lt-0-244.example,brain.0.246@lt-0-246.example,brain.0.248@lt-0-248.example,brain.0.250@lt-0-250.example,brain.0.252@lt-0-252.example,brain.0.254@lt-0-254.example,brain.0.256@lt-0-256.example,brain.0.258@lt-0-258.example,brain.0.260@lt-0-260.example,brain.0.262@lt-0-262.example,brain.0.264@lt-0-264.example,brain.0.266@lt-0-266.example,brain.0.268@lt-0-268.example,brain.0.270@lt-0-270.example,brain.0.272@lt-0-272.example,brain.0.274@lt-0-274.example,brain.0.276@lt-0-276.example,brain.0.278@lt-0-278.example,brain.0.280@lt-0-280.example,brain.0.282@lt-0-282.example,brain.0.284@lt-0-284.example,brain.0.286@lt-0-286.example,brain.0.288@lt-0-288.example,brain.0.290@lt-0-290.example,brain.0.292@lt-0-292.example,brain.0.294@lt-0-294.example,brain.0.296@lt-0-296.example,brain.0.298@lt-0-298.example,brain.0.300@lt-0-300.example,brain.0.302@lt-0-302.example,brain.0.304@lt-0-304.example,brain.0.306@lt-0-306.example,brain.0.308@lt-0-308.example,brain.0.310@lt-0-310.example,brain.0.312@lt-0-312.example,brain.0.314@lt-0-314.example,brain.0.316@lt-0-316.example,brain.0.318@lt-0-318.example,brain.0.320@lt-0-320.example,brain.0.322@lt-0-322.example,brain.0.324@lt-0-324.example,brain.0.326@lt-0-326.example,brain.0.328@lt-0-328.example,brain.0.330@lt-0-330.example,brain.0.332@lt-0-332.example,brain.0.334@lt-0-334.example,brain.0.336@lt-0-336.example,brain.0.338@lt-0-338.example,brain.0.340@lt-0-340.example,brain.0.342@lt-0-342.example,brain.0.344@lt-0-344.example,brain.0.346@lt-0-346.example,brain.0.348@lt-0-348.example,brain.0.350@lt-0-350.example,brain.0.352@lt-0-352.example,brain.0.354@lt-0-354.example,brain.0.356@lt-0-356.example,brain.0.358@lt-0-358.example,brain.0.360@lt-0-360.example,brain.0.362@lt-0-362.example,brain.0.364@lt-0-364.example,brain.0.366@lt-0-366.example,brain.0.368@lt-0-368.example,brain.0.370@lt-0-370.example,brain.0.372@lt-0-372.example,brain.0.374@lt-0-374.example,brain.0.376@lt-0-376.example,brain.0.378@lt-0-378.example,brain.0.380@lt-0-380.example,brain.0.382@lt-0-382.example,brain.0.384@lt-0-384.example,brain.0.386@lt-0-386.example,brain.0.388@lt-0-388.example,brain.0.390@lt-0-390.example,brain.0.392@lt-0-392.example,brain.0.394@lt-0-394.example,brain.0.396@lt-0-396.example,brain.0.398@lt-0-398.example,brain.0.400@lt-0-400.example,brain.0.402@lt-0-402.example,brain.0.404@lt-0-404.example,brain.0.406@lt-0-406.example,brain.0.408@lt-0-408.example,brain.0.410@lt-0-410.example,brain.0.412@lt-0-412.example,brain.0.414@lt-0-414.example,brain.0.416@lt-0-416.example,brain.0.418@lt-0-418.example,brain.0.420@lt-0-420.example,brain.0.422@lt-0-422.example,brain.0.424@lt-0-424.example,brain.0.426@lt-0-426.example,brain.0.428@lt-0-428.example,brain.0.430@lt-0-430.example,brain.0.432@lt-0-432.example,brain.0.434@lt-0-434.example,brain.0.436@lt-0-436.example,brain.0.438@lt-0-438.example,brain.0.440@lt-0-440.example,brain.0.442@lt-0-442.example,brain.0.444@lt-0-444.example,brain.0.446@lt-0-446.example,brain.0.448@lt-0-448.example,brain.0.450@lt-0-450.example,brain.0.452@lt-0-452.example,brain.0.454@lt-0-454.example,brain.0.456@lt-0-456.example,brain.0.458@lt-0-458.example,brain.0.460@lt-0-460.example,brain.0.462@lt-0-462.example,brain.0.464@lt-0-464.example,brain.0.466@lt-0-466.example,brain.0.468@lt-0-468.example,brain.0.470@lt-0-470.example,brain.0.472@lt-0-472.example,brain.0.474@lt-0-474.example,brain.0.476@lt-0-476.example,brain.0.478@lt-0-478.example,brain.0.480@lt-0-480.example,brain.0.482@lt-0-482.example,brain.0.484@lt-0-484.example,brain.0.486@lt-0-486.example,brain.0.488@lt-0-488.example,brain.0.490@lt-0-490.example,brain.0.492@lt-0-492.example,brain.0.494@lt-0-494.example,brain.0.496@lt-0-496.example,brain.0.498@lt-0-498.example}'::text[]))
+              Rows Removed by Filter: 15500
+              Heap Blocks: exact=503
+              Buffers: shared hit=518
+              ->  Bitmap Index Scan on contacts_workspace_status_idx  (cost=0.00..183.77 rows=15931 width=0) (actual time=0.963..0.964 rows=16493 loops=1)
+                    Index Cond: (workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid)
+                    Buffers: shared hit=15
+        ->  Bitmap Heap Scan on contacts c_1  (cost=284.99..817.48 rows=249 width=94) (actual time=0.587..0.666 rows=250 loops=1)
+              Recheck Cond: ((workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid) AND (phone_e164 = ANY ('{+918000000000,+918000000002,+918000000004,+918000000006,+918000000008,+918000000010,+918000000012,+918000000014,+918000000016,+918000000018,+918000000020,+918000000022,+918000000024,+918000000026,+918000000028,+918000000030,+918000000032,+918000000034,+918000000036,+918000000038,+918000000040,+918000000042,+918000000044,+918000000046,+918000000048,+918000000050,+918000000052,+918000000054,+918000000056,+918000000058,+918000000060,+918000000062,+918000000064,+918000000066,+918000000068,+918000000070,+918000000072,+918000000074,+918000000076,+918000000078,+918000000080,+918000000082,+918000000084,+918000000086,+918000000088,+918000000090,+918000000092,+918000000094,+918000000096,+918000000098,+918000000100,+918000000102,+918000000104,+918000000106,+918000000108,+918000000110,+918000000112,+918000000114,+918000000116,+918000000118,+918000000120,+918000000122,+918000000124,+918000000126,+918000000128,+918000000130,+918000000132,+918000000134,+918000000136,+918000000138,+918000000140,+918000000142,+918000000144,+918000000146,+918000000148,+918000000150,+918000000152,+918000000154,+918000000156,+918000000158,+918000000160,+918000000162,+918000000164,+918000000166,+918000000168,+918000000170,+918000000172,+918000000174,+918000000176,+918000000178,+918000000180,+918000000182,+918000000184,+918000000186,+918000000188,+918000000190,+918000000192,+918000000194,+918000000196,+918000000198,+918000000200,+918000000202,+918000000204,+918000000206,+918000000208,+918000000210,+918000000212,+918000000214,+918000000216,+918000000218,+918000000220,+918000000222,+918000000224,+918000000226,+918000000228,+918000000230,+918000000232,+918000000234,+918000000236,+918000000238,+918000000240,+918000000242,+918000000244,+918000000246,+918000000248,+918000000250,+918000000252,+918000000254,+918000000256,+918000000258,+918000000260,+918000000262,+918000000264,+918000000266,+918000000268,+918000000270,+918000000272,+918000000274,+918000000276,+918000000278,+918000000280,+918000000282,+918000000284,+918000000286,+918000000288,+918000000290,+918000000292,+918000000294,+918000000296,+918000000298,+918000000300,+918000000302,+918000000304,+918000000306,+918000000308,+918000000310,+918000000312,+918000000314,+918000000316,+918000000318,+918000000320,+918000000322,+918000000324,+918000000326,+918000000328,+918000000330,+918000000332,+918000000334,+918000000336,+918000000338,+918000000340,+918000000342,+918000000344,+918000000346,+918000000348,+918000000350,+918000000352,+918000000354,+918000000356,+918000000358,+918000000360,+918000000362,+918000000364,+918000000366,+918000000368,+918000000370,+918000000372,+918000000374,+918000000376,+918000000378,+918000000380,+918000000382,+918000000384,+918000000386,+918000000388,+918000000390,+918000000392,+918000000394,+918000000396,+918000000398,+918000000400,+918000000402,+918000000404,+918000000406,+918000000408,+918000000410,+918000000412,+918000000414,+918000000416,+918000000418,+918000000420,+918000000422,+918000000424,+918000000426,+918000000428,+918000000430,+918000000432,+918000000434,+918000000436,+918000000438,+918000000440,+918000000442,+918000000444,+918000000446,+918000000448,+918000000450,+918000000452,+918000000454,+918000000456,+918000000458,+918000000460,+918000000462,+918000000464,+918000000466,+918000000468,+918000000470,+918000000472,+918000000474,+918000000476,+918000000478,+918000000480,+918000000482,+918000000484,+918000000486,+918000000488,+918000000490,+918000000492,+918000000494,+918000000496,+918000000498}'::text[])))
+              Heap Blocks: exact=8
+              Buffers: shared hit=14
+              ->  Bitmap Index Scan on contacts_workspace_phone_key  (cost=0.00..284.30 rows=249 width=0) (actual time=0.561..0.561 rows=250 loops=1)
+                    Index Cond: ((workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid) AND (phone_e164 = ANY ('{+918000000000,+918000000002,+918000000004,+918000000006,+918000000008,+918000000010,+918000000012,+918000000014,+918000000016,+918000000018,+918000000020,+918000000022,+918000000024,+918000000026,+918000000028,+918000000030,+918000000032,+918000000034,+918000000036,+918000000038,+918000000040,+918000000042,+918000000044,+918000000046,+918000000048,+918000000050,+918000000052,+918000000054,+918000000056,+918000000058,+918000000060,+918000000062,+918000000064,+918000000066,+918000000068,+918000000070,+918000000072,+918000000074,+918000000076,+918000000078,+918000000080,+918000000082,+918000000084,+918000000086,+918000000088,+918000000090,+918000000092,+918000000094,+918000000096,+918000000098,+918000000100,+918000000102,+918000000104,+918000000106,+918000000108,+918000000110,+918000000112,+918000000114,+918000000116,+918000000118,+918000000120,+918000000122,+918000000124,+918000000126,+918000000128,+918000000130,+918000000132,+918000000134,+918000000136,+918000000138,+918000000140,+918000000142,+918000000144,+918000000146,+918000000148,+918000000150,+918000000152,+918000000154,+918000000156,+918000000158,+918000000160,+918000000162,+918000000164,+918000000166,+918000000168,+918000000170,+918000000172,+918000000174,+918000000176,+918000000178,+918000000180,+918000000182,+918000000184,+918000000186,+918000000188,+918000000190,+918000000192,+918000000194,+918000000196,+918000000198,+918000000200,+918000000202,+918000000204,+918000000206,+918000000208,+918000000210,+918000000212,+918000000214,+918000000216,+918000000218,+918000000220,+918000000222,+918000000224,+918000000226,+918000000228,+918000000230,+918000000232,+918000000234,+918000000236,+918000000238,+918000000240,+918000000242,+918000000244,+918000000246,+918000000248,+918000000250,+918000000252,+918000000254,+918000000256,+918000000258,+918000000260,+918000000262,+918000000264,+918000000266,+918000000268,+918000000270,+918000000272,+918000000274,+918000000276,+918000000278,+918000000280,+918000000282,+918000000284,+918000000286,+918000000288,+918000000290,+918000000292,+918000000294,+918000000296,+918000000298,+918000000300,+918000000302,+918000000304,+918000000306,+918000000308,+918000000310,+918000000312,+918000000314,+918000000316,+918000000318,+918000000320,+918000000322,+918000000324,+918000000326,+918000000328,+918000000330,+918000000332,+918000000334,+918000000336,+918000000338,+918000000340,+918000000342,+918000000344,+918000000346,+918000000348,+918000000350,+918000000352,+918000000354,+918000000356,+918000000358,+918000000360,+918000000362,+918000000364,+918000000366,+918000000368,+918000000370,+918000000372,+918000000374,+918000000376,+918000000378,+918000000380,+918000000382,+918000000384,+918000000386,+918000000388,+918000000390,+918000000392,+918000000394,+918000000396,+918000000398,+918000000400,+918000000402,+918000000404,+918000000406,+918000000408,+918000000410,+918000000412,+918000000414,+918000000416,+918000000418,+918000000420,+918000000422,+918000000424,+918000000426,+918000000428,+918000000430,+918000000432,+918000000434,+918000000436,+918000000438,+918000000440,+918000000442,+918000000444,+918000000446,+918000000448,+918000000450,+918000000452,+918000000454,+918000000456,+918000000458,+918000000460,+918000000462,+918000000464,+918000000466,+918000000468,+918000000470,+918000000472,+918000000474,+918000000476,+918000000478,+918000000480,+918000000482,+918000000484,+918000000486,+918000000488,+918000000490,+918000000492,+918000000494,+918000000496,+918000000498}'::text[])))
+                    Buffers: shared hit=6
+Planning:
+  Buffers: shared hit=36
+Planning Time: 2.870 ms
+Execution Time: 182.333 ms
+```
+
+Statement (58.9 ms in the request, incl. 15 ms latency):
+
+```sql
+update crm.contacts t set first_name = x.first_name, last_name = x.last_name, job_title = x.job_title, email = x.email, phone = x.phone,
+  phone_e164 = x.phone_e164, linkedin_url = x.linkedin_url, country = x.country, location = x.location, company_id = x.company_id
+  from jsonb_to_recordset($1::jsonb) as x(id uuid, company_id uuid, first_name text, last_name text, job_title text, email text, phone text,
+  phone_e164 text, linkedin_url text, country text, location text)
+  where t.id = x.id
+```
+
+```
+Update on contacts t  (cost=0.29..707.50 rows=0 width=0) (actual time=18.392..18.393 rows=0 loops=1)
+  Buffers: shared hit=8855 dirtied=9 written=9
+  ->  Nested Loop  (cost=0.29..707.50 rows=100 width=654) (actual time=1.347..2.587 rows=250 loops=1)
+        Buffers: shared hit=1249
+        ->  Function Scan on jsonb_to_recordset x  (cost=0.00..1.00 rows=100 width=664) (actual time=1.335..1.554 rows=250 loops=1)
+        ->  Index Scan using contacts_pkey on contacts t  (cost=0.29..7.06 rows=1 width=22) (actual time=0.003..0.003 rows=1 loops=250)
+              Index Cond: (id = x.id)
+              Buffers: shared hit=1000
+Planning:
+  Buffers: shared hit=7
+Planning Time: 0.198 ms
+Trigger contacts_set_updated_at: time=1.242 calls=250
+Execution Time: 18.622 ms
+```
+
+Statement (50.9 ms in the request, incl. 15 ms latency):
+
+```sql
+insert into crm.external_refs (workspace_id, contact_id, source, external_id)
+  select $1, x.id, x.source, x.external_id from jsonb_to_recordset($2::jsonb) as x(id uuid, source text, external_id text)
+  on conflict do nothing
+```
+
+```
+Insert on external_refs  (cost=0.00..1.50 rows=0 width=0) (actual time=10.327..10.327 rows=0 loops=1)
+  Conflict Resolution: NOTHING
+  Tuples Inserted: 0
+  Conflicting Tuples: 500
+  Buffers: shared hit=3000
+  ->  Function Scan on jsonb_to_recordset x  (cost=0.00..1.50 rows=100 width=136) (actual time=2.065..3.146 rows=500 loops=1)
+Planning Time: 0.066 ms
+Execution Time: 10.365 ms
+```
+
+## Quick run 2026-10-21 04:50 UTC: `--only brain-calls`
+
+- Postgres 17.11 (local, native), Node v24.18.0, Windows. App pool `max: 10` as in `src/db.ts`.
+- **+15 ms per round trip** to the database and to Supabase Auth (TCP proxy, `load/latency.ts`).
+- Seed: A 15k / B 5k / C 5k contacts. All workspaces: companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334.
+- Requests as a salesperson member of workspace A (admin for Admin rows); 20 timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).
+- Targets: p95 ≤ 1000 ms per request or page; brain batch of 500 ≤ 5 s.
+
+**Summary:** 0 of 3 brain batches over 5 s, 0 fallback(s) to one transaction per item.
+
+### Brain batches (500 items each, workspace A)
+
+| Route | Batch | Time | SQL | Result | Fallbacks | |
+|---|---|---:|---:|---|---:|---|
+| calls | 1/3 | 0.6 s | 12 | created 500, updated 0, unchanged 0, error 0 | 0 | ✅ |
+| calls | 2/3 | 0.6 s | 12 | created 500, updated 0, unchanged 0, error 0 | 0 | ✅ |
+| calls | 3/3 | 0.6 s | 12 | created 500, updated 0, unchanged 0, error 0 | 0 | ✅ |
+
+### Row counts after the run
+
+companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 34,834, email_activities 41,666, timeline_events 68,166, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334
+
+### EXPLAIN (ANALYZE, BUFFERS) for anything over 300 ms
+
+Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
+
+### Brain batch with the most SQL: calls (12 SQL)
+
+Statement (74.0 ms in the request, incl. 15 ms latency):
+
+```sql
+insert into crm.timeline_events (workspace_id, company_id, contact_id, occurred_at, event_kind, title, detail, actor_id, actor_name, actor_source, related_call_id)
+  select $1, x.company_id, x.contact_id, coalesce(x.occurred_at, now()), x.event_kind, x.title, x.detail, null, $2, $3, x.related_call_id
+  from jsonb_to_recordset($4::jsonb) as x(company_id uuid, contact_id uuid, occurred_at timestamptz, event_kind text, title text, detail text, related_call_id uuid)
+```
+
+```
+Insert on timeline_events  (cost=0.00..1.75 rows=0 width=0) (actual time=9.016..9.017 rows=0 loops=1)
+  Buffers: shared hit=4539 dirtied=18 written=18
+  ->  Function Scan on jsonb_to_recordset x  (cost=0.00..1.75 rows=100 width=420) (actual time=3.075..3.982 rows=500 loops=1)
+Planning Time: 0.094 ms
+Trigger for constraint timeline_events_workspace_id_fkey: time=6.420 calls=500
+Trigger for constraint timeline_events_actor_id_fkey: time=0.722 calls=500
+Trigger for constraint timeline_events_company_fk: time=0.476 calls=500
+Trigger for constraint timeline_events_contact_fk: time=6.720 calls=500
+Trigger for constraint timeline_events_deal_fk: time=0.692 calls=500
+Trigger for constraint timeline_events_task_fk: time=0.493 calls=500
+Trigger for constraint timeline_events_meeting_fk: time=0.460 calls=500
+Trigger for constraint timeline_events_proposal_fk: time=0.425 calls=500
+Trigger for constraint timeline_events_call_fk: time=6.322 calls=500
+Trigger for constraint timeline_events_workflow_run_fk: time=0.887 calls=500
+Execution Time: 33.197 ms
+```
+
+Statement (71.2 ms in the request, incl. 15 ms latency):
+
+```sql
+insert into crm.calls (id, workspace_id, contact_id, source, connected, direction, occurred_at, duration_seconds, ai_outcome,
+  summary, sentiment, transcript, recording_url, external_source, external_id)
+  select x.id, $1, x.contact_id, 'ai', x.connected, x.direction, coalesce(x.started_at, now()), x.duration_seconds, x.ai_outcome,
+  x.summary, x.sentiment, x.transcript, x.recording_url, 'quickhowl', x.external_id
+  from jsonb_to_recordset($2::jsonb) as x(id uuid, contact_id uuid, external_id text, connected boolean, direction text, started_at timestamptz, duration_seconds integer,
+  ai_outcome text, summary text, sentiment text, transcript text, recording_url text)
+```
+
+```
+(not run: duplicate key value violates unique constraint "calls_pkey")
+Insert on calls  (cost=0.00..1.50 rows=0 width=0)
+  ->  Function Scan on jsonb_to_recordset x  (cost=0.00..1.50 rows=100 width=409)
+```
+
+Statement (66.5 ms in the request, incl. 15 ms latency):
+
+```sql
+update crm.contacts t set first_name = x.first_name, last_name = x.last_name, job_title = x.job_title, email = x.email, phone = x.phone,
+  phone_e164 = x.phone_e164, linkedin_url = x.linkedin_url, country = x.country, location = x.location, company_id = x.company_id
+  from jsonb_to_recordset($1::jsonb) as x(id uuid, company_id uuid, first_name text, last_name text, job_title text, email text, phone text,
+  phone_e164 text, linkedin_url text, country text, location text)
+  where t.id = x.id
+```
+
+```
+Update on contacts t  (cost=0.29..707.50 rows=0 width=0) (actual time=35.713..35.714 rows=0 loops=1)
+  Buffers: shared hit=17286 dirtied=25 written=20
+  ->  Nested Loop  (cost=0.29..707.50 rows=100 width=654) (actual time=2.732..4.962 rows=500 loops=1)
+        Buffers: shared hit=2495
+        ->  Function Scan on jsonb_to_recordset x  (cost=0.00..1.00 rows=100 width=664) (actual time=2.714..3.104 rows=500 loops=1)
+        ->  Index Scan using contacts_pkey on contacts t  (cost=0.29..7.06 rows=1 width=22) (actual time=0.003..0.003 rows=1 loops=500)
+              Index Cond: (id = x.id)
+              Buffers: shared hit=1998
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.201 ms
+Trigger contacts_set_updated_at: time=2.217 calls=500
+Execution Time: 35.887 ms
+```
+
+## Quick run 2026-10-21 04:50 UTC: `--only brain-email`
+
+- Postgres 17.11 (local, native), Node v24.18.0, Windows. App pool `max: 10` as in `src/db.ts`.
+- **+15 ms per round trip** to the database and to Supabase Auth (TCP proxy, `load/latency.ts`).
+- Seed: A 15k / B 5k / C 5k contacts. All workspaces: companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334.
+- Requests as a salesperson member of workspace A (admin for Admin rows); 20 timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).
+- Targets: p95 ≤ 1000 ms per request or page; brain batch of 500 ≤ 5 s.
+
+**Summary:** 0 of 3 brain batches over 5 s, 0 fallback(s) to one transaction per item.
+
+### Brain batches (500 items each, workspace A)
+
+| Route | Batch | Time | SQL | Result | Fallbacks | |
+|---|---|---:|---:|---|---:|---|
+| email-events | 1/3 | 0.5 s | 11 | created 500, updated 0, unchanged 0, error 0 | 0 | ✅ |
+| email-events | 2/3 | 0.5 s | 11 | created 500, updated 0, unchanged 0, error 0 | 0 | ✅ |
+| email-events | 3/3 | 0.5 s | 11 | created 500, updated 0, unchanged 0, error 0 | 0 | ✅ |
+
+### Row counts after the run
+
+companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 43,166, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334
+
+### EXPLAIN (ANALYZE, BUFFERS) for anything over 300 ms
+
+Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
+
+### Brain batch with the most SQL: email-events (11 SQL)
+
+Statement (81.8 ms in the request, incl. 15 ms latency):
+
+```sql
+update crm.contacts t set first_name = x.first_name, last_name = x.last_name, job_title = x.job_title, email = x.email, phone = x.phone,
+  phone_e164 = x.phone_e164, linkedin_url = x.linkedin_url, country = x.country, location = x.location, company_id = x.company_id
+  from jsonb_to_recordset($1::jsonb) as x(id uuid, company_id uuid, first_name text, last_name text, job_title text, email text, phone text,
+  phone_e164 text, linkedin_url text, country text, location text)
+  where t.id = x.id
+```
+
+```
+Update on contacts t  (cost=0.29..699.50 rows=0 width=0) (actual time=32.551..32.552 rows=0 loops=1)
+  Buffers: shared hit=18189 dirtied=17 written=17
+  ->  Nested Loop  (cost=0.29..699.50 rows=100 width=654) (actual time=3.064..5.384 rows=500 loops=1)
+        Buffers: shared hit=2499
+        ->  Function Scan on jsonb_to_recordset x  (cost=0.00..1.00 rows=100 width=664) (actual time=3.042..3.412 rows=500 loops=1)
+        ->  Index Scan using contacts_pkey on contacts t  (cost=0.29..6.98 rows=1 width=22) (actual time=0.003..0.003 rows=1 loops=500)
+              Index Cond: (id = x.id)
+              Buffers: shared hit=2000
+Planning:
+  Buffers: shared hit=10
+Planning Time: 0.229 ms
+Trigger contacts_set_updated_at: time=2.029 calls=500
+Execution Time: 32.820 ms
+```
+
+Statement (53.6 ms in the request, incl. 15 ms latency):
+
+```sql
+insert into crm.email_activities (id, workspace_id, contact_id, external_source, external_id, campaign_ref, campaign_name, step, subject, status, reply_text,
+  sent_at, delivered_at, opened_at, replied_at, bounced_at, unsubscribed_at)
+  select x.id, $1, x.contact_id, 'email_tool', x.external_id, x.campaign_ref, x.campaign_name, x.step, x.subject, x.status::crm.email_status, x.reply_text,
+  x.sent_at, x.delivered_at, x.opened_at, x.replied_at, x.bounced_at, x.unsubscribed_at
+  from jsonb_to_recordset($2::jsonb) as x(id uuid, contact_id uuid, external_id text, campaign_ref text, campaign_name text, step integer, subject text,
+  status text, reply_text text, sent_at timestamptz, delivered_at timestamptz, opened_at timestamptz, replied_at timestamptz, bounced_at timestamptz, unsubscribed_at timestamptz)
+  on conflict (workspace_id, external_source, external_id) where external_id is not null
+  do update set status = greatest(email_activities.status, excluded.status),
+  sent_at = coalesce(email_activities.sent_at, excluded.sent_at),
+  delivered_at = coalesce(email_activities.delivered_at, excluded.delivered_at),
+  opened_at = coalesce(email_activities.opened_at, excluded.opened_at),
+  replied_at = coalesce(email_activities.replied_at, excluded.replied_at),
+  bounced_at = coalesce(email_activities.bounced_at, excluded.bounced_at),
+  unsubscribed_at = coalesce(email_activities.unsubscribed_at, excluded.unsubscribed_at),
+  reply_text = coalesce(email_activities.reply_text, excluded.reply_text),
+  campaign_ref = coalesce(email_activities.campaign_ref, excluded.campaign_ref),
+  campaign_name = coalesce(email_activities.campaign_name, excluded.campaign_name),
+  step = coalesce(email_activities.step, excluded.step),
+  subject = coalesce(email_activities.subject, excluded.subject)
+```
+
+```
+Insert on email_activities  (cost=0.00..2.00 rows=0 width=0) (actual time=20.519..20.519 rows=0 loops=1)
+  Conflict Resolution: UPDATE
+  Conflict Arbiter Indexes: email_activities_workspace_external_key
+  Tuples Inserted: 0
+  Conflicting Tuples: 500
+  Buffers: shared hit=10063 dirtied=18 written=18
+  ->  Function Scan on jsonb_to_recordset x  (cost=0.00..2.00 rows=100 width=328) (actual time=2.939..3.249 rows=500 loops=1)
+Planning Time: 0.075 ms
+Trigger email_activities_set_updated_at: time=1.519 calls=500
+Execution Time: 20.582 ms
+```
+
+Statement (49.9 ms in the request, incl. 15 ms latency):
+
+```sql
+insert into crm.external_refs (workspace_id, contact_id, source, external_id)
+  select $1, x.id, x.source, x.external_id from jsonb_to_recordset($2::jsonb) as x(id uuid, source text, external_id text)
+  on conflict do nothing
+```
+
+```
+Insert on external_refs  (cost=0.00..1.50 rows=0 width=0) (actual time=6.477..6.477 rows=0 loops=1)
+  Conflict Resolution: NOTHING
+  Tuples Inserted: 0
+  Conflicting Tuples: 500
+  Buffers: shared hit=3000
+  ->  Function Scan on jsonb_to_recordset x  (cost=0.00..1.50 rows=100 width=136) (actual time=0.735..1.456 rows=500 loops=1)
+Planning Time: 0.044 ms
+Execution Time: 6.502 ms
+```
+
+## Quick run 2026-10-21 04:51 UTC: `--only brain-handovers`
+
+- Postgres 17.11 (local, native), Node v24.18.0, Windows. App pool `max: 10` as in `src/db.ts`.
+- **+15 ms per round trip** to the database and to Supabase Auth (TCP proxy, `load/latency.ts`).
+- Seed: A 15k / B 5k / C 5k contacts. All workspaces: companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334.
+- Requests as a salesperson member of workspace A (admin for Admin rows); 20 timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).
+- Targets: p95 ≤ 1000 ms per request or page; brain batch of 500 ≤ 5 s.
+
+**Summary:** 1 of 1 brain batches over 5 s, 0 fallback(s) to one transaction per item.
+
+### Brain batches (500 items each, workspace A)
+
+| Route | Batch | Time | SQL | Result | Fallbacks | |
+|---|---|---:|---:|---|---:|---|
+| handovers | 1/1 | 121.5 s | 15862 | created 375, updated 125, unchanged 0, error 0 | 0 | ❌ |
+
+### Row counts after the run
+
+companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,709, calls 33,334, email_activities 41,666, timeline_events 69,161, tasks 17,041, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,709, scheduled_actions 3,709
+
+### EXPLAIN (ANALYZE, BUFFERS) for anything over 300 ms
+
+Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
+
+### Brain batch with the most SQL: handovers (15862 SQL)
+
+Statement (50.6 ms in the request, incl. 15 ms latency):
+
+```sql
+select deal_id from crm.timeline_events where workspace_id = $1 and external_source = $2 and external_id = $3
+```
+
+```
+Index Scan using timeline_events_workspace_external_key on timeline_events  (cost=0.28..7.65 rows=1 width=16) (actual time=0.017..0.019 rows=1 loops=1)
+  Index Cond: ((workspace_id = 'a2a2f435-076f-9d18-1e9d-2b81a88bb881'::uuid) AND (external_source = 'quickicp'::text) AND (external_id = 'lt-h-172'::text))
+  Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=32
+Planning Time: 0.240 ms
+Execution Time: 0.030 ms
+```
+
+Statement (49.2 ms in the request, incl. 15 ms latency):
+
+```sql
+update crm.deals set owner_id = coalesce(owner_id, $2), amount = coalesce(amount, $3), last_activity_at = now()
+  where id = $1 returning owner_id
+```
+
+```
+Update on deals  (cost=0.29..8.31 rows=1 width=48) (actual time=0.379..0.380 rows=1 loops=1)
+  Buffers: shared hit=14
+  ->  Index Scan using deals_id_workspace_key on deals  (cost=0.29..8.31 rows=1 width=48) (actual time=0.017..0.018 rows=1 loops=1)
+        Index Cond: (id = '683bc8a2-050f-45c5-9fc6-81d31bf93967'::uuid)
+        Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=8
+Planning Time: 0.133 ms
+Trigger deals_enforce_automation: time=0.227 calls=1
+Trigger deals_set_updated_at: time=0.049 calls=1
+Execution Time: 0.427 ms
+```
+
+Statement (48.5 ms in the request, incl. 15 ms latency):
+
+```sql
+insert into crm.timeline_events
+  (workspace_id, company_id, contact_id, deal_id, occurred_at, event_kind, title, detail,
+  actor_id, actor_name, actor_source, related_task_id, related_meeting_id, related_proposal_id,
+  related_call_id, related_workflow_run_id, metadata, external_source, external_id)
+  select coalesce(d.workspace_id, c.workspace_id, co.workspace_id),
+  co.id, coalesce(c.id, d.contact_id), d.id,
+  coalesce($4, now()), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+  from (select 1) one
+  left join crm.deals d on d.id = $3
+  left join crm.contacts c on c.id = $2
+  left join crm.companies co on co.id = $1
+```
+
+```
+Insert on timeline_events  (cost=0.29..8.35 rows=0 width=0) (actual time=0.445..0.446 rows=0 loops=1)
+  Buffers: shared hit=17 dirtied=1 written=1
+  ->  Nested Loop Left Join  (cost=0.29..8.35 rows=1 width=420) (actual time=0.033..0.035 rows=1 loops=1)
+        Join Filter: NULL::boolean
+        Buffers: shared hit=3
+        ->  Nested Loop Left Join  (cost=0.29..8.33 rows=1 width=80) (actual time=0.015..0.017 rows=1 loops=1)
+              Join Filter: NULL::boolean
+              Buffers: shared hit=3
+              ->  Nested Loop Left Join  (cost=0.29..8.32 rows=1 width=48) (actual time=0.014..0.016 rows=1 loops=1)
+                    Buffers: shared hit=3
+                    ->  Result  (cost=0.00..0.01 rows=1 width=0) (actual time=0.000..0.001 rows=1 loops=1)
+                    ->  Index Scan using deals_id_workspace_key on deals d  (cost=0.29..8.30 rows=1 width=48) (actual time=0.013..0.014 rows=1 loops=1)
+                          Index Cond: (id = 'ef142cb6-b6f0-42e9-8d9b-7ab87b9cfbb0'::uuid)
+                          Buffers: shared hit=3
+              ->  Result  (cost=0.00..0.00 rows=0 width=32) (actual time=0.000..0.000 rows=0 loops=1)
+                    One-Time Filter: false
+        ->  Result  (cost=0.00..0.00 rows=0 width=32) (actual time=0.000..0.000 rows=0 loops=1)
+              One-Time Filter: false
+Planning:
+  Buffers: shared hit=20
+Planning Time: 0.367 ms
+Trigger for constraint timeline_events_workspace_id_fkey: time=0.446 calls=1
+Trigger for constraint timeline_events_actor_id_fkey: time=0.003 calls=1
+Trigger for constraint timeline_events_company_fk: time=0.002 calls=1
+Trigger for constraint timeline_events_contact_fk: time=0.149 calls=1
+Trigger for constraint timeline_events_deal_fk: time=0.145 calls=1
+Trigger for constraint timeline_events_task_fk: time=0.059 calls=1
+Trigger for constraint timeline_events_meeting_fk: time=0.003 calls=1
+Trigger for constraint timeline_events_proposal_fk: time=0.001 calls=1
+Trigger for constraint timeline_events_call_fk: time=0.002 calls=1
+Trigger for constraint timeline_events_workflow_run_fk: time=0.516 calls=1
+Execution Time: 1.826 ms
+```

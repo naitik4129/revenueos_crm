@@ -61,7 +61,9 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT
 
 ### Brain intake (2026-10-16)
 - **Mapping**: QuickICP companies → `crm.companies`; QuickICP people → `crm.contacts` (lifecycle `prospect`); Quickhowl AI calls → `crm.calls` with `source = 'ai'`; Email Tool campaign emails → `crm.email_activities`; qualified handover → `crm.deals` (owner assigned).
-- **Write path**: the brain writes only through the CRM API `/brain/v1/...` with a per-workspace service key (`crm.brain_api_keys`, SHA-256 hash, shown once). Never direct DB writes. Batches of up to 500, one transaction per item, per-item results, idempotent by external ids.
+- **Write path**: the brain writes only through the CRM API `/brain/v1/...` with a per-workspace service key (`crm.brain_api_keys`, SHA-256 hash, shown once). Never direct DB writes. Batches of up to 500, per-item results, idempotent by external ids.
+- **Batch writes** (changed 2026-10-21): companies, contacts, calls and email-events are written **set-based**, one transaction per batch under a per-workspace advisory lock (`brain-bulk.service.ts`): read what's needed in a few queries (matched contacts/companies locked `FOR UPDATE`), decide every item in order in code exactly as one-at-a-time would (a later item sees what an earlier one created or filled; merged contacts resolve to their target), write in a few statements. A decided problem (unknown contact) is only that item's error. A unique clash or deadlock retries the batch once; any other DB error, or a second failure, **falls back to one transaction per item** (the old handlers in `brain.service.ts`, still the source of the rules) and logs `[brain] Batch fell back to one transaction per item: N <route> item(s), workspace …, reason`. Handovers stay per item, 4 at a time; handovers naming the same person run one after another.
+- **Brain contract** (what the brain team must do): (a) read the **full** `/suppressions` list (no cursor) right before every call or email campaign; the cursor feed is only for updates in between; (b) send **handovers in batches of at most 50**; (c) other routes: **500 items per batch** recommended (the maximum), request body at most **25 MB**, so split by bytes as well when call transcripts are big.
 - **Identity**: `crm.external_refs` maps (source, external id) → company/contact; a contact can have ids from several tools. The brain sends the QuickICP person id with calls and email events. Match order: external ref → email → E.164 phone; a merged contact resolves to its target.
 - **Updates fill empty fields only**: brain data never overwrites a non-empty CRM field.
 - **Lifecycle stage** (`crm.lifecycle_stage`, like HubSpot): prospect → contacted → engaged → qualified → customer. Set by code, forward only: call or email sent → contacted; email reply or connected call → engaged (opens never count); deal created/handover → qualified; deal won → customer. Admins may move it back manually, with a timeline note.
@@ -185,8 +187,8 @@ All channels: limits per workspace in a new `crm.send_policies` (one row per wor
 
 **Order** (one step per "go"; re-measure with the harness after each scale step; reordered 2026-10-21 after the baseline):
 1. Load test harness + seed + **baseline** measurement (`RESULTS.md`). Done (`4f0352a`).
-2. Suppressions: workspace filter + exact cursor (item 4 + the ms/µs bug), migration 014a.
-3. Brain batch speed: set-based SQL per batch (item 1); handovers with limited concurrency.
+2. Suppressions: workspace filter + exact cursor (item 4 + the ms/µs bug), migration 014a. Done (`ae186b2`).
+3. Brain batch speed: set-based SQL per batch (item 1); handovers with limited concurrency. Done: 500 items in 0.4-0.6 s (9-12 SQL) for companies/contacts/calls/email-events; handovers 500 in ~120 s (4 at a time), so ~12 s per batch of 50.
 4. CSV import chunks (item 5).
 5. Migration 014 (indexes: items 6, 7, 10) + pool timeouts (item 2); re-measure.
 6. List counts + company counts (items 7, 8).

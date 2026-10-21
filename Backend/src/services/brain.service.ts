@@ -109,8 +109,8 @@ export const handoverItem = z.object({
   amount: z.number().nonnegative().max(999_999_999_999.99).optional(),
 });
 
-type ContactData = z.infer<typeof contactRef>;
-type Status = "created" | "updated" | "unchanged";
+export type ContactData = z.infer<typeof contactRef>;
+export type Status = "created" | "updated" | "unchanged";
 
 // --- Batch runner -------------------------------------------------------------------------
 
@@ -127,40 +127,134 @@ function logItemError(workspaceId: string, index: number, ref: string | undefine
   if (env.NODE_ENV !== "test") console.error(`[brain] workspace ${workspaceId} item ${index} (${ref ?? "no id"}) failed:`, err);
 }
 
-/** Each item is validated and written in its own transaction; one bad item never fails the batch. */
+export type ItemOutcome = { status: Status; id: string | null };
+/** A set-based handler: all valid items of a batch in one transaction, one outcome (or decided error) per item, in order. */
+export type BulkHandler<T> = (db: Queryable, workspaceId: string, items: T[]) => Promise<(ItemOutcome | { error: AppError })[]>;
+
+export interface BatchOptions<T> {
+  /** Route name, for logs. */
+  label: string;
+  bulk?: BulkHandler<T>;
+  /** Per-item path only: how many items run at once. Items with the same groupKey run one after another. */
+  concurrency?: number;
+  groupKey?: (item: T) => string;
+}
+
+export const FALLBACK_WARNING = "[brain] Batch fell back to one transaction per item";
+
+/** Another writer got there first (unique key), or two transactions crossed: worth one more try. */
+const RETRYABLE_CODES = new Set(["23505", "40P01", "40001"]);
+const isRetryable = (err: unknown) => RETRYABLE_CODES.has((err as { code?: string } | null)?.code ?? "");
+const errorOf = (err: unknown) => (err instanceof AppError ? { code: err.code, message: err.message } : { code: "internal_error", message: "Item failed." });
+
+/**
+ * Validates every item, then writes the valid ones: with `bulk`, all in one transaction under a
+ * per-workspace lock (retried once on a unique clash or deadlock); if that still fails, or there
+ * is no bulk handler, each item in its own transaction. Either way one bad item never fails the
+ * others and every item gets its own result.
+ */
 export async function runBatch<T>(
   workspaceId: string,
   items: unknown[],
   schema: z.ZodType<T, z.ZodTypeDef, unknown>,
-  handle: (db: Queryable, workspaceId: string, item: T) => Promise<{ status: Status; id: string | null }>,
+  handle: (db: Queryable, workspaceId: string, item: T) => Promise<ItemOutcome>,
+  opts: BatchOptions<T>,
 ) {
-  const results: ItemResult[] = [];
+  const results: ItemResult[] = new Array(items.length);
+  const valid: { index: number; ref: string | undefined; data: T }[] = [];
   for (const [index, raw] of items.entries()) {
     const r = raw as { externalId?: unknown; messageId?: unknown } | null;
     const ref = typeof r?.externalId === "string" ? r.externalId : typeof r?.messageId === "string" ? r.messageId : undefined;
     const parsed = schema.safeParse(raw);
-    if (!parsed.success) {
-      const fields = [...new Set(parsed.error.issues.map((i) => i.path.join(".") || "item"))].slice(0, 5);
-      logItemError(workspaceId, index, ref, parsed.error.flatten());
-      results.push({ index, externalId: ref, status: "error", error: { code: "invalid_input", message: `Invalid: ${fields.join(", ")}` } });
+    if (parsed.success) {
+      valid.push({ index, ref, data: parsed.data });
       continue;
     }
-    try {
-      results.push({ index, externalId: ref, ...(await withTransaction((db) => handle(db, workspaceId, parsed.data))) });
-    } catch (err) {
-      logItemError(workspaceId, index, ref, err);
-      const error = err instanceof AppError ? { code: err.code, message: err.message } : { code: "internal_error", message: "Item failed." };
-      results.push({ index, externalId: ref, status: "error", error });
+    const fields = [...new Set(parsed.error.issues.map((i) => i.path.join(".") || "item"))].slice(0, 5);
+    logItemError(workspaceId, index, ref, parsed.error.flatten());
+    results[index] = { index, externalId: ref, status: "error", error: { code: "invalid_input", message: `Invalid: ${fields.join(", ")}` } };
+  }
+
+  let written = false;
+  if (opts.bulk && valid.length) {
+    for (let attempt = 1; !written; attempt++) {
+      try {
+        const outcomes = await withTransaction(async (db) => {
+          await db.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`crm.brain:${workspaceId}`]);
+          return opts.bulk!(db, workspaceId, valid.map((v) => v.data));
+        });
+        outcomes.forEach((o, k) => {
+          const v = valid[k]!;
+          if ("error" in o) logItemError(workspaceId, v.index, v.ref, o.error);
+          results[v.index] = "error" in o ? { index: v.index, externalId: v.ref, status: "error", error: errorOf(o.error) } : { index: v.index, externalId: v.ref, ...o };
+        });
+        written = true;
+      } catch (err) {
+        if (attempt === 1 && isRetryable(err)) continue;
+        const reason = err instanceof Error ? err.message : String(err);
+        // Logged in tests too: the brain tests fail on a fallback they did not expect.
+        console.warn(`${FALLBACK_WARNING}: ${valid.length} ${opts.label} item(s), workspace ${workspaceId}, after ${attempt} attempt(s). Reason: ${reason}`);
+        break;
+      }
     }
   }
+  if (!written) await runPerItem(workspaceId, valid, handle, opts, results);
+
   const counts = { created: 0, updated: 0, unchanged: 0, error: 0 };
   for (const r of results) counts[r.status]++;
   return { counts, results };
 }
 
+async function runPerItem<T>(
+  workspaceId: string,
+  valid: { index: number; ref: string | undefined; data: T }[],
+  handle: (db: Queryable, workspaceId: string, item: T) => Promise<ItemOutcome>,
+  opts: BatchOptions<T>,
+  results: ItemResult[],
+) {
+  const retry: typeof valid = [];
+  const one = async (v: (typeof valid)[number], last: boolean) => {
+    try {
+      results[v.index] = { index: v.index, externalId: v.ref, ...(await withTransaction((db) => handle(db, workspaceId, v.data))) };
+    } catch (err) {
+      // Side by side, two items naming one contact in different ways can still collide: try again alone.
+      if (!last && isRetryable(err)) {
+        retry.push(v);
+        return;
+      }
+      logItemError(workspaceId, v.index, v.ref, err);
+      results[v.index] = { index: v.index, externalId: v.ref, status: "error", error: errorOf(err) };
+    }
+  };
+
+  const concurrency = Math.max(1, opts.concurrency ?? 1);
+  if (concurrency === 1) {
+    for (const v of valid) await one(v, true);
+    return;
+  }
+  const groups = new Map<string, typeof valid>();
+  for (const v of valid) {
+    const key = opts.groupKey?.(v.data) ?? `#${v.index}`;
+    groups.set(key, [...(groups.get(key) ?? []), v]);
+  }
+  const queue = [...groups.values()];
+  const worker = async () => {
+    for (let group = queue.shift(); group; group = queue.shift()) for (const v of group) await one(v, false);
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  for (const v of retry.sort((a, b) => a.index - b.index)) await one(v, true);
+}
+
+/** Handovers naming the same person run one after another (they share the contact's one open deal). */
+export function handoverKey(item: { contact: ContactData }) {
+  const c = item.contact;
+  const clean = cleanContact(c);
+  return c.source && c.externalId ? `ref:${c.source}:${c.externalId}` : clean.email ? `email:${clean.email}` : clean.phoneE164 ? `phone:${clean.phoneE164}` : `name:${c.fullName ?? ""}`;
+}
+
 // --- Matching -------------------------------------------------------------------------------
 
-function cleanContact(c: ContactData) {
+export function cleanContact(c: ContactData) {
   const [first, ...rest] = (c.fullName ?? "").split(/\s+/).filter(Boolean);
   const email = c.email ? normalizeEmail(c.email) : null;
   const phoneE164 = c.phone ? normalizePhoneE164(c.phone) : null;

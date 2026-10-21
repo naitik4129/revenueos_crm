@@ -109,7 +109,9 @@ The brain writes only through `/api/v1/brain/v1` with a per-workspace service ke
 stored, full key shown once).
 
 - `POST /companies`, `/contacts`, `/calls`, `/email-events`, `/handovers`: batches of up to 500
-  items, one transaction per item, per-item results, idempotent by external ids.
+  items, per-item results, idempotent by external ids. Companies, contacts, calls and email events are
+  written set-based, one transaction per batch (`brain-bulk.service.ts`), falling back to one transaction
+  per item on an unexpected error; handovers run per item, 4 at a time.
 - `GET /suppressions`: who must not be contacted (DNC, unsubscribed, bounced), paged with an opaque `next` cursor (contract in CLAUDE.md, Brain intake).
 - Matching: external ref → email → E.164 phone. Brain data only fills empty fields.
 - A handover opens a deal (lifecycle → qualified) and notifies its owner. Its optional `amount`

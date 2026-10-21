@@ -6,6 +6,7 @@ import { AuthenticationError } from "../errors.js";
 import { parseBody, parseQuery } from "../validation/parse.js";
 import { BRAIN_KEY_PREFIX, resolveBrainKey } from "../services/brain-keys.service.js";
 import * as brain from "../services/brain.service.js";
+import * as bulk from "../services/brain-bulk.service.js";
 
 /**
  * The RevenueOS brain's write API. Authenticated by a per-workspace key
@@ -26,21 +27,23 @@ brainRouter.use(requireBrainKey);
 
 const batch = z.object({ items: z.array(z.unknown()).min(1).max(brain.MAX_BATCH, `At most ${brain.MAX_BATCH} items per request.`) });
 
-function batchRoute<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>, handle: Parameters<typeof brain.runBatch<T>>[3]) {
+function batchRoute<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>, handle: Parameters<typeof brain.runBatch<T>>[3], opts: brain.BatchOptions<T>) {
   brainRouter.post(
     path,
     asyncHandler(async (req, res) => {
       const { items } = parseBody(batch, req.body);
-      res.json(await brain.runBatch(req.workspaceId!, items, schema, handle));
+      res.json(await brain.runBatch(req.workspaceId!, items, schema, handle, opts));
     }),
   );
 }
 
-batchRoute("/companies", brain.companyItem, brain.upsertCompany);
-batchRoute("/contacts", brain.contactItem, brain.upsertContact);
-batchRoute("/calls", brain.callItem, brain.upsertCall);
-batchRoute("/email-events", brain.emailEventItem, brain.upsertEmailEvent);
-batchRoute("/handovers", brain.handoverItem, brain.applyHandover);
+// Set-based per batch (brain-bulk.service.ts); the per-item handler is the fallback.
+batchRoute("/companies", brain.companyItem, brain.upsertCompany, { label: "companies", bulk: bulk.bulkCompanies });
+batchRoute("/contacts", brain.contactItem, brain.upsertContact, { label: "contacts", bulk: bulk.bulkContacts });
+batchRoute("/calls", brain.callItem, brain.upsertCall, { label: "calls", bulk: bulk.bulkCalls });
+batchRoute("/email-events", brain.emailEventItem, brain.upsertEmailEvent, { label: "email-events", bulk: bulk.bulkEmailEvents });
+// Few and many-sided (deals, owners, notifications): per item, 4 at a time.
+batchRoute("/handovers", brain.handoverItem, brain.applyHandover, { label: "handovers", concurrency: 4, groupKey: brain.handoverKey });
 
 brainRouter.get(
   "/suppressions",

@@ -243,20 +243,33 @@ interface BatchRow {
   statements: number | null;
   counts: string;
   errors: number;
+  /** Times the API fell back to one transaction per item while this batch ran (its console warning). */
+  fallbacks: number;
 }
 const batchRows: BatchRow[] = [];
 let slowestBatch: { route: string; statements: TracedStatement[] } | null = null;
 
+let fallbacks = 0;
+const FALLBACK_WARNING = "[brain] Batch fell back";
+function countFallbacks() {
+  const warn = console.warn.bind(console);
+  console.warn = (...args: unknown[]) => {
+    if (String(args[0]).startsWith(FALLBACK_WARNING)) fallbacks++;
+    warn(...args);
+  };
+}
+
 async function brainBatch(route: string, label: string, items: unknown[], key: string, traced: boolean) {
   if (traced) startTrace();
+  const before = fallbacks;
   const r = await call("POST", `/brain/v1/${route}`, { brainKey: key }, { items });
   const statements = traced ? stopTrace() : null;
   const body = r.json as { counts?: Record<string, number> } | null;
   const counts = body?.counts ? Object.entries(body.counts).map(([k, v]) => `${k} ${v}`).join(", ") : `HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 120)}`;
-  const row = { route, batch: label, ms: r.ms, statements: statements?.length ?? null, counts, errors: r.status === 200 ? (body?.counts?.error ?? 0) : items.length };
+  const row = { route, batch: label, ms: r.ms, statements: statements?.length ?? null, counts, errors: r.status === 200 ? (body?.counts?.error ?? 0) : items.length, fallbacks: fallbacks - before };
   batchRows.push(row);
   if (statements && (!slowestBatch || statements.length > slowestBatch.statements.length)) slowestBatch = { route, statements };
-  log(`brain ${route} ${label}: ${(r.ms / 1000).toFixed(1)} s, ${row.statements ?? "?"} SQL, ${counts}`);
+  log(`brain ${route} ${label}: ${(r.ms / 1000).toFixed(1)} s, ${row.statements ?? "?"} SQL, ${counts}${row.fallbacks ? `, ${row.fallbacks} FALLBACK(S)` : ""}`);
   return row;
 }
 
@@ -325,6 +338,7 @@ async function main() {
     ...Object.fromEntries(BLANKED_PROVIDER_VARS.map((name) => [name, ""])),
   });
   installTracer();
+  countFallbacks();
   const { pool } = await import("../src/db.js");
   const { createApp } = await import("../src/app.js");
   const { createBrainKey } = await import("../src/services/brain-keys.service.js");
@@ -701,7 +715,7 @@ function section(r: RunResult) {
   const checksPass = r.checks.every((c) => c.pass);
   const summary = [
     rows.length ? `${failing.length} of ${rows.length} request rows miss the target or had errors` : "",
-    batchRows.length ? `${slowBatches.length} of ${batchRows.length} brain batches over ${BRAIN_TARGET_MS / 1000} s` : "",
+    batchRows.length ? `${slowBatches.length} of ${batchRows.length} brain batches over ${BRAIN_TARGET_MS / 1000} s, ${fallbacks} fallback(s) to one transaction per item` : "",
     r.csv ? `CSV 2,000 rows ${fu(r.csv.ms)}` : "",
     r.checks.length ? `suppressions paging checks **${checksPass ? "PASS" : "FAIL"}**` : "",
   ].filter(Boolean);
@@ -731,9 +745,11 @@ function section(r: RunResult) {
     lines.push(
       `### Brain batches (500 items each, workspace A)`,
       ``,
-      `| Route | Batch | Time | SQL | Result | |`,
-      `|---|---|---:|---:|---|---|`,
-      ...batchRows.map((b) => `| ${b.route} | ${b.batch} | ${(b.ms / 1000).toFixed(1)} s | ${b.statements ?? "not traced"} | ${b.counts} | ${b.errors ? "❌" : ok(b.ms, BRAIN_TARGET_MS)} |`),
+      `| Route | Batch | Time | SQL | Result | Fallbacks | |`,
+      `|---|---|---:|---:|---|---:|---|`,
+      ...batchRows.map(
+        (b) => `| ${b.route} | ${b.batch} | ${(b.ms / 1000).toFixed(1)} s | ${b.statements ?? "not traced"} | ${b.counts} | ${b.fallbacks} | ${b.errors || b.fallbacks ? "❌" : ok(b.ms, BRAIN_TARGET_MS)} |`,
+      ),
       ``,
     );
   }

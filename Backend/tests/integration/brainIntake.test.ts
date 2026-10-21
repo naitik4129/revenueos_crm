@@ -3,7 +3,7 @@
  * with a real key created through the admin route; user requests mock Supabase Auth
  * (a bearer token is the user's id).
  */
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import request from "supertest";
 import type { Express } from "express";
 import { Pool } from "pg";
@@ -63,6 +63,20 @@ describe("brain intake API (PGlite)", () => {
     expect(created.status).toBe(201);
     key = created.body.key;
   }, 60_000);
+
+  // Set-based batches must not quietly fall back to one item at a time (it gives the same results,
+  // so only the warning shows it). A test that means to fall back says how many times.
+  let warn: MockInstance;
+  let expectedFallbacks = 0;
+  beforeEach(() => {
+    expectedFallbacks = 0;
+    warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    const fallbacks = warn.mock.calls.filter((args) => String(args[0]).startsWith("[brain] Batch fell back")).map((args) => String(args[0]));
+    warn.mockRestore();
+    expect(fallbacks.length, fallbacks.join("\n")).toBe(expectedFallbacks);
+  });
 
   afterAll(async () => {
     await appPool?.end();
@@ -317,6 +331,100 @@ describe("brain intake API (PGlite)", () => {
     });
   });
 
+  describe("set-based batches (same rules as one item at a time)", () => {
+    const statuses = (res: { body: { results: { status: string }[] } }) => res.body.results.map((r) => r.status);
+    const ids = (res: { body: { results: { id: string }[] } }) => res.body.results.map((r) => r.id);
+
+    it("folds items naming one person in one batch into one contact", async () => {
+      const res = await brain("/contacts", [
+        { source: "quickicp", externalId: "dup-1", fullName: "Dee Upp", email: "dee@dup.com" },
+        { source: "quickicp", externalId: "dup-2", email: "DEE@dup.com", jobTitle: "Founder", phone: "+919800000101" },
+        { source: "quickicp", externalId: "dup-1", country: "India" },
+      ]);
+      expect(statuses(res)).toEqual(["created", "updated", "updated"]);
+      expect(new Set(ids(res)).size).toBe(1);
+      expect(await one(`select first_name, job_title, phone_e164, country from crm.contacts where id = $1`, [ids(res)[0]])).toEqual({
+        first_name: "Dee",
+        job_title: "Founder",
+        phone_e164: "+919800000101",
+        country: "India",
+      });
+      expect(await one(`select count(*)::int n from crm.external_refs where contact_id = $1`, [ids(res)[0]])).toEqual({ n: 2 });
+
+      const again = await brain("/contacts", [
+        { source: "quickicp", externalId: "dup-1", fullName: "Dee Upp", email: "dee@dup.com" },
+        { source: "quickicp", externalId: "dup-2", email: "dee@dup.com" },
+      ]);
+      expect(statuses(again)).toEqual(["updated", "updated"]);
+      expect(ids(again)).toEqual([ids(res)[0], ids(res)[0]]);
+    });
+
+    it("lets a call name a contact an earlier item of the same batch created", async () => {
+      const call = (n: number, contact: object) => ({ source: "quickhowl", externalId: `bc-${n}`, contact, connected: n === 2 });
+      const res = await brain("/calls", [
+        call(1, { source: "quickicp", externalId: "bc-person", fullName: "Bea Call", email: "bea@call.com" }),
+        call(2, { source: "quickicp", externalId: "bc-person" }),
+        call(1, { source: "quickicp", externalId: "bc-person" }),
+      ]);
+      expect(statuses(res)).toEqual(["created", "created", "updated"]);
+      expect(ids(res)[2]).toBe(ids(res)[0]);
+      const contactId = await contactIdOf("bc-person");
+      expect(await one(`select count(*)::int n from crm.calls where contact_id = $1`, [contactId])).toEqual({ n: 2 });
+      expect(await one(`select count(*)::int n from crm.timeline_events where contact_id = $1 and event_kind = 'call'`, [contactId])).toEqual({ n: 2 });
+      // prospect -> contacted -> engaged, one timeline entry per move
+      expect(await one(`select lifecycle_stage from crm.contacts where id = $1`, [contactId])).toEqual({ lifecycle_stage: "engaged" });
+      expect(await one(`select count(*)::int n from crm.timeline_events where contact_id = $1 and event_kind = 'lifecycle'`, [contactId])).toEqual({ n: 2 });
+    });
+
+    it("folds several events for one message, and never turns an unsubscribe into a bounce", async () => {
+      const person = { source: "quickicp", externalId: "em-person", fullName: "Eve Mail", email: "eve@mail.com" };
+      const ev = (event: string, minute: number) => ({ source: "email_tool", messageId: "em-1", contact: person, campaignRef: "c-1", event, occurredAt: `2026-10-0${minute}T10:00:00Z` });
+      const res = await brain("/email-events", [ev("sent", 1), ev("opened", 2), ev("unsubscribed", 3), ev("bounced", 4), ev("opened", 5)]);
+      expect(statuses(res)).toEqual(["created", "updated", "updated", "updated", "updated"]);
+      expect(new Set(ids(res)).size).toBe(1);
+      expect(await one(`select status, sent_at, opened_at, bounced_at is not null as bounced from crm.email_activities where external_id = 'em-1'`)).toEqual({
+        status: "unsubscribed",
+        sent_at: new Date("2026-10-01T10:00:00Z"),
+        opened_at: new Date("2026-10-02T10:00:00Z"),
+        bounced: true,
+      });
+      const contactId = await contactIdOf("em-person");
+      expect(await one(`select status from crm.contact_channels where contact_id = $1 and channel = 'email'`, [contactId])).toEqual({ status: "unsubscribed" });
+      const titles = (await seed.query(`select title from crm.timeline_events where contact_id = $1 and event_kind = 'email' order by title`, [contactId])).rows.map((r) => r.title);
+      expect(titles).toEqual(["Campaign Email Bounced", "Unsubscribed"]);
+    });
+
+    it("follows a merged contact to its target", async () => {
+      const made = await brain("/contacts", [
+        { source: "quickicp", externalId: "mg-a", fullName: "Mo Keep", email: "keep@merge.com" },
+        { source: "quickicp", externalId: "mg-b", fullName: "Mo Gone", email: "gone@merge.com" },
+      ]);
+      const [keep, gone] = ids(made);
+      expect((await user("post", `/contacts/${gone}/merge`, sam, { targetContactId: keep })).status).toBe(200);
+      const res = await brain("/contacts", [{ source: "quickicp", externalId: "mg-c", email: "gone@merge.com", jobTitle: "CEO" }]);
+      expect(res.body.results[0]).toMatchObject({ status: "updated", id: keep });
+      expect(await one(`select job_title from crm.contacts where id = $1`, [keep])).toEqual({ job_title: "CEO" });
+    });
+
+    it("falls back to one item at a time on a database error: only the bad item fails", async () => {
+      const co = (n: number, extra: object = {}) => ({ source: "quickicp", externalId: `fb-${n}`, name: `Fallback ${n}`, ...extra });
+      expectedFallbacks = 1;
+      const res = await brain("/companies", [co(1), co(2, { headcount: 3_000_000_000 }), co(3)]);
+      expect(statuses(res)).toEqual(["created", "error", "created"]);
+      expect(res.body.results[1].error).toEqual({ code: "internal_error", message: "Item failed." });
+      expect(await one(`select count(*)::int n from crm.companies where name like 'Fallback %'`)).toEqual({ n: 2 });
+    });
+
+    it("runs handovers side by side, but two for one person one after another", async () => {
+      const person = (n: number) => ({ source: "quickicp", externalId: `hv-p${n}`, fullName: `Hand Over ${n}`, email: `hv${n}@x.com` });
+      const items = [1, 2, 3, 4, 5, 1].map((n, i) => ({ source: "quickicp", externalId: `hv-${i}`, contact: person(n), summary: "Fit" }));
+      const res = await brain("/handovers", items);
+      expect(statuses(res)).toEqual(["created", "created", "created", "created", "created", "updated"]);
+      expect(ids(res)[5]).toBe(ids(res)[0]);
+      expect(await one(`select count(*)::int n from crm.deals d join crm.contacts c on c.id = d.contact_id where c.email like 'hv%@x.com'`)).toEqual({ n: 5 });
+    });
+  });
+
   it("rejects a batch over 500 items and reports item errors as code + short message only", async () => {
     expect((await brain("/contacts", Array(501).fill(ann))).status).toBe(400);
     const res = await brain("/contacts", [{ source: "quickicp", externalId: "p-20" }, { ...ann, externalId: "p-1" }, { source: "quickicp" }]);
@@ -325,6 +433,7 @@ describe("brain intake API (PGlite)", () => {
     expect(res.body.results[2].error).toEqual({ code: "invalid_input", message: "Invalid: externalId" });
 
     // A database error (integer out of range) must not leak SQL to the brain.
+    expectedFallbacks = 1;
     const internal = await brain("/companies", [{ source: "quickicp", externalId: "co-big", name: "Huge", headcount: 3_000_000_000 }]);
     expect(internal.body.results[0].error).toEqual({ code: "internal_error", message: "Item failed." });
   });
