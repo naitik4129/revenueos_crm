@@ -33,11 +33,11 @@ describe("crm schema (PGlite)", () => {
     await testDb?.stop();
   });
 
-  it("has 36 tables, all with RLS, writable by crm_app only", async () => {
+  it("has 37 tables, all with RLS, writable by crm_app only", async () => {
     const t = await one<{ n: number; rls: number }>(
       `select count(*)::int n, count(*) filter (where rowsecurity)::int rls from pg_tables where schemaname = 'crm'`,
     );
-    expect(t).toEqual({ n: 36, rls: 36 });
+    expect(t).toEqual({ n: 37, rls: 37 });
     const p = await one(
       `select has_table_privilege('crm_app', 'crm.deals', 'insert') crm_app,
               has_table_privilege('anon', 'crm.deals', 'select') anon,

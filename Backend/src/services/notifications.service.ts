@@ -88,3 +88,15 @@ export async function notifyOwnerOrMembers(
     [n.workspaceId, n.contactId, n.dealId, n.title, n.detail, n.kind, n.ownerId, n.href],
   );
 }
+
+/**
+ * Sending-safety alerts (an automatic pause of a channel) go to every active admin: the one
+ * exception to "admins get no notifications", since only admins can resume a channel.
+ */
+export async function notifyAdmins(db: Queryable, n: { workspaceId: string; title: string; detail: string; href: string }) {
+  await db.query(
+    `insert into crm.notifications (workspace_id, recipient_id, title, detail, kind, href)
+     select $1, p.id, $2, $3, 'warning', $4 from crm.profiles p where p.is_active and p.role = 'admin'`,
+    [n.workspaceId, n.title, n.detail, n.href],
+  );
+}

@@ -13,6 +13,8 @@ export interface SendEmailInput {
   subject: string;
   html: string;
   attachments?: SendEmailAttachment[];
+  /** Extra headers, e.g. List-Unsubscribe. */
+  headers?: Record<string, string>;
 }
 
 export interface SendEmailResult {
@@ -34,6 +36,7 @@ async function sendViaResend(input: SendEmailInput, apiKey: string, senderName: 
       subject: input.subject,
       html: input.html,
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      ...(input.headers ? { headers: input.headers } : {}),
     }),
   });
   const data = (await response.json().catch(() => ({}))) as ResendSendResponse;
@@ -90,6 +93,7 @@ export async function sendEmail(workspaceId: string, input: SendEmailInput, opti
       subject: input.subject,
       html: input.html,
       attachments: input.attachments?.map((a) => ({ filename: a.filename, content: Buffer.from(a.content, "base64") })),
+      ...(input.headers ? { headers: input.headers } : {}),
     });
     return { providerMessageId: info.messageId };
   } catch (error) {

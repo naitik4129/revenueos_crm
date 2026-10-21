@@ -22,6 +22,11 @@ vi.mock("../../src/supabaseAdmin.js", () => ({
   },
 }));
 vi.mock("../../src/providers/email.provider.js", () => ({ sendEmail: mocks.sendEmail }));
+// No DNS in tests: every domain has a mail server (emailSafety.test.ts covers the MX check).
+vi.mock("../../src/services/email-safety.service.js", async (original) => ({
+  ...(await original<typeof import("../../src/services/email-safety.service.js")>()),
+  domainHasMx: async () => true,
+}));
 vi.mock("../../src/providers/whatsapp.provider.js", () => ({ sendWhatsApp: mocks.sendWhatsApp }));
 vi.mock("../../src/providers/google-calendar.provider.js", async (original) => ({
   ...(await original<typeof import("../../src/providers/google-calendar.provider.js")>()),

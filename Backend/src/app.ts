@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { corsOrigins } from "./env.js";
 import { apiRouter } from "./routes/index.js";
+import { resendWebhookRouter, unsubscribeRouter } from "./routes/public.routes.js";
 import { errorMiddleware, notFoundMiddleware } from "./errorMiddleware.js";
 
 export function createApp() {
@@ -15,6 +16,9 @@ export function createApp() {
       credentials: true,
     }),
   );
+  // No session: the Resend webhook reads its raw body (signature) and the unsubscribe page is public.
+  app.use("/api/v1/webhooks/resend", resendWebhookRouter);
+  app.use("/u", unsubscribeRouter);
   // Brain batches (up to 500 items, with call transcripts) need more room than user requests.
   app.use("/api/v1/brain", express.json({ limit: "25mb" }));
   app.use(express.json({ limit: "2mb" }));

@@ -13,6 +13,11 @@ vi.mock("../../src/supabaseAdmin.js", () => ({
 }));
 const sendEmail = vi.fn(async () => ({ providerMessageId: "resend-1" }));
 vi.mock("../../src/providers/email.provider.js", () => ({ sendEmail }));
+// No DNS in tests: every domain has a mail server (emailSafety.test.ts covers the MX check).
+vi.mock("../../src/services/email-safety.service.js", async (original) => ({
+  ...(await original<typeof import("../../src/services/email-safety.service.js")>()),
+  domainHasMx: async () => true,
+}));
 
 type Policy = typeof import("../../src/services/send-policy.service.js");
 type Db = typeof import("../../src/db.js");

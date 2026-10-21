@@ -7,6 +7,7 @@ import { PermanentProviderError, ProviderDeferredError } from "../providers/prov
 import { supabaseAdmin } from "../supabaseAdmin.js";
 import * as automation from "./automation.service.js";
 import { checkSendPolicy } from "./send-policy.service.js";
+import { domainHasMx, markEmailInvalid, recordEmailSend, unsubscribeUrl, withUnsubscribe } from "./email-safety.service.js";
 import { TEMPLATE_ATTACHMENTS_BUCKET } from "./workflows.service.js";
 import { claimQueuedProposalWhatsappSends, processQueuedProposalWhatsappSend } from "./proposalSending.service.js";
 import { claimQueuedMeetingWhatsappSends, processQueuedMeetingWhatsappSend } from "./meetingScheduledNotification.service.js";
@@ -40,6 +41,17 @@ async function dispatchMessage(ctx: automation.ActionContext, opts: RunnerOption
     return { outcome: "success", providerMessageId: "DRY_RUN" };
   }
 
+  let unsubscribe: string | null = null;
+  if (isEmail) {
+    unsubscribe = unsubscribeUrl(ctx.deal.contactId);
+    if (!unsubscribe) return { outcome: "deferred", error: "PUBLIC_API_URL is not set: nurture emails need an unsubscribe link.", retryAt: new Date(Date.now() + 60 * 60_000) };
+    if (!(await domainHasMx(ctx.deal.email!))) {
+      const reason = `No mail server (MX) for ${ctx.deal.email!.split("@").pop()}.`;
+      await withTransaction((db) => markEmailInvalid(db, ctx.deal.contactId, reason));
+      return { blocked: reason };
+    }
+  }
+
   // Sending policy (pause, hours, cap/ramp, gap) and consent once more, immediately before the provider call.
   const verdict = await withTransaction((db) =>
     checkSendPolicy(db, { workspaceId: ctx.workspaceId, channel: isEmail ? "email" : "whatsapp", contactId: ctx.deal.contactId }),
@@ -61,9 +73,13 @@ async function dispatchMessage(ctx: automation.ActionContext, opts: RunnerOption
     const result = await sendEmail(ctx.workspaceId, {
       to: ctx.deal.email!,
       subject: rendered.subject?.trim() || ctx.template.name,
-      html: rendered.body,
+      ...withUnsubscribe(rendered.body, unsubscribe!),
       ...(attachments.length ? { attachments } : {}),
     });
+    // So a later bounce or complaint (Resend webhook) finds its workspace and contact.
+    await withTransaction((db) =>
+      recordEmailSend(db, { workspaceId: ctx.workspaceId, contactId: ctx.deal.contactId, scheduledActionId: ctx.action.id, providerMessageId: result.providerMessageId, to: ctx.deal.email! }),
+    ).catch((err: unknown) => opts.log?.(`[worker] Could not record email send ${result.providerMessageId}: ${err instanceof Error ? err.message : err}`));
     return { outcome: "success", providerMessageId: result.providerMessageId };
   }
 

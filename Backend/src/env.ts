@@ -35,6 +35,11 @@ const EnvSchema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: blankToUndefined(z.string().optional()),
   GOOGLE_OAUTH_CLIENT_SECRET: blankToUndefined(z.string().optional()),
   GOOGLE_OAUTH_REDIRECT_URI: blankToUndefined(z.string().url().optional()),
+
+  // Email safety (email-safety.service.ts): the unsubscribe link's base URL (nurture emails wait
+  // until it is set) and the Resend webhook's signing secret (whsec_...; unset = webhook 503).
+  PUBLIC_API_URL: blankToUndefined(z.string().url().optional()),
+  RESEND_WEBHOOK_SECRET: blankToUndefined(z.string().min(1).optional()),
 });
 
 // WORKER_* tuning is validated separately in workerEnv.ts. Provider secrets
