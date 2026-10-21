@@ -1,5 +1,6 @@
 import type { Queryable } from "../dto.js";
 import { sendBlockReason } from "./consent.service.js";
+import { notifyAdmins } from "./notifications.service.js";
 
 /**
  * Sending limits per workspace and channel (crm.send_policies, migration 015). The worker calls
@@ -148,4 +149,21 @@ export async function checkSendPolicy(
     [input.workspaceId, input.channel, today, sentToday + 1, new Date(now.getTime() + gapMs).toISOString(), now.toISOString()],
   );
   return { ok: true };
+}
+
+/**
+ * Pauses a channel automatically (bounce rate, WhatsApp logout/restriction/failures) and alerts
+ * active admins. Does nothing when it is already paused. Returns whether it paused it now.
+ */
+export async function autoPauseChannel(db: Queryable, workspaceId: string, channel: SendChannel, reason: string) {
+  const policy = await getSendPolicy(db, workspaceId, channel, true);
+  if (policy.paused) return false;
+  await db.query(`update crm.send_policies set paused = true, pause_reason = $3, paused_at = now() where workspace_id = $1 and channel = $2`, [workspaceId, channel, reason]);
+  await notifyAdmins(db, {
+    workspaceId,
+    title: `${label(channel)} sending paused automatically`,
+    detail: `${reason} Check it, then resume in Admin → Sending.`,
+    href: "/admin",
+  });
+  return true;
 }

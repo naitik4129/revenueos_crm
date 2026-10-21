@@ -17,6 +17,11 @@ import { processInboundUpsert } from "../services/whatsapp-inbound.service.js";
 import { isOutboundRestricted, isTerminalDisconnect, randomSpacingMs, reconnectDelayMs } from "../domain/baileys-policy.js";
 import { supabaseAdmin } from "../supabaseAdmin.js";
 import { sendBlockReason } from "../services/consent.service.js";
+import { autoPauseChannel } from "../services/send-policy.service.js";
+import { pauseWhatsAppOnFailures } from "../services/whatsapp-safety.service.js";
+
+/** WhatsApp itself restricted the account (reachout lock / new-chat cap): the send waits and the channel is paused. */
+export class WhatsAppRestrictedError extends ProviderDeferredError {}
 
 export interface WhatsAppAttachment {
   storagePath: string;
@@ -219,7 +224,8 @@ export class BaileysManager {
     socket.ev.on("connection.update", (update) => void this.handleConnectionUpdate(socket, update));
     socket.ev.on("messages.upsert", (event) => {
       if (this.socket !== socket) return;
-      void processInboundUpsert(this.workspaceId, event).catch((error) => this.logger.error({ err: error }, "Inbound WhatsApp processing failed"));
+      const reply = (jid: string, text: string) => socket.sendMessage(jid, { text });
+      void processInboundUpsert(this.workspaceId, event, reply).catch((error) => this.logger.error({ err: error }, "Inbound WhatsApp processing failed"));
     });
   }
 
@@ -252,6 +258,7 @@ export class BaileysManager {
     const message = update.lastDisconnect?.error?.message ?? "WhatsApp connection closed.";
     if (this.intentionalClose) return;
     if (isTerminalDisconnect(code)) {
+      await withTransaction((db) => autoPauseChannel(db, this.workspaceId, "whatsapp", `WhatsApp session ended (${message}); pair the number again before resuming.`));
       await clearBaileysAuthState(this.workspaceId);
       await pool.query(
         `update crm.whatsapp_connection
@@ -378,7 +385,10 @@ export class BaileysManager {
     // Short transaction: row locks are released before the spacing sleep, so a disable toggle is never blocked.
     const claim = await withTransaction((db) =>
       claimOutboundSend(db, this.workspaceId, { source: input.source, phoneE164: input.phoneE164, preparedMessageId: prepared.message_id }, socket, this.connected),
-    );
+    ).catch(async (err: unknown) => {
+      if (err instanceof WhatsAppRestrictedError) await withTransaction((db) => autoPauseChannel(db, this.workspaceId, "whatsapp", err.message));
+      throw err;
+    });
     if (claim.kind === "not_registered") throw new PermanentProviderError("Recipient is not registered on WhatsApp.");
     if (claim.kind === "already_sent") return { providerMessageId: claim.messageId };
     if (claim.waitMs > 0) await sleep(claim.waitMs);
@@ -400,8 +410,19 @@ export class BaileysManager {
         : { document: buffer, fileName: input.attachment.fileName, mimetype: input.attachment.mimeType, caption: input.body };
     }
 
+    let sent: Awaited<ReturnType<WASocket["sendMessage"]>>;
+    try {
+      sent = await this.socket!.sendMessage(jid, messageContent, { messageId: claim.messageId });
+    } catch (err) {
+      // Counted per IST day; too many pause the channel (pauseWhatsAppOnFailures).
+      const error = err instanceof Error ? err.message : String(err);
+      await withTransaction(async (db) => {
+        await db.query(`update crm.whatsapp_outbound_messages set status = 'failed', last_error = $2, updated_at = now() where ${column} = $1`, [sourceId, error]);
+        await pauseWhatsAppOnFailures(db, this.workspaceId);
+      });
+      throw err;
+    }
     return withTransaction(async (db) => {
-      const sent = await this.socket!.sendMessage(jid, messageContent, { messageId: claim.messageId });
       if (!sent?.message) throw new Error("Baileys returned no message payload.");
       const payload = proto.Message.toObject(proto.Message.fromObject(sent.message));
       const encrypted = encryptBytes(Buffer.from(JSON.stringify(payload), "utf8"), `whatsapp:outbound:${claim.messageId}`);
@@ -466,7 +487,9 @@ export async function claimOutboundSend(
     socket.fetchNewChatMessageCap().catch(() => control.new_chat_cap),
   ]);
   await db.query(`update crm.whatsapp_connection set reachout_lock = $1, new_chat_cap = $2 where workspace_id = $3`, [jsonSafe(liveReachout), jsonSafe(liveCap), workspaceId]);
-  if (isOutboundRestricted(liveReachout, liveCap)) throw new ProviderDeferredError("WhatsApp has applied a reachout or new-chat restriction.", 300_000);
+  if (isOutboundRestricted(liveReachout, liveCap)) throw new WhatsAppRestrictedError("WhatsApp has applied a reachout or new-chat restriction.", 300_000);
+  const pause = (await db.query<{ pause_reason: string }>(`select pause_reason from crm.send_policies where workspace_id = $1 and channel = 'whatsapp' and paused`, [workspaceId])).rows[0];
+  if (pause) throw new ProviderDeferredError(`WhatsApp sending is paused: ${pause.pause_reason}`, 300_000);
 
   const target = (
     await db.query<{ contact_id: string; phone_e164: string | null }>(

@@ -3,6 +3,7 @@ import { withTransaction } from "../db.js";
 import { jidToPhoneE164 } from "../domain/phone.js";
 import { addTimelineEvent, SYSTEM_ACTOR } from "./timeline.service.js";
 import { advanceLifecycle } from "./contacts.service.js";
+import { isStopReply, OPT_OUT_CONFIRMATION } from "./whatsapp-safety.service.js";
 
 function messageTime(message: WAMessage) {
   const raw = message.messageTimestamp;
@@ -18,8 +19,14 @@ const REASON = "Inbound WhatsApp reply";
  * open/nurture deals (automation -> manual, runs and pending actions cancelled), marks them
  * responded, moves the contact to `engaged` and tells the owner. Only metadata is stored,
  * never the message body. Ambiguous/unmatched replies wait for review.
+ * A reply of STOP / UNSUBSCRIBE / "band karo" (read here, still never stored) opts the number out
+ * of WhatsApp instead of marking it reachable, and `reply` sends one confirmation (the first time).
  */
-export async function processInboundUpsert(workspaceId: string, event: { messages: WAMessage[]; type: string; requestId?: string }) {
+export async function processInboundUpsert(
+  workspaceId: string,
+  event: { messages: WAMessage[]; type: string; requestId?: string },
+  reply?: (jid: string, text: string) => Promise<unknown>,
+) {
   if (event.type !== "notify" || event.requestId) return;
   for (const message of event.messages) {
     const id = message.key.id;
@@ -28,8 +35,10 @@ export async function processInboundUpsert(workspaceId: string, event: { message
     const phone = jidToPhoneE164(directJid);
     if (!phone) continue;
     const type = getContentType(message.message) ?? "unknown";
+    const stop = isStopReply(message.message.conversation ?? message.message.extendedTextMessage?.text);
 
-    await withTransaction(async (db) => {
+    const confirm = await withTransaction(async (db) => {
+      let newlyOptedOut = false;
       await db.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [phone]);
       const inserted = await db.query(
         `insert into crm.whatsapp_inbound_events (workspace_id, message_id, sender_jid, sender_phone_e164, message_type, received_at, disposition)
@@ -38,7 +47,7 @@ export async function processInboundUpsert(workspaceId: string, event: { message
          returning message_id`,
         [workspaceId, id, directJid, phone, type, messageTime(message).toISOString()],
       );
-      if (inserted.rowCount === 0) return;
+      if (inserted.rowCount === 0) return false;
 
       const matches = await db.query<{ id: string; owner_id: string | null }>(
         `select id, owner_id from crm.contacts where workspace_id = $1 and phone_e164 = $2 and status = 'active' for update`,
@@ -69,18 +78,29 @@ export async function processInboundUpsert(workspaceId: string, event: { message
               and workflow_run_id in (select id from crm.workflow_runs where contact_id = $1)`,
           [contact.id, REASON],
         );
-        await db.query(
-          `insert into crm.contact_channels (contact_id, channel, status, reason) values ($1, 'whatsapp', 'reachable', 'Inbound reply received')
-           on conflict (contact_id, channel) do update set status = 'reachable', reason = excluded.reason, updated_by = null`,
-          [contact.id],
-        );
+        if (stop) {
+          const optedOut = await db.query(
+            `insert into crm.contact_channels (contact_id, channel, status, reason) values ($1, 'whatsapp', 'opted_out', 'Replied STOP on WhatsApp')
+             on conflict (contact_id, channel) do update set status = 'opted_out', reason = excluded.reason, updated_by = null
+               where contact_channels.status <> 'opted_out'`,
+            [contact.id],
+          );
+          newlyOptedOut ||= (optedOut.rowCount ?? 0) > 0;
+        } else {
+          await db.query(
+            `insert into crm.contact_channels (contact_id, channel, status, reason) values ($1, 'whatsapp', 'reachable', 'Inbound reply received')
+             on conflict (contact_id, channel) do update set status = 'reachable', reason = excluded.reason, updated_by = null
+               where contact_channels.status <> 'opted_out'`,
+            [contact.id],
+          );
+        }
         await db.query(`update crm.contacts set last_activity_at = now() where id = $1`, [contact.id]);
         await advanceLifecycle(db, contact.id, "engaged", SYSTEM_ACTOR);
         await addTimelineEvent(db, {
           contactId: contact.id,
           dealId: deals.rows[0]?.id ?? null,
           kind: "whatsapp",
-          title: "WhatsApp reply received - automation stopped",
+          title: stop ? "WhatsApp opt-out (STOP) - automation stopped" : "WhatsApp reply received - automation stopped",
           metadata: { messageId: id, messageType: type, duplicatePhoneMatch: count > 1 },
           ...SYSTEM_ACTOR,
         });
@@ -110,6 +130,9 @@ export async function processInboundUpsert(workspaceId: string, event: { message
           [phone, { workspaceId, messageId: id, matchCount: count }],
         );
       }
+      return newlyOptedOut;
     });
+    // After the commit: the confirmation is a courtesy, a failure to send it changes nothing.
+    if (confirm && reply) await reply(directJid, OPT_OUT_CONFIRMATION).catch(() => undefined);
   }
 }

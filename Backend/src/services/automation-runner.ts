@@ -8,6 +8,7 @@ import { supabaseAdmin } from "../supabaseAdmin.js";
 import * as automation from "./automation.service.js";
 import { checkSendPolicy } from "./send-policy.service.js";
 import { domainHasMx, markEmailInvalid, recordEmailSend, unsubscribeUrl, withUnsubscribe } from "./email-safety.service.js";
+import { whatsappNotEngagedReason } from "./whatsapp-safety.service.js";
 import { TEMPLATE_ATTACHMENTS_BUCKET } from "./workflows.service.js";
 import { claimQueuedProposalWhatsappSends, processQueuedProposalWhatsappSend } from "./proposalSending.service.js";
 import { claimQueuedMeetingWhatsappSends, processQueuedMeetingWhatsappSend } from "./meetingScheduledNotification.service.js";
@@ -50,6 +51,10 @@ async function dispatchMessage(ctx: automation.ActionContext, opts: RunnerOption
       await withTransaction((db) => markEmailInvalid(db, ctx.deal.contactId, reason));
       return { blocked: reason };
     }
+  } else {
+    // Never cold on WhatsApp: only a contact who replied, had a connected call or opted in.
+    const cold = await withTransaction((db) => whatsappNotEngagedReason(db, ctx.deal.contactId));
+    if (cold) return { blocked: cold };
   }
 
   // Sending policy (pause, hours, cap/ramp, gap) and consent once more, immediately before the provider call.

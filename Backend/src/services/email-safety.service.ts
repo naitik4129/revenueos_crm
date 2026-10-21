@@ -2,8 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { promises as dns } from "node:dns";
 import type { Queryable } from "../dto.js";
 import { env } from "../env.js";
-import { notifyAdmins } from "./notifications.service.js";
-import { getSendPolicy } from "./send-policy.service.js";
+import { autoPauseChannel } from "./send-policy.service.js";
 import { addTimelineEvent, SYSTEM_ACTOR } from "./timeline.service.js";
 
 /**
@@ -155,12 +154,8 @@ export async function autoPauseEmailIfNeeded(db: Queryable, workspaceId: string)
     )
   ).rows[0]!;
   if (stats.sends < AUTO_PAUSE_MIN_SENDS || stats.bad / stats.sends < AUTO_PAUSE_RATE) return false;
-  const policy = await getSendPolicy(db, workspaceId, "email", true);
-  if (policy.paused) return false;
   const reason = `Bounce + complaint rate ${((stats.bad / stats.sends) * 100).toFixed(1)}% over 7 days (${stats.bad} of ${stats.sends} sends).`;
-  await db.query(`update crm.send_policies set paused = true, pause_reason = $2, paused_at = now() where workspace_id = $1 and channel = 'email'`, [workspaceId, reason]);
-  await notifyAdmins(db, { workspaceId, title: "Email sending paused automatically", detail: `${reason} Check the list and the mailbox, then resume in Admin → Sending.`, href: "/admin" });
-  return true;
+  return autoPauseChannel(db, workspaceId, "email", reason);
 }
 
 // --- MX check ---

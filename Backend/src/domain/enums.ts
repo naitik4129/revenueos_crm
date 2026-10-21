@@ -90,7 +90,7 @@ export type ContactChannel = (typeof CONTACT_CHANNELS)[number];
 export const CONTACT_CHANNEL_STATUS: Record<ContactChannel, readonly string[]> = {
   phone: ["valid", "reachable", "temporarily_unreachable", "invalid", "wrong_number", "do_not_contact"],
   email: ["valid", "delivered", "temporary_bounce", "permanent_bounce", "unsubscribed", "invalid"],
-  whatsapp: ["valid", "reachable", "temporarily_unreachable", "invalid", "opted_out", "do_not_contact"],
+  whatsapp: ["valid", "reachable", "temporarily_unreachable", "invalid", "opted_in", "opted_out", "do_not_contact"],
 };
 
 export const LEAD_SOURCES = [

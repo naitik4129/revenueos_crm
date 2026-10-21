@@ -63,7 +63,13 @@ export type PhoneContactabilityStatus =
 export type EmailContactabilityStatus =
   "valid" | "delivered" | "temporary_bounce" | "permanent_bounce" | "unsubscribed" | "invalid";
 export type WhatsAppContactabilityStatus =
-  "valid" | "reachable" | "temporarily_unreachable" | "invalid" | "opted_out" | "do_not_contact";
+  | "valid"
+  | "reachable"
+  | "temporarily_unreachable"
+  | "invalid"
+  | "opted_in"
+  | "opted_out"
+  | "do_not_contact";
 type ContactabilityBase = { reason?: string; updatedAt: string };
 export type Contactability =
   | (ContactabilityBase & { channel: "phone"; status: PhoneContactabilityStatus })

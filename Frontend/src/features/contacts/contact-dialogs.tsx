@@ -49,6 +49,7 @@ const CHANNEL_STATUSES: Record<ContactChannel, string[]> = {
     "reachable",
     "temporarily_unreachable",
     "invalid",
+    "opted_in",
     "opted_out",
     "do_not_contact",
   ],
