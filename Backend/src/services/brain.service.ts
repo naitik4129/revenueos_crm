@@ -513,63 +513,114 @@ const BLOCKED_CHANNEL = `((ch.channel = 'email' and ch.status in ('unsubscribed'
    or (ch.channel = 'phone' and ch.status = 'do_not_contact')
    or (ch.channel = 'whatsapp' and ch.status in ('do_not_contact', 'opted_out')))`;
 
+/** A position in the suppressions feed: after (changed_at, contact id). `full` = still listing the current blocks. */
+interface SuppressionCursor {
+  full: boolean;
+  /** changed_at as UTC ISO with microseconds, so it round-trips exactly. */
+  at: string;
+  id: string;
+}
+const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
+/** `since` is exclusive: (since, MAX_UUID) is after every row changed at exactly `since`. */
+const MAX_UUID = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+const EXACT_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** timestamptz -> UTC ISO with all six fractional digits (toISOString would drop to milliseconds). */
+const exactIso = (column: string) => `to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+
+export const encodeSuppressionCursor = (c: SuppressionCursor) => Buffer.from(JSON.stringify([c.full ? "f" : "c", c.at, c.id])).toString("base64url");
+
+export function decodeSuppressionCursor(raw: string): SuppressionCursor {
+  try {
+    const [mode, at, id] = JSON.parse(Buffer.from(raw, "base64url").toString()) as unknown[];
+    if ((mode === "f" || mode === "c") && typeof at === "string" && EXACT_ISO.test(at) && typeof id === "string" && UUID.test(id)) {
+      return { full: mode === "f", at, id };
+    }
+  } catch {
+    // fall through
+  }
+  throw new ValidationError("Invalid cursor: pass back the `next` value of the previous page unchanged.", { field: "cursor" });
+}
+
 /**
- * Who the brain must not contact. Without `since`: the full current list. With `since`: every
- * contact whose suppression changed after it, including lifts (status "lifted"), so the brain
- * can unblock. A DNC lift comes from dnc_events; a channel set back to an allowed status after
- * `since` counts as a lift (channels keep no history). A contact still blocked for another
- * reason is reported as "suppressed" with its current reasons.
+ * Who the brain must not contact, as a feed it pages with an opaque cursor (`next`).
+ *  - No `cursor` and no `since`: the full current list (contacts with a block), oldest change
+ *    first. When it is exhausted, `next` switches to the change feed from that point.
+ *  - `cursor`, or `since` (a time, exclusive): every contact whose suppression changed after it,
+ *    including lifts (status "lifted"), so the brain can unblock. A DNC lift comes from
+ *    dnc_events; a channel set to an allowed status counts as a lift (channels keep no history).
+ *    A contact still blocked for another reason is "suppressed" with its current reasons.
+ * Order and cursor are (changed_at, contact id) at full precision, so rows sharing one timestamp
+ * (a bulk change) are each returned exactly once and the cursor always moves. Every branch is
+ * filtered by workspace before anything is grouped.
  */
-export async function listSuppressions(db: Queryable, workspaceId: string, q: { since?: string; limit?: number }) {
+export async function listSuppressions(db: Queryable, workspaceId: string, q: { since?: string; cursor?: string; limit?: number }) {
   const limit = Math.min(q.limit ?? 1000, 5000);
+  if (q.since && q.cursor) throw new ValidationError("Pass either since or cursor, not both.", { field: "cursor" });
+  const from: SuppressionCursor = q.cursor
+    ? decodeSuppressionCursor(q.cursor)
+    : q.since
+      ? { full: false, at: q.since, id: MAX_UUID }
+      : { full: true, at: "-infinity", id: ZERO_UUID };
   const result = await db.query<{
     contact_id: string;
     email: string | null;
     phone_e164: string | null;
     reasons: string[] | null;
     external_ids: { source: string; externalId: string }[] | null;
-    changed_at: Date;
+    changed_at: string;
   }>(
-    `with blocked as (
-       select ch.contact_id,
-              case when ch.channel = 'email' and ch.status = 'unsubscribed' then 'email_unsubscribed'
-                   when ch.channel = 'email' then 'email_bounced'
-                   when ch.channel = 'phone' then 'phone_do_not_contact'
-                   else 'whatsapp_' || ch.status end as reason,
-              ch.updated_at as changed_at
-         from crm.contact_channels ch where ${BLOCKED_CHANNEL}
+    `with changes as (
+       select ch.contact_id, ch.updated_at as changed_at, ${BLOCKED_CHANNEL} as blocks
+         from crm.contact_channels ch join crm.contacts c on c.id = ch.contact_id
+        where c.workspace_id = $1 and ch.updated_at >= $2::timestamptz
        union all
-       select id, 'do_not_contact', dnc_at from crm.contacts where status = 'do_not_contact'
+       select c.id, coalesce(c.dnc_at, c.updated_at), true
+         from crm.contacts c
+        where c.workspace_id = $1 and c.status = 'do_not_contact' and coalesce(c.dnc_at, c.updated_at) >= $2::timestamptz
+       union all
+       select d.contact_id, d.created_at, false
+         from crm.dnc_events d join crm.contacts c on c.id = d.contact_id
+        where c.workspace_id = $1 and d.action = 'reactivated' and d.created_at >= $2::timestamptz
      ),
-     lifted as (
-       select contact_id, created_at as changed_at from crm.dnc_events where action = 'reactivated'
-       union all
-       select ch.contact_id, ch.updated_at from crm.contact_channels ch where not ${BLOCKED_CHANNEL}
-     ),
-     changes as (
-       select contact_id, reason, changed_at from blocked
-       union all
-       select contact_id, null, changed_at from lifted where $2::timestamptz is not null
+     moved as (
+       -- The full list positions a contact by its blocks only; the change feed by any change.
+       select contact_id, max(changed_at) as changed_at from changes where blocks or not $4::boolean group by contact_id
      )
-     select c.id as contact_id, c.email, c.phone_e164,
-            array_agg(distinct x.reason order by x.reason) filter (where x.reason is not null) as reasons,
-            max(x.changed_at) as changed_at,
+     select c.id as contact_id, c.email, c.phone_e164, ${exactIso("m.changed_at")} as changed_at,
+            (select array_agg(z.reason order by z.reason) from (
+               select case when ch.channel = 'email' and ch.status = 'unsubscribed' then 'email_unsubscribed'
+                           when ch.channel = 'email' then 'email_bounced'
+                           when ch.channel = 'phone' then 'phone_do_not_contact'
+                           else 'whatsapp_' || ch.status end as reason
+                 from crm.contact_channels ch where ch.contact_id = c.id and ${BLOCKED_CHANNEL}
+               union all
+               select 'do_not_contact' where c.status = 'do_not_contact'
+             ) z) as reasons,
             (select json_agg(json_build_object('source', r.source, 'externalId', r.external_id) order by r.source)
                from crm.external_refs r where r.contact_id = c.id) as external_ids
-       from changes x
-       join crm.contacts c on c.id = x.contact_id and c.workspace_id = $1 and c.status <> 'merged'
-      group by c.id
-     having $2::timestamptz is null or max(x.changed_at) > $2::timestamptz
-      order by changed_at, c.id
-      limit $3`,
-    [workspaceId, q.since ?? null, limit],
+       from moved m
+       join crm.contacts c on c.id = m.contact_id and c.status <> 'merged'
+      where (m.changed_at, c.id) > ($2::timestamptz, $3::uuid)
+      order by m.changed_at, c.id
+      limit $5`,
+    [workspaceId, from.at, from.id, from.full, limit + 1],
   );
-  const data = result.rows.map((r) => {
-    const changedAt = r.changed_at.toISOString();
+  const hasMore = result.rows.length > limit;
+  const rows = result.rows.slice(0, limit);
+  const data = rows.map((r) => {
     const base = { contactId: r.contact_id, email: r.email, phone: r.phone_e164, externalIds: r.external_ids ?? [] };
     return r.reasons?.length
-      ? { ...base, status: "suppressed" as const, reasons: r.reasons, changedAt }
-      : { ...base, status: "lifted" as const, reasons: [], changedAt, liftedAt: changedAt };
+      ? { ...base, status: "suppressed" as const, reasons: r.reasons, changedAt: r.changed_at }
+      : { ...base, status: "lifted" as const, reasons: [], changedAt: r.changed_at, liftedAt: r.changed_at };
   });
-  return { data, nextSince: data.at(-1)?.changedAt ?? q.since ?? null };
+
+  const exactAt = async (value: string) => (await db.query<{ at: string }>(`select ${exactIso("$1::timestamptz")} as at`, [value])).rows[0]!.at;
+  const last = rows.at(-1);
+  let next: SuppressionCursor = last ? { full: from.full, at: last.changed_at, id: last.contact_id } : { ...from, at: q.since ? await exactAt(q.since) : from.at };
+  if (from.full && !hasMore) {
+    // Full list done: carry on as a change feed from its last row (or from now when it was empty).
+    next = last ? { full: false, at: last.changed_at, id: last.contact_id } : { full: false, at: await exactAt("now"), id: ZERO_UUID };
+  }
+  return { data, next: encodeSuppressionCursor(next), hasMore };
 }

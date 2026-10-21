@@ -9,9 +9,13 @@
  * 4. Times every list, page, dashboard and /brain/v1 route, the CSV import, 30 brain batches of
  *    500, the suppressions tie check and a mixed load; EXPLAINs anything over 300 ms.
  * 5. Writes load/RESULTS.md.
+ *
+ * Quick mode, for a re-measure: `npm run load -- --only <area>` seeds the same data, runs only
+ * that area (brain areas: the first QUICK_BATCHES batches of one route) and appends a section to
+ * RESULTS.md instead of rewriting it.
  */
 import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import http, { type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
@@ -46,6 +50,17 @@ if (guard) {
   process.exit(1);
 }
 const dbUrl = new URL(LOAD_DB_URL!);
+
+const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv"];
+const QUICK_BATCHES = 3;
+const onlyAt = process.argv.indexOf("--only");
+const ONLY = onlyAt >= 0 ? (process.argv[onlyAt + 1] ?? "") : undefined;
+if (ONLY !== undefined && !AREAS.includes(ONLY)) {
+  console.error(`[load] --only needs one of: ${AREAS.join(", ")}.`);
+  process.exit(1);
+}
+const FULL = ONLY === undefined;
+const want = (area: string) => FULL || ONLY === area;
 
 // --- HTTP client ---------------------------------------------------------------------------
 const agent = new http.Agent({ keepAlive: true, maxSockets: 64 });
@@ -336,230 +351,260 @@ async function main() {
   const sA = sizes(15_000);
 
   // --- Lists, as a salesperson in workspace A ---
-  log("Lists…");
   const list = (group: string, name: string, path: string, who: Who = sam) => bench(group, name, one(path, who));
-  await list("App shell", "GET /me", "/me");
-  await list("App shell", "GET /workspaces", "/workspaces");
-  await list("App shell", "GET /profiles", "/profiles");
-  await list("App shell", "GET /notifications", "/notifications");
-  for (const [name, q] of [
-    ["default", ""],
-    ["sort=name", "?sort=name"],
-    ["sort=-name", "?sort=-name"],
-    ["sort=company", "?sort=company"],
-    ["sort=-lastActivity", "?sort=-lastActivity"],
-    ["sort=created", "?sort=created"],
-    ["search=smith", "?search=smith"],
-    ["search (no match)", "?search=zzqxv"],
-    ["ownerId=none", "?ownerId=none"],
-    ["hasOpenDeal=true", "?hasOpenDeal=true"],
-    ["hasOpenDeal=false", "?hasOpenDeal=false"],
-    ["lifecycleStage=engaged", "?lifecycleStage=engaged"],
-    ["status=do_not_contact", "?status=do_not_contact"],
-    ["last page (offset 14950)", "?offset=14950"],
-    ["limit=500", "?limit=500"],
-  ]) await list("Contacts list", name!, `/contacts${q}`);
-  for (const [name, q] of [
-    ["default (name)", ""],
-    ["sort=contacts", "?sort=contacts"],
-    ["sort=-openDeals", "?sort=-openDeals"],
-    ["sort=created", "?sort=created"],
-    ["search=Logistics", "?search=Logistics"],
-    ["search (no match)", "?search=zzqxv"],
-    ["ownerId=none", "?ownerId=none"],
-    ["last page (offset 14950)", "?offset=14950"],
-  ]) await list("Companies list", name!, `/companies${q}`);
-  await list("Companies list", "GET /companies/industries", "/companies/industries");
-  for (const [name, q] of [
-    ["board (outcome=open, limit 500)", "?outcome=open&limit=500"],
-    ["default", ""],
-    ["sort=name", "?sort=name"],
-    ["sort=-amount", "?sort=-amount"],
-    ["sort=-lastActivity", "?sort=-lastActivity"],
-    ["sort=-closed", "?sort=-closed"],
-    ["search=smith", "?search=smith"],
-    ["ownerId=none", "?ownerId=none"],
-    ["missingNextAction=true", "?outcome=open&missingNextAction=true"],
-    ["stage=negotiation", "?stage=negotiation"],
-    ["last page (offset 7950)", "?offset=7950"],
-  ]) await list("Deals list", name!, `/deals${q}`);
-  for (const [name, q] of [
-    ["open", "?status=open"],
-    ["overdue", "?status=open&overdueOnly=true"],
-    ["due today", "?status=open&dueTodayOnly=true"],
-    ["upcoming", "?status=open&upcomingOnly=true"],
-    ["open, offset 5000", "?status=open&offset=5000"],
-  ]) await list("Tasks", name!, `/tasks${q}`);
-  for (const when of ["upcoming", "past", "today"]) await list("Meetings", `when=${when}`, `/meetings?when=${when}`);
-  await list("Proposals", "default", "/proposals");
-  await list("Proposals", "status=sent", "/proposals?status=sent");
-  await list("Proposals", "GET /proposals/summary", "/proposals/summary");
-  await list("Automation", "GET /runs", "/runs");
-  await list("Automation", "GET /runs?search=smith", "/runs?search=smith");
-  await list("Automation", "GET /scheduled-actions", "/scheduled-actions");
-  await list("Automation", "GET /scheduled-actions?search=smith", "/scheduled-actions?search=smith");
-  await list("Automation", "GET /workflows", "/workflows");
-  await list("Automation", "GET /templates", "/templates");
-  await list("Dashboard", "GET /dashboard/summary", "/dashboard/summary");
-  await list("Admin", "GET /admin/users", "/admin/users", adm);
-  await list("Admin", "GET /workspaces/:id/members", `/workspaces/${A}/members`, adm);
-  await list("Admin", "GET /workspaces/:id/brain-keys", `/workspaces/${A}/brain-keys`, adm);
-
-  // --- Record pages: the calls each page makes (first the record, then the rest in parallel) ---
-  log("Pages…");
   const contactN = (i: number) => 1 + ((i * 37) % sA.openDeals);
-  await bench("Pages", "Contact page (11 calls)", async (i) => {
-    const n = contactN(i);
-    const id = uid("A", "ct", n);
-    const first = await get(`/contacts/${id}`, sam);
-    const companyId = uid("A", "co", ((n - 1) % sA.companiesWithContacts) + 1);
-    const rest = await Promise.all([
-      get(`/companies/${companyId}`, sam),
-      get(`/deals/${uid("A", "dl", n)}/meetings`, sam),
-      get(`/contacts/${id}/deals?limit=50`, sam),
-      get(`/contacts/${id}/calls`, sam),
-      get(`/contacts/${id}/email-activities`, sam),
-      get(`/contacts/${id}/timeline?limit=100`, sam),
-      get(`/contacts/${id}/notes`, sam),
-      get(`/contacts/${id}/contactability`, sam),
-      get(`/tasks?contactId=${id}&status=open&limit=20`, sam),
-    ]);
-    return [first, ...rest];
-  });
-  await bench("Pages", "Deal page (10 calls)", async (i) => {
-    const n = contactN(i);
-    const id = uid("A", "dl", n);
-    const first = await get(`/deals/${id}`, sam);
-    const rest = await Promise.all([
-      get(`/deals/${id}/tasks?limit=200`, sam),
-      get(`/deals/${id}/meetings`, sam),
-      get(`/deals/${id}/proposals`, sam),
-      get(`/deals/${id}/runs`, sam),
-      get(`/scheduled-actions?dealId=${id}&limit=500`, sam),
-      get(`/deals/${id}/timeline?limit=100`, sam),
-      get(`/contacts/${uid("A", "ct", n)}`, sam),
-      get(`/contacts/${uid("A", "ct", n)}/notes`, sam),
-      get(`/companies/${uid("A", "co", ((n - 1) % sA.companiesWithContacts) + 1)}`, sam),
-    ]);
-    return [first, ...rest];
-  });
-  await bench("Pages", "Company page (4 calls + tasks of 10 open deals)", async (i) => {
-    const id = uid("A", "co", 1 + ((i * 53) % sA.companiesWithContacts));
-    const first = await get(`/companies/${id}`, sam);
-    const [contacts, deals, timeline] = await Promise.all([get(`/companies/${id}/contacts?limit=200`, sam), get(`/companies/${id}/deals?limit=200`, sam), get(`/companies/${id}/timeline?limit=100`, sam)]);
-    const openDeals = ((deals.json as { data?: { id: string; outcome: string }[] }).data ?? []).filter((d) => d.outcome === "open").slice(0, 10);
-    const tasks = await Promise.all(openDeals.map((d) => get(`/deals/${d.id}/tasks?limit=200`, sam)));
-    return [first, contacts, deals, timeline, ...tasks];
-  });
+  if (FULL) {
+    log("Lists…");
+    await list("App shell", "GET /me", "/me");
+    await list("App shell", "GET /workspaces", "/workspaces");
+    await list("App shell", "GET /profiles", "/profiles");
+    await list("App shell", "GET /notifications", "/notifications");
+    for (const [name, q] of [
+      ["default", ""],
+      ["sort=name", "?sort=name"],
+      ["sort=-name", "?sort=-name"],
+      ["sort=company", "?sort=company"],
+      ["sort=-lastActivity", "?sort=-lastActivity"],
+      ["sort=created", "?sort=created"],
+      ["search=smith", "?search=smith"],
+      ["search (no match)", "?search=zzqxv"],
+      ["ownerId=none", "?ownerId=none"],
+      ["hasOpenDeal=true", "?hasOpenDeal=true"],
+      ["hasOpenDeal=false", "?hasOpenDeal=false"],
+      ["lifecycleStage=engaged", "?lifecycleStage=engaged"],
+      ["status=do_not_contact", "?status=do_not_contact"],
+      ["last page (offset 14950)", "?offset=14950"],
+      ["limit=500", "?limit=500"],
+    ]) await list("Contacts list", name!, `/contacts${q}`);
+    for (const [name, q] of [
+      ["default (name)", ""],
+      ["sort=contacts", "?sort=contacts"],
+      ["sort=-openDeals", "?sort=-openDeals"],
+      ["sort=created", "?sort=created"],
+      ["search=Logistics", "?search=Logistics"],
+      ["search (no match)", "?search=zzqxv"],
+      ["ownerId=none", "?ownerId=none"],
+      ["last page (offset 14950)", "?offset=14950"],
+    ]) await list("Companies list", name!, `/companies${q}`);
+    await list("Companies list", "GET /companies/industries", "/companies/industries");
+    for (const [name, q] of [
+      ["board (outcome=open, limit 500)", "?outcome=open&limit=500"],
+      ["default", ""],
+      ["sort=name", "?sort=name"],
+      ["sort=-amount", "?sort=-amount"],
+      ["sort=-lastActivity", "?sort=-lastActivity"],
+      ["sort=-closed", "?sort=-closed"],
+      ["search=smith", "?search=smith"],
+      ["ownerId=none", "?ownerId=none"],
+      ["missingNextAction=true", "?outcome=open&missingNextAction=true"],
+      ["stage=negotiation", "?stage=negotiation"],
+      ["last page (offset 7950)", "?offset=7950"],
+    ]) await list("Deals list", name!, `/deals${q}`);
+    for (const [name, q] of [
+      ["open", "?status=open"],
+      ["overdue", "?status=open&overdueOnly=true"],
+      ["due today", "?status=open&dueTodayOnly=true"],
+      ["upcoming", "?status=open&upcomingOnly=true"],
+      ["open, offset 5000", "?status=open&offset=5000"],
+    ]) await list("Tasks", name!, `/tasks${q}`);
+    for (const when of ["upcoming", "past", "today"]) await list("Meetings", `when=${when}`, `/meetings?when=${when}`);
+    await list("Proposals", "default", "/proposals");
+    await list("Proposals", "status=sent", "/proposals?status=sent");
+    await list("Proposals", "GET /proposals/summary", "/proposals/summary");
+    await list("Automation", "GET /runs", "/runs");
+    await list("Automation", "GET /runs?search=smith", "/runs?search=smith");
+    await list("Automation", "GET /scheduled-actions", "/scheduled-actions");
+    await list("Automation", "GET /scheduled-actions?search=smith", "/scheduled-actions?search=smith");
+    await list("Automation", "GET /workflows", "/workflows");
+    await list("Automation", "GET /templates", "/templates");
+    await list("Dashboard", "GET /dashboard/summary", "/dashboard/summary");
+    await list("Admin", "GET /admin/users", "/admin/users", adm);
+    await list("Admin", "GET /workspaces/:id/members", `/workspaces/${A}/members`, adm);
+    await list("Admin", "GET /workspaces/:id/brain-keys", `/workspaces/${A}/brain-keys`, adm);
+
+    // --- Record pages: the calls each page makes (first the record, then the rest in parallel) ---
+    log("Pages…");
+    await bench("Pages", "Contact page (11 calls)", async (i) => {
+      const n = contactN(i);
+      const id = uid("A", "ct", n);
+      const first = await get(`/contacts/${id}`, sam);
+      const companyId = uid("A", "co", ((n - 1) % sA.companiesWithContacts) + 1);
+      const rest = await Promise.all([
+        get(`/companies/${companyId}`, sam),
+        get(`/deals/${uid("A", "dl", n)}/meetings`, sam),
+        get(`/contacts/${id}/deals?limit=50`, sam),
+        get(`/contacts/${id}/calls`, sam),
+        get(`/contacts/${id}/email-activities`, sam),
+        get(`/contacts/${id}/timeline?limit=100`, sam),
+        get(`/contacts/${id}/notes`, sam),
+        get(`/contacts/${id}/contactability`, sam),
+        get(`/tasks?contactId=${id}&status=open&limit=20`, sam),
+      ]);
+      return [first, ...rest];
+    });
+    await bench("Pages", "Deal page (10 calls)", async (i) => {
+      const n = contactN(i);
+      const id = uid("A", "dl", n);
+      const first = await get(`/deals/${id}`, sam);
+      const rest = await Promise.all([
+        get(`/deals/${id}/tasks?limit=200`, sam),
+        get(`/deals/${id}/meetings`, sam),
+        get(`/deals/${id}/proposals`, sam),
+        get(`/deals/${id}/runs`, sam),
+        get(`/scheduled-actions?dealId=${id}&limit=500`, sam),
+        get(`/deals/${id}/timeline?limit=100`, sam),
+        get(`/contacts/${uid("A", "ct", n)}`, sam),
+        get(`/contacts/${uid("A", "ct", n)}/notes`, sam),
+        get(`/companies/${uid("A", "co", ((n - 1) % sA.companiesWithContacts) + 1)}`, sam),
+      ]);
+      return [first, ...rest];
+    });
+    await bench("Pages", "Company page (4 calls + tasks of 10 open deals)", async (i) => {
+      const id = uid("A", "co", 1 + ((i * 53) % sA.companiesWithContacts));
+      const first = await get(`/companies/${id}`, sam);
+      const [contacts, deals, timeline] = await Promise.all([get(`/companies/${id}/contacts?limit=200`, sam), get(`/companies/${id}/deals?limit=200`, sam), get(`/companies/${id}/timeline?limit=100`, sam)]);
+      const openDeals = ((deals.json as { data?: { id: string; outcome: string }[] }).data ?? []).filter((d) => d.outcome === "open").slice(0, 10);
+      const tasks = await Promise.all(openDeals.map((d) => get(`/deals/${d.id}/tasks?limit=200`, sam)));
+      return [first, contacts, deals, timeline, ...tasks];
+    });
+  }
 
   // --- Brain reads ---
-  log("Brain reads…");
-  await bench("Brain", "GET /suppressions (full list)", one("/brain/v1/suppressions", { brainKey: keyA }));
-  await bench("Brain", "GET /suppressions?limit=5000", one("/brain/v1/suppressions?limit=5000", { brainKey: keyA }));
-  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
-  await bench("Brain", "GET /suppressions?since=30 days ago", one(`/brain/v1/suppressions?since=${encodeURIComponent(since)}`, { brainKey: keyA }));
+  if (want("suppressions")) {
+    log("Brain reads…");
+    await bench("Brain", "GET /suppressions (full list, first page)", one("/brain/v1/suppressions", { brainKey: keyA }));
+    await bench("Brain", "GET /suppressions?limit=5000", one("/brain/v1/suppressions?limit=5000", { brainKey: keyA }));
+    const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    await bench("Brain", "GET /suppressions?since=30 days ago", one(`/brain/v1/suppressions?since=${encodeURIComponent(since)}`, { brainKey: keyA }));
+  }
 
   // --- CSV import, 2,000 rows, once ---
-  log("CSV import (2,000 rows)…");
-  const csvRows = Array.from({ length: 2000 }, (_, i) => ({
-    rowNumber: i + 2,
-    firstName: "Csv",
-    lastName: `Person ${i}`,
-    email: `csv.person.${i}@csv-${i % 400}.example`,
-    phone: `+9170${String(i).padStart(8, "0")}`,
-    company: `CSV Co ${i % 400}`,
-    website: `csv-${i % 400}.example`,
-    industry: "Retail",
-    source: "linkedin",
-  }));
-  startTrace();
-  const csv = await call("POST", "/contacts/import", sam, { rows: csvRows });
-  const csvStatements = stopTrace();
-  const csvData = (csv.json as { data?: { created: unknown[]; duplicates: unknown[]; failed: unknown[] } }).data;
-  const csvSummary = csvData ? `created ${csvData.created.length}, duplicates ${csvData.duplicates.length}, failed ${csvData.failed.length}` : `HTTP ${csv.status} ${JSON.stringify(csv.json).slice(0, 200)}`;
-  log(`CSV: ${(csv.ms / 1000).toFixed(1)} s, ${csvStatements.length} SQL, ${csvSummary}`);
+  let csv: { ms: number; statements: TracedStatement[]; summary: string } | null = null;
+  if (want("csv")) {
+    log("CSV import (2,000 rows)…");
+    const csvRows = Array.from({ length: 2000 }, (_, i) => ({
+      rowNumber: i + 2,
+      firstName: "Csv",
+      lastName: `Person ${i}`,
+      email: `csv.person.${i}@csv-${i % 400}.example`,
+      phone: `+9170${String(i).padStart(8, "0")}`,
+      company: `CSV Co ${i % 400}`,
+      website: `csv-${i % 400}.example`,
+      industry: "Retail",
+      source: "linkedin",
+    }));
+    startTrace();
+    const r = await call("POST", "/contacts/import", sam, { rows: csvRows });
+    const statements = stopTrace();
+    const data = (r.json as { data?: { created: unknown[]; duplicates: unknown[]; failed: unknown[] } }).data;
+    const summary = data ? `created ${data.created.length}, duplicates ${data.duplicates.length}, failed ${data.failed.length}` : `HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 200)}`;
+    csv = { ms: r.ms, statements, summary };
+    log(`CSV: ${(r.ms / 1000).toFixed(1)} s, ${statements.length} SQL, ${summary}`);
+  }
 
-  // --- Brain batches: 27 one after another, then 3 at once during the mixed load, then handovers ---
-  log("Brain batches…");
-  for (let b = 0; b < 8; b++) await brainBatch("companies", `${b + 1}/8`, companyBatch(b), keyA, true);
-  for (let b = 0; b < 5; b++) await brainBatch("contacts", `${b + 1}/8`, contactBatch(b), keyA, true);
-  for (let b = 0; b < 7; b++) await brainBatch("calls", `${b + 1}/7`, callBatch(b), keyA, true);
-  for (let b = 0; b < 7; b++) await brainBatch("email-events", `${b + 1}/7`, emailBatch(b), keyA, true);
+  // --- Brain batches: 27 one after another, then 3 at once during the mixed load, then handovers.
+  // Quick mode (--only brain-…) runs the first QUICK_BATCHES of one route.
+  const count = (full: number) => (FULL ? full : Math.min(full, QUICK_BATCHES));
+  const batches = async (area: string, route: string, total: number, sequential: number, make: (b: number) => unknown[]) => {
+    if (!want(area)) return;
+    const n = count(sequential);
+    for (let b = 0; b < n; b++) await brainBatch(route, `${b + 1}/${FULL ? total : n}`, make(b), keyA, true);
+  };
+  if (FULL || ONLY?.startsWith("brain-")) log("Brain batches…");
+  await batches("brain-companies", "companies", 8, 8, companyBatch);
+  await batches("brain-contacts", "contacts", 8, 5, contactBatch);
+  await batches("brain-calls", "calls", 7, 7, callBatch);
+  await batches("brain-email", "email-events", 7, 7, emailBatch);
 
   // --- Mixed load: 10 users browsing while 3 contact batches run at once ---
-  log("Mixed load: 10 users + 3 concurrent brain batches…");
-  // The fake auth's sessions last an hour and the run is longer: sign in again first.
-  sam.token = await token("sam@load.local");
-  const userTimes: number[] = [];
-  let userErrors = 0;
-  let firstUserError: string | undefined;
-  let browsing = true;
-  const userRoutes = (i: number) => {
-    const n = contactN(i);
-    return [`/contacts`, `/deals?outcome=open&limit=500`, `/contacts/${uid("A", "ct", n)}`, `/contacts/${uid("A", "ct", n)}/timeline?limit=100`, `/dashboard/summary`, `/tasks?status=open`];
-  };
-  const users = Array.from({ length: 10 }, async (_, u) => {
-    for (let i = 0; browsing; i++) {
-      for (const path of userRoutes(u * 100 + i)) {
-        if (!browsing) break;
-        const r = await get(path, sam);
-        userTimes.push(r.ms);
-        if (r.status !== 200) {
-          userErrors++;
-          firstUserError ??= `${r.status} ${JSON.stringify(r.json).slice(0, 200)}`;
+  let mixed: MixedResult | null = null;
+  if (FULL) {
+    log("Mixed load: 10 users + 3 concurrent brain batches…");
+    // The fake auth's sessions last an hour and the run is longer: sign in again first.
+    sam.token = await token("sam@load.local");
+    const userTimes: number[] = [];
+    let userErrors = 0;
+    let firstUserError: string | undefined;
+    let browsing = true;
+    const userRoutes = (i: number) => {
+      const n = contactN(i);
+      return [`/contacts`, `/deals?outcome=open&limit=500`, `/contacts/${uid("A", "ct", n)}`, `/contacts/${uid("A", "ct", n)}/timeline?limit=100`, `/dashboard/summary`, `/tasks?status=open`];
+    };
+    const users = Array.from({ length: 10 }, async (_, u) => {
+      for (let i = 0; browsing; i++) {
+        for (const path of userRoutes(u * 100 + i)) {
+          if (!browsing) break;
+          const r = await get(path, sam);
+          userTimes.push(r.ms);
+          if (r.status !== 200) {
+            userErrors++;
+            firstUserError ??= `${r.status} ${JSON.stringify(r.json).slice(0, 200)}`;
+          }
         }
       }
-    }
-  });
-  const concurrent = await Promise.all([5, 6, 7].map((b) => brainBatch("contacts", `${b + 1}/8 (3 at once, mixed load)`, contactBatch(b), keyA, false)));
-  browsing = false;
-  await Promise.all(users);
-  const userSorted = [...userTimes].sort((a, b) => a - b);
-  const mixed = { requests: userSorted.length, p50: pct(userSorted, 0.5), p95: pct(userSorted, 0.95), max: userSorted.at(-1) ?? 0, errors: userErrors, firstError: firstUserError, batchMs: concurrent.map((r) => r.ms) };
-  log(`Mixed: ${mixed.requests} user requests, p50 ${mixed.p50.toFixed(0)} ms, p95 ${mixed.p95.toFixed(0)} ms, max ${mixed.max.toFixed(0)} ms, ${mixed.errors} errors${firstUserError ? ` (first: ${firstUserError})` : ""}`);
-  sam.token = await token("sam@load.local");
-
-  await brainBatch("handovers", "1/1", handoverBatch(), keyA, true);
-
-  // --- Suppressions tie check (workspace C): 1,200 unsubscribes in one statement share one timestamp ---
-  log("Suppressions tie check…");
-  const t0 = (await direct.query<{ t: Date }>(`select now() as t`)).rows[0]!.t.toISOString();
-  await new Promise((r) => setTimeout(r, 50));
-  const bulk = await direct.query(
-    `update crm.contact_channels ch set status = 'unsubscribed', updated_at = now()
-       from crm.contacts c
-      where c.id = ch.contact_id and c.workspace_id = $1 and c.status = 'active' and ch.channel = 'email' and ch.status = 'valid'
-        and ch.contact_id in (select id from crm.contacts where workspace_id = $1 and status = 'active' order by id limit 1200)`,
-    [C],
-  );
-  const expected = bulk.rowCount ?? 0;
-  const got = new Set<string>();
-  let cursor = t0;
-  let pages = 0;
-  for (; pages < 20; pages++) {
-    const r = await get(`/brain/v1/suppressions?since=${encodeURIComponent(cursor)}&limit=500`, { brainKey: keyC });
-    const body = r.json as { data: { contactId: string }[]; nextSince: string | null };
-    for (const s of body.data) got.add(s.contactId);
-    if (body.data.length < 500 || !body.nextSince) {
-      pages++;
-      break;
-    }
-    cursor = body.nextSince;
+    });
+    const concurrent = await Promise.all([5, 6, 7].map((b) => brainBatch("contacts", `${b + 1}/8 (3 at once, mixed load)`, contactBatch(b), keyA, false)));
+    browsing = false;
+    await Promise.all(users);
+    const userSorted = [...userTimes].sort((a, b) => a - b);
+    mixed = { requests: userSorted.length, p50: pct(userSorted, 0.5), p95: pct(userSorted, 0.95), max: userSorted.at(-1) ?? 0, errors: userErrors, firstError: firstUserError, batchMs: concurrent.map((r) => r.ms) };
+    log(`Mixed: ${mixed.requests} user requests, p50 ${mixed.p50.toFixed(0)} ms, p95 ${mixed.p95.toFixed(0)} ms, max ${mixed.max.toFixed(0)} ms, ${mixed.errors} errors${firstUserError ? ` (first: ${firstUserError})` : ""}`);
+    sam.token = await token("sam@load.local");
   }
-  const tie = { expected, got: got.size, pages, pass: got.size === expected, stuck: pages >= 20 };
-  log(`Tie check: expected ${expected}, got ${got.size} over ${pages} page(s): ${tie.pass ? "PASS" : "FAIL"}`);
+
+  if (want("brain-handovers")) await brainBatch("handovers", "1/1", handoverBatch(), keyA, true);
+
+  // --- Suppressions checks (workspace C): follow `next` until hasMore is false ---
+  const checks: FeedCheck[] = [];
+  if (want("suppressions")) {
+    log("Suppressions paging checks…");
+    const blockedInC = async () =>
+      Number(
+        (
+          await direct.query<{ n: string }>(
+            `select count(*) as n from crm.contacts c
+              where c.workspace_id = $1 and c.status <> 'merged'
+                and (c.status = 'do_not_contact' or exists (
+                  select 1 from crm.contact_channels ch where ch.contact_id = c.id
+                     and ((ch.channel = 'email' and ch.status in ('unsubscribed', 'permanent_bounce'))
+                       or (ch.channel = 'phone' and ch.status = 'do_not_contact')
+                       or (ch.channel = 'whatsapp' and ch.status in ('do_not_contact', 'opted_out')))))`,
+            [C],
+          )
+        ).rows[0]!.n,
+      );
+    // 1. A bulk unsubscribe in one statement: 1,000+ rows share one updated_at.
+    const t0 = (await direct.query<{ t: Date }>(`select now() as t`)).rows[0]!.t.toISOString();
+    await new Promise((r) => setTimeout(r, 50));
+    const bulk = await direct.query(
+      `update crm.contact_channels ch set status = 'unsubscribed', updated_at = now()
+         from crm.contacts c
+        where c.id = ch.contact_id and c.workspace_id = $1 and c.status = 'active' and ch.channel = 'email' and ch.status = 'valid'
+          and ch.contact_id in (select id from crm.contacts where workspace_id = $1 and status = 'active' order by id limit 1200)`,
+      [C],
+    );
+    checks.push(await followFeed(`Change feed after a bulk unsubscribe (since=…, limit=500)`, `/brain/v1/suppressions?since=${encodeURIComponent(t0)}&limit=500`, keyC, bulk.rowCount ?? 0));
+    // 2. The full list, paged, then one more page from its last `next` (nothing changed since: empty).
+    const full = await followFeed(`Full list (no cursor, limit=500)`, `/brain/v1/suppressions?limit=500`, keyC, await blockedInC());
+    checks.push(full);
+    const after = (await get(`/brain/v1/suppressions?cursor=${full.lastNext}&limit=500`, { brainKey: keyC })).json as { data: unknown[] };
+    checks.push({ name: "Change feed from the full list's last `next` (no changes since)", expected: 0, rows: after.data.length, unique: after.data.length, pages: 1, stuck: false, pass: after.data.length === 0, lastNext: "" });
+    for (const c of checks) log(`${c.name}: expected ${c.expected}, ${c.rows} rows (${c.unique} unique) over ${c.pages} page(s)${c.stuck ? ", cursor STUCK" : ""}: ${c.pass ? "PASS" : "FAIL"}`);
+  }
 
   // --- EXPLAIN for anything over 300 ms (direct connection, no added latency) ---
   log("EXPLAIN…");
   const explains: string[] = [];
   for (const r of rows.filter((x) => x.p95 > EXPLAIN_OVER_MS)) explains.push(`### ${r.group}: ${r.name} (p95 ${r.p95.toFixed(0)} ms, ${r.statements} SQL)\n\n${await explainTop(direct, r.slowest)}`);
-  if (csv.ms > EXPLAIN_OVER_MS) explains.push(`### CSV import, 2,000 rows (${(csv.ms / 1000).toFixed(1)} s, ${csvStatements.length} SQL)\n\n${await explainTop(direct, csvStatements)}`);
+  if (csv && csv.ms > EXPLAIN_OVER_MS) explains.push(`### CSV import, 2,000 rows (${(csv.ms / 1000).toFixed(1)} s, ${csv.statements.length} SQL)\n\n${await explainTop(direct, csv.statements)}`);
   const sb = slowestBatch as { route: string; statements: TracedStatement[] } | null;
   if (sb) explains.push(`### Brain batch with the most SQL: ${sb.route} (${sb.statements.length} SQL)\n\n${await explainTop(direct, sb.statements)}`);
 
   const after = await tableCounts(direct);
-  writeFileSync(RESULTS_FILE, report({ startedAt, version, seeded, after, csv: { ms: csv.ms, statements: csvStatements.length, summary: csvSummary }, mixed, tie, explains }));
-  log(`Wrote ${RESULTS_FILE}`);
+  const result = { startedAt, version, seeded, after, csv: csv && { ms: csv.ms, statements: csv.statements.length, summary: csv.summary }, mixed, checks, explains };
+  if (FULL) writeFileSync(RESULTS_FILE, report(result));
+  else appendFileSync(RESULTS_FILE, `\n${section(result)}`);
+  log(`${FULL ? "Wrote" : "Appended to"} ${RESULTS_FILE}`);
 
   server.closeAllConnections();
   await new Promise((r) => server.close(r));
@@ -569,30 +614,99 @@ async function main() {
   await direct.end();
 }
 
-// --- Report --------------------------------------------------------------------------------
-const f = (ms: number) => (ms >= 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)}`);
-const fu = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
-const ok = (ms: number, target: number) => (ms <= target ? "✅" : "❌");
+// --- Suppressions feed check -------------------------------------------------------------------
+interface FeedCheck {
+  name: string;
+  expected: number;
+  rows: number;
+  unique: number;
+  pages: number;
+  stuck: boolean;
+  pass: boolean;
+  lastNext: string;
+}
 
-function report(r: {
+/** Follows `next` until hasMore is false; fails on a repeated cursor, a repeated row or a wrong count. */
+async function followFeed(name: string, first: string, key: string, expected: number): Promise<FeedCheck> {
+  const ids: string[] = [];
+  const cursors = new Set<string>();
+  let path = first;
+  let pages = 0;
+  let stuck = false;
+  let lastNext = "";
+  while (pages < 50) {
+    const r = await get(path, { brainKey: key });
+    pages++;
+    const body = r.json as { data?: { contactId: string }[]; next?: string; hasMore?: boolean };
+    if (r.status !== 200 || !body.data || !body.next) {
+      stuck = true;
+      break;
+    }
+    ids.push(...body.data.map((s) => s.contactId));
+    if (cursors.has(body.next)) {
+      stuck = true;
+      break;
+    }
+    cursors.add(body.next);
+    lastNext = body.next;
+    if (!body.hasMore) break;
+    path = `/brain/v1/suppressions?cursor=${body.next}&limit=500`;
+  }
+  if (pages >= 50) stuck = true;
+  const unique = new Set(ids).size;
+  return { name, expected, rows: ids.length, unique, pages, stuck, pass: !stuck && unique === expected && ids.length === expected, lastNext };
+}
+
+// --- Report --------------------------------------------------------------------------------
+interface MixedResult {
+  requests: number;
+  p50: number;
+  p95: number;
+  max: number;
+  errors: number;
+  firstError?: string;
+  batchMs: number[];
+}
+interface RunResult {
   startedAt: Date;
   version: string;
   seeded: Record<string, number>;
   after: Record<string, number>;
-  csv: { ms: number; statements: number; summary: string };
-  mixed: { requests: number; p50: number; p95: number; max: number; errors: number; firstError?: string; batchMs: number[] };
-  tie: { expected: number; got: number; pages: number; pass: boolean; stuck: boolean };
+  csv: { ms: number; statements: number; summary: string } | null;
+  mixed: MixedResult | null;
+  checks: FeedCheck[];
   explains: string[];
-}) {
-  const lines: string[] = [];
-  const failing = rows.filter((x) => x.p95 > x.target || x.errors);
-  const slowBatches = batchRows.filter((b) => b.ms > BRAIN_TARGET_MS);
-  lines.push(
+}
+
+const f = (ms: number) => (ms >= 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)}`);
+const fu = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
+const ok = (ms: number, target: number) => (ms <= target ? "✅" : "❌");
+const when = (d: Date) => d.toISOString().slice(0, 16).replace("T", " ");
+
+/** The whole file, for a full run. */
+function report(r: RunResult) {
+  return [
     `# Load test results`,
     ``,
-    `Generated by \`npm run load\` (Backend/load/run.ts). Each run overwrites this file; commit it to keep the history.`,
+    `Generated by \`npm run load\` (Backend/load/run.ts). A full run overwrites this file; \`npm run load -- --only <area>\` appends a quick-run section. Commit it to keep the history.`,
     ``,
-    `## Run ${r.startedAt.toISOString().slice(0, 16).replace("T", " ")} UTC: baseline (before migration 014)`,
+    section(r),
+  ].join("\n");
+}
+
+/** One run: the full baseline, or a quick `--only` re-measure. */
+function section(r: RunResult) {
+  const failing = rows.filter((x) => x.p95 > x.target || x.errors);
+  const slowBatches = batchRows.filter((b) => b.ms > BRAIN_TARGET_MS);
+  const checksPass = r.checks.every((c) => c.pass);
+  const summary = [
+    rows.length ? `${failing.length} of ${rows.length} request rows miss the target or had errors` : "",
+    batchRows.length ? `${slowBatches.length} of ${batchRows.length} brain batches over ${BRAIN_TARGET_MS / 1000} s` : "",
+    r.csv ? `CSV 2,000 rows ${fu(r.csv.ms)}` : "",
+    r.checks.length ? `suppressions paging checks **${checksPass ? "PASS" : "FAIL"}**` : "",
+  ].filter(Boolean);
+  const lines = [
+    FULL ? `## Run ${when(r.startedAt)} UTC: full` : `## Quick run ${when(r.startedAt)} UTC: \`--only ${ONLY}\``,
     ``,
     `- Postgres ${r.version} (local, native), Node ${process.version}, Windows. App pool \`max: 10\` as in \`src/db.ts\`.`,
     `- **+${LATENCY_MS} ms per round trip** to the database and to Supabase Auth (TCP proxy, \`load/latency.ts\`).`,
@@ -600,40 +714,55 @@ function report(r: {
     `- Requests as a salesperson member of workspace A (admin for Admin rows); ${RUNS} timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).`,
     `- Targets: p95 ≤ ${TARGET_MS} ms per request or page; brain batch of 500 ≤ ${BRAIN_TARGET_MS / 1000} s.`,
     ``,
-    `**Summary:** ${failing.length} of ${rows.length} request rows miss the target or had errors; ${slowBatches.length} of ${batchRows.length} brain batches over ${BRAIN_TARGET_MS / 1000} s; CSV 2,000 rows ${fu(r.csv.ms)}; suppressions tie check **${r.tie.pass ? "PASS" : "FAIL"}**.`,
+    `**Summary:** ${summary.join("; ")}.`,
     ``,
-    `### Requests`,
-    ``,
-    `| Group | Route | p50 | p95 | max | SQL | Errors | |`,
-    `|---|---|---:|---:|---:|---:|---:|---|`,
-    ...rows.map((x) => `| ${x.group} | ${x.name} | ${f(x.p50)} | ${f(x.p95)} | ${f(x.max)} | ${x.statements} | ${x.errors ? `${x.errors}: ${x.firstError?.replace(/\|/g, "/")}` : 0} | ${x.errors ? "❌" : ok(x.p95, x.target)} |`),
-    ``,
-    `### Brain batches (500 items each, workspace A)`,
-    ``,
-    `| Route | Batch | Time | SQL | Result | |`,
-    `|---|---|---:|---:|---|---|`,
-    ...batchRows.map((b) => `| ${b.route} | ${b.batch} | ${(b.ms / 1000).toFixed(1)} s | ${b.statements ?? "not traced"} | ${b.counts} | ${b.errors ? "❌" : ok(b.ms, BRAIN_TARGET_MS)} |`),
-    ``,
-    `### CSV import (2,000 rows, one request, workspace A)`,
-    ``,
-    `${fu(r.csv.ms)}, ${r.csv.statements} SQL, ${r.csv.summary}. ${ok(r.csv.ms, TARGET_MS)}`,
-    ``,
-    `### Mixed load`,
-    ``,
-    `10 users browsing workspace A (contacts list, deals board, contact, timeline, dashboard, tasks) while 3 contact batches of 500 run at once.`,
-    ``,
-    `| User requests | p50 | p95 | max | Errors | Brain batches (3 at once) |`,
-    `|---:|---:|---:|---:|---:|---|`,
-    `| ${r.mixed.requests} | ${f(r.mixed.p50)} | ${f(r.mixed.p95)} | ${f(r.mixed.max)} | ${r.mixed.errors ? `${r.mixed.errors} ❌ (first: ${r.mixed.firstError?.replace(/\|/g, "/")})` : 0} | ${r.mixed.batchMs.map((ms) => `${(ms / 1000).toFixed(1)} s`).join(", ")} |`,
-    ``,
-    `### Suppressions tie check (workspace C)`,
-    ``,
-    `One statement unsubscribed ${r.tie.expected} contacts (same \`updated_at\`); paging \`GET /brain/v1/suppressions?since=…&limit=500\` with \`nextSince\` returned **${r.tie.got}** of them in ${r.tie.pages} page(s): **${r.tie.pass ? "PASS" : "FAIL"}**.${
-      r.tie.stuck
-        ? ` The cursor never advanced: the harness stopped after ${r.tie.pages} pages that kept returning the same rows. \`nextSince\` is an ISO string with milliseconds while \`updated_at\` has microseconds, so \`changed_at > since\` matches the same tied rows again; a brain following \`nextSince\` would loop forever.`
-        : ""
-    }`,
-    ``,
+  ];
+  if (rows.length) {
+    lines.push(
+      `### Requests`,
+      ``,
+      `| Group | Route | p50 | p95 | max | SQL | Errors | |`,
+      `|---|---|---:|---:|---:|---:|---:|---|`,
+      ...rows.map((x) => `| ${x.group} | ${x.name} | ${f(x.p50)} | ${f(x.p95)} | ${f(x.max)} | ${x.statements} | ${x.errors ? `${x.errors}: ${x.firstError?.replace(/\|/g, "/")}` : 0} | ${x.errors ? "❌" : ok(x.p95, x.target)} |`),
+      ``,
+    );
+  }
+  if (batchRows.length) {
+    lines.push(
+      `### Brain batches (500 items each, workspace A)`,
+      ``,
+      `| Route | Batch | Time | SQL | Result | |`,
+      `|---|---|---:|---:|---|---|`,
+      ...batchRows.map((b) => `| ${b.route} | ${b.batch} | ${(b.ms / 1000).toFixed(1)} s | ${b.statements ?? "not traced"} | ${b.counts} | ${b.errors ? "❌" : ok(b.ms, BRAIN_TARGET_MS)} |`),
+      ``,
+    );
+  }
+  if (r.csv) lines.push(`### CSV import (2,000 rows, one request, workspace A)`, ``, `${fu(r.csv.ms)}, ${r.csv.statements} SQL, ${r.csv.summary}. ${ok(r.csv.ms, TARGET_MS)}`, ``);
+  if (r.mixed) {
+    lines.push(
+      `### Mixed load`,
+      ``,
+      `10 users browsing workspace A (contacts list, deals board, contact, timeline, dashboard, tasks) while 3 contact batches of 500 run at once.`,
+      ``,
+      `| User requests | p50 | p95 | max | Errors | Brain batches (3 at once) |`,
+      `|---:|---:|---:|---:|---:|---|`,
+      `| ${r.mixed.requests} | ${f(r.mixed.p50)} | ${f(r.mixed.p95)} | ${f(r.mixed.max)} | ${r.mixed.errors ? `${r.mixed.errors} ❌ (first: ${r.mixed.firstError?.replace(/\|/g, "/")})` : 0} | ${r.mixed.batchMs.map((ms) => `${(ms / 1000).toFixed(1)} s`).join(", ")} |`,
+      ``,
+    );
+  }
+  if (r.checks.length) {
+    lines.push(
+      `### Suppressions paging checks (workspace C)`,
+      ``,
+      `Each check follows \`next\` until \`hasMore\` is false. Pass = every expected contact exactly once, no repeated cursor.`,
+      ``,
+      `| Check | Expected | Rows | Unique | Pages | Cursor | |`,
+      `|---|---:|---:|---:|---:|---|---|`,
+      ...r.checks.map((c) => `| ${c.name} | ${c.expected} | ${c.rows} | ${c.unique} | ${c.pages} | ${c.stuck ? "stuck ❌" : "moved every page"} | ${c.pass ? "✅" : "❌"} |`),
+      ``,
+    );
+  }
+  lines.push(
     `### Row counts after the run`,
     ``,
     Object.entries(r.after).map(([k, v]) => `${k} ${v.toLocaleString("en-US")}`).join(", "),

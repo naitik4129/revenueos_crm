@@ -243,6 +243,80 @@ describe("brain intake API (PGlite)", () => {
     expect(full).not.toContain(rajId);
   });
 
+  describe("suppressions paging", () => {
+    type Page = { data: { contactId: string; changedAt: string }[]; next: string; hasMore: boolean };
+    /** Follows `next` until hasMore is false; every cursor must differ from the one before. */
+    async function pageAll(first: string, limit: number) {
+      const ids: string[] = [];
+      const cursors: string[] = [];
+      let path = `${first}${first.includes("?") ? "&" : "?"}limit=${limit}`;
+      for (let i = 0; i < 50; i++) {
+        const res = await brain(path);
+        expect(res.status).toBe(200);
+        const page = res.body as Page;
+        ids.push(...page.data.map((s) => s.contactId));
+        cursors.push(page.next);
+        if (!page.hasMore) return { ids, cursors, last: page.next };
+        path = `/suppressions?cursor=${page.next}&limit=${limit}`;
+      }
+      throw new Error("Paging never ended.");
+    }
+    const people = (prefix: string, n: number) =>
+      Array.from({ length: n }, (_, i) => ({ source: "quickicp", externalId: `${prefix}-${i}`, fullName: `Tie ${i}`, email: `${prefix}${i}@tie.com` }));
+    /** One statement, so every row gets the same updated_at (a bulk unsubscribe). */
+    const bulkUnsubscribe = (ids: string[]) =>
+      seed.query(
+        `insert into crm.contact_channels (contact_id, channel, status) select unnest($1::uuid[]), 'email', 'unsubscribed'
+         on conflict (contact_id, channel) do update set status = 'unsubscribed', updated_at = now()`,
+        [ids],
+      );
+
+    it("returns rows sharing one timestamp exactly once, and the cursor always moves", async () => {
+      await brain("/contacts", people("tie", 7));
+      const ids = await Promise.all(Array.from({ length: 7 }, (_, i) => contactIdOf(`tie-${i}`)));
+      const before = new Date().toISOString();
+      await new Promise((r) => setTimeout(r, 5));
+      await bulkUnsubscribe(ids);
+
+      const { ids: got, cursors } = await pageAll(`/suppressions?since=${encodeURIComponent(before)}`, 2);
+      expect(got.sort()).toEqual([...ids].sort());
+      expect(new Set(cursors).size).toBe(cursors.length);
+      const page = (await brain(`/suppressions?since=${encodeURIComponent(before)}&limit=7`)).body as Page;
+      expect(new Set(page.data.map((s) => s.changedAt)).size).toBe(1);
+      expect(page.data[0]!.changedAt).toMatch(/\.\d{6}Z$/);
+    });
+
+    it("pages the full list once each, then carries on as a change feed", async () => {
+      const unpaged = ((await brain("/suppressions")).body as Page).data.map((s) => s.contactId);
+      const { ids, last } = await pageAll("/suppressions", 3);
+      expect(ids).toEqual(unpaged);
+      expect(new Set(ids).size).toBe(ids.length);
+
+      await brain("/contacts", people("late", 1));
+      const lateId = await contactIdOf("late-0");
+      await user("post", `/contacts/${lateId}/dnc`, sam, { reason: "Asked to stop" });
+      const feed = ((await brain(`/suppressions?cursor=${last}`)).body as Page).data;
+      expect(feed.map((s) => s.contactId)).toContain(lateId);
+      expect(feed.map((s) => s.contactId)).not.toContain(ids[0]);
+    });
+
+    it("never lists another workspace's contacts", async () => {
+      const other = (await seed.query(`insert into crm.workspaces (name, slug) values ('Other', 'other') returning id`)).rows[0].id;
+      const outsider = (await seed.query(`insert into crm.contacts (workspace_id, first_name, email) values ($1, 'Out', 'out@other.com') returning id`, [other])).rows[0].id;
+      await bulkUnsubscribe([outsider]);
+      const { ids } = await pageAll("/suppressions", 1000);
+      expect(ids).not.toContain(outsider);
+    });
+
+    it("refuses a cursor it did not issue, and since together with cursor", async () => {
+      expect((await brain("/suppressions?cursor=not-a-cursor")).status).toBe(400);
+      const forged = Buffer.from(JSON.stringify(["c", "2026-10-01T00:00:00Z", "x"])).toString("base64url");
+      expect((await brain(`/suppressions?cursor=${forged}`)).status).toBe(400);
+      const { last } = await pageAll("/suppressions", 1000);
+      expect((await brain(`/suppressions?cursor=${last}&since=2026-10-01T00:00:00Z`)).status).toBe(400);
+    });
+  });
+
   it("rejects a batch over 500 items and reports item errors as code + short message only", async () => {
     expect((await brain("/contacts", Array(501).fill(ann))).status).toBe(400);
     const res = await brain("/contacts", [{ source: "quickicp", externalId: "p-20" }, { ...ann, externalId: "p-1" }, { source: "quickicp" }]);

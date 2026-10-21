@@ -46,7 +46,11 @@ brainRouter.get(
   "/suppressions",
   asyncHandler(async (req, res) => {
     const q = parseQuery(
-      z.object({ since: z.string().datetime({ offset: true }).optional(), limit: z.coerce.number().int().positive().max(5000).optional() }),
+      z.object({
+        since: z.string().datetime({ offset: true }).optional(),
+        cursor: z.string().max(500).optional(),
+        limit: z.coerce.number().int().positive().max(5000).optional(),
+      }),
       req.query,
     );
     res.json(await brain.listSuppressions(pool, req.workspaceId!, q));

@@ -1162,3 +1162,41 @@ Trigger for constraint notifications_contact_fk: time=0.092 calls=1
 Trigger for constraint notifications_deal_fk: time=0.094 calls=1
 Execution Time: 0.495 ms
 ```
+
+## Quick run 2026-10-21 04:01 UTC: `--only suppressions`
+
+- Postgres 17.11 (local, native), Node v24.18.0, Windows. App pool `max: 10` as in `src/db.ts`.
+- **+15 ms per round trip** to the database and to Supabase Auth (TCP proxy, `load/latency.ts`).
+- Seed: A 15k / B 5k / C 5k contacts. All workspaces: companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334.
+- Requests as a salesperson member of workspace A (admin for Admin rows); 20 timed runs after 1 warm-up, one at a time. Times in ms. "SQL" = statements per request (each one a round trip).
+- Targets: p95 ≤ 1000 ms per request or page; brain batch of 500 ≤ 5 s.
+
+**Summary:** 0 of 3 request rows miss the target or had errors; suppressions paging checks **PASS**.
+
+### Requests
+
+| Group | Route | p50 | p95 | max | SQL | Errors | |
+|---|---|---:|---:|---:|---:|---:|---|
+| Brain | GET /suppressions (full list, first page) | 121 | 139 | 145 | 3 | 0 | ✅ |
+| Brain | GET /suppressions?limit=5000 | 134 | 155 | 164 | 3 | 0 | ✅ |
+| Brain | GET /suppressions?since=30 days ago | 146 | 171 | 176 | 3 | 0 | ✅ |
+
+### Suppressions paging checks (workspace C)
+
+Each check follows `next` until `hasMore` is false. Pass = every expected contact exactly once, no repeated cursor.
+
+| Check | Expected | Rows | Unique | Pages | Cursor | |
+|---|---:|---:|---:|---:|---|---|
+| Change feed after a bulk unsubscribe (since=…, limit=500) | 1120 | 1120 | 1120 | 3 | moved every page | ✅ |
+| Full list (no cursor, limit=500) | 1532 | 1532 | 1532 | 4 | moved every page | ✅ |
+| Change feed from the full list's last `next` (no changes since) | 0 | 0 | 0 | 1 | moved every page | ✅ |
+
+### Row counts after the run
+
+companies 25,000, contacts 25,000, contact_channels 50,000, external_refs 50,000, deals 13,334, calls 33,334, email_activities 41,666, timeline_events 66,666, tasks 16,666, notes 8,334, meetings 2,500, proposals 1,250, workflow_runs 3,334, scheduled_actions 3,334
+
+### EXPLAIN (ANALYZE, BUFFERS) for anything over 300 ms
+
+Run on a direct connection (no added latency) inside BEGIN … ROLLBACK, for the slowest statements of the slowest run.
+
+Nothing over the threshold.

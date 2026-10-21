@@ -110,7 +110,7 @@ stored, full key shown once).
 
 - `POST /companies`, `/contacts`, `/calls`, `/email-events`, `/handovers`: batches of up to 500
   items, one transaction per item, per-item results, idempotent by external ids.
-- `GET /suppressions`: who must not be contacted (DNC, unsubscribed, bounced).
+- `GET /suppressions`: who must not be contacted (DNC, unsubscribed, bounced), paged with an opaque `next` cursor (contract in CLAUDE.md, Brain intake).
 - Matching: external ref → email → E.164 phone. Brain data only fills empty fields.
 - A handover opens a deal (lifecycle → qualified) and notifies its owner. Its optional `amount`
   (INR) fills the deal's amount only when that is empty.

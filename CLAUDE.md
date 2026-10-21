@@ -66,6 +66,7 @@ This repo is a copy of the old CRM (`Lead-Managment-System`), reworked. `CONTEXT
 - **Updates fill empty fields only**: brain data never overwrites a non-empty CRM field.
 - **Lifecycle stage** (`crm.lifecycle_stage`, like HubSpot): prospect → contacted → engaged → qualified → customer. Set by code, forward only: call or email sent → contacted; email reply or connected call → engaged (opens never count); deal created/handover → qualified; deal won → customer. Admins may move it back manually, with a timeline note.
 - **Consent both ways**: email unsubscribe/bounce update the email channel; an AI call flagged DNC puts the contact on DNC. The brain reads `GET /brain/v1/suppressions` before contacting anyone.
+- **Suppressions feed contract** (changed 2026-10-21; brain-facing): `GET /brain/v1/suppressions?limit=` (default 1000, max 5000) returns `{ data, next, hasMore }`. **`nextSince` is gone.** The brain keeps `next` (an opaque string; never parse or build it) and sends it back as `?cursor=` until `hasMore` is false, then keeps polling with its latest `next`. No cursor = the full current list (contacts with a block); when it runs out, `next` carries on as the change feed from that point, so the brain syncs once and then only gets changes, lifts included (status `lifted`). `?since=<ISO time>` (exclusive) starts a change feed at a time; `since` with `cursor` is 400, a cursor the CRM did not issue is 400. Order and cursor are (changed_at, contact id) at microsecond precision: rows sharing one timestamp (a bulk change) come exactly once each and the cursor always moves. `changedAt` / `liftedAt` are UTC ISO with 6 fractional digits. Every branch filters by workspace first; migration 014a indexes the time columns. Known limit: a change committed by a transaction that started before the brain's last poll carries an older timestamp and can fall behind the cursor; a periodic full resync (no cursor) covers it.
 - **AI calls are activity only**: no human call routing; qualification comes only through `/brain/v1/handovers`.
 - **Handover owner**: `ownerEmail` if that user is a member of the workspace, else `crm.workspaces.default_owner_id`, else unassigned + notify all members.
 - **Volume**: ~150-200 companies and 250-350 contacts per client per month. Batch size 500; all lists paginated.
@@ -182,14 +183,14 @@ WhatsApp (Baileys, `baileys.manager.ts` claim):
 
 All channels: limits per workspace in a new `crm.send_policies` (one row per workspace × channel; migration 015), admin-editable in a new `/admin` "Sending" tab; enforced in the worker inside the claim before every provider call (pause → hours → cap/ramp → gap → consent); every block/deferral logged with its reason on the action (timeline when skipped). Shared stop list with the brain = `/suppressions` (DNC + blocked channels, incl. WhatsApp `opted_out` from STOP), after fix 4.
 
-**Order** (one step per "go"; re-measure with the harness after each scale step):
-1. Load test harness + seed + **baseline** measurement (`RESULTS.md`).
-2. Migration 014 (indexes: items 4, 6, 7, 10) + pool timeouts (item 2); re-measure.
-3. Suppressions cursor + workspace filter (item 4).
-4. Brain batch concurrency (item 1).
-5. List counts + company counts (items 7, 8).
-6. Deals board summary + column paging (item 3).
-7. CSV import chunks (item 5).
+**Order** (one step per "go"; re-measure with the harness after each scale step; reordered 2026-10-21 after the baseline):
+1. Load test harness + seed + **baseline** measurement (`RESULTS.md`). Done (`4f0352a`).
+2. Suppressions: workspace filter + exact cursor (item 4 + the ms/µs bug), migration 014a.
+3. Brain batch speed: set-based SQL per batch (item 1); handovers with limited concurrency.
+4. CSV import chunks (item 5).
+5. Migration 014 (indexes: items 6, 7, 10) + pool timeouts (item 2); re-measure.
+6. List counts + company counts (items 7, 8).
+7. Deals board summary + column paging (item 3).
 8. Bulk contacts endpoint + UI (gap 4).
 9. Migration 015 send policies + worker enforcement (caps, ramp, hours, gaps, pause).
 10. Resend webhook, bounce/complaint auto-pause, unsubscribe link + headers, MX check.
@@ -269,6 +270,7 @@ Enums live in `crm` too.
 11. `011_crm_brain_intake.sql` — lifecycle stage, external refs, AI calls, email activities, brain API keys, default owner.
 12. `012_crm_deal_closed_at.sql` — `deals.closed_at`, set by trigger when the outcome leaves `open`, cleared on reopen.
 13. `013_crm_deal_amount.sql` — `deals.amount` (numeric, ≥ 0, nullable) + `currency` (INR only, by check); the brain handover's `amount` fills an empty one.
+14. `014a_crm_suppressions_indexes.sql` — indexes for the suppressions change feed: `contact_channels (updated_at)`, `dnc_events (created_at) where action = 'reactivated'`. Indexes only; written, not run yet.
 
 Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the human runs it first).
 
@@ -296,5 +298,5 @@ Plus `000_platform_grants.sql` (crm_app role; platform developers approve, the h
 
 ## Commands
 
-Backend (`cd Backend`): `npm run typecheck` (also typechecks `demo/` and `load/`), `npm run lint`, `npm run test:run` (includes PGlite integration tests and the demo/load guard tests), `npm run build`, `npm run demo`, `npm run load` (load test: rebuilds + seeds the local `crm_load` database named by `LOAD_DB_URL` in `Backend/.env`, refuses any other host or database, ~1 h, writes `load/RESULTS.md`; code in `Backend/load/`, never built or shipped).
+Backend (`cd Backend`): `npm run typecheck` (also typechecks `demo/` and `load/`), `npm run lint`, `npm run test:run` (includes PGlite integration tests and the demo/load guard tests), `npm run build`, `npm run demo`, `npm run load` (load test: rebuilds + seeds the local `crm_load` database named by `LOAD_DB_URL` in `Backend/.env`, refuses any other host or database, ~1.5 h, writes `load/RESULTS.md`; code in `Backend/load/`, never built or shipped). Quick re-measure: `npm run load -- --only <area>` with `suppressions`, `brain-companies`, `brain-contacts`, `brain-calls`, `brain-email`, `brain-handovers` or `csv` (same seed, that area only, brain areas run 3 batches; appends a section to `RESULTS.md`).
 Frontend (`cd Frontend`): `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run test:run`, `npm run build` (the build regenerates `src/routeTree.gen.ts`).
