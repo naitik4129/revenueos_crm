@@ -66,5 +66,34 @@ export function orderBySql(sort: string | undefined, columns: Record<string, str
   return `order by ${exprs.map((e) => `${e} ${desc ? "desc" : "asc"} nulls last`).join(", ")}, ${tieBreak}`;
 }
 
+/**
+ * One page of a list without building the whole filtered set. The ids are paged first
+ * (`select <idColumn> <from> where … order by … limit/offset`: cheap columns only, so the 014
+ * indexes can serve it), then `select` (ending in its FROM/joins) reads just those rows, in that
+ * order. The total is a plain count(*) of the same filter, run alongside. `params` are the
+ * filter's; limit and offset are added here.
+ */
+export async function pageOf<R extends object>(
+  db: Queryable,
+  q: { select: string; idColumn: string; from: string; where: string; order: string; params: unknown[]; limit: number; offset: number },
+) {
+  const n = q.params.length;
+  const [rows, count] = await Promise.all([
+    db.query<R>(
+      `with page as (
+         select p.id, p.ord from unnest(array(
+           select ${q.idColumn} ${q.from} where ${q.where} ${q.order} limit $${n + 1} offset $${n + 2}
+         )) with ordinality as p(id, ord)
+       )
+       ${q.select}
+       join page on page.id = ${q.idColumn}
+       order by page.ord`,
+      [...q.params, q.limit, q.offset],
+    ),
+    db.query<{ total: number }>(`select count(*)::int as total ${q.from} where ${q.where}`, q.params),
+  ]);
+  return { rows: rows.rows, total: count.rows[0]!.total };
+}
+
 /** Start of today in Asia/Kolkata as a timestamptz SQL expression (same day boundary as tasks). */
 export const START_OF_TODAY_IST = `(date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata')`;

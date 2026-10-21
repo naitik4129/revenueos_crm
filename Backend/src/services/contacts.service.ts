@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Actor } from "../authMiddleware.js";
-import { orderBySql, type Queryable } from "../dto.js";
+import { orderBySql, pageOf, type Queryable } from "../dto.js";
 import { ConflictError, DoNotContactError, ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } from "../errors.js";
 import {
   CONTACT_CHANNEL_STATUS,
@@ -48,11 +48,11 @@ export interface ContactRow {
   updated_at: Date;
 }
 
+const CONTACT_FROM = `from crm.contacts c left join crm.companies co on co.id = c.company_id`;
 const CONTACT_SELECT = `
   select c.*, co.name as company_name, ${userNameSql("c.owner_id")} as owner_name,
          (select d.id from crm.deals d where d.contact_id = c.id and d.outcome = 'open') as open_deal_id
-    from crm.contacts c
-    left join crm.companies co on co.id = c.company_id`;
+    ${CONTACT_FROM}`;
 
 export function contactToDto(row: ContactRow) {
   return {
@@ -262,14 +262,17 @@ export async function listContacts(db: Queryable, workspaceId: string, f: ListCo
   }
   const limit = Math.min(f.limit ?? 50, 500);
   const offset = f.offset ?? 0;
-  const result = await db.query<ContactRow & { total: number }>(
-    `${CONTACT_SELECT.replace("select c.*,", "select c.*, count(*) over()::int as total,")}
-      where ${where.join(" and ")}
-      ${orderBySql(f.sort, CONTACT_SORTS, "c.created_at desc", "c.id")}
-      limit $${params.push(limit)} offset $${params.push(offset)}`,
+  const { rows, total } = await pageOf<ContactRow>(db, {
+    select: CONTACT_SELECT,
+    idColumn: "c.id",
+    from: CONTACT_FROM,
+    where: where.join(" and "),
+    order: orderBySql(f.sort, CONTACT_SORTS, "c.created_at desc", "c.id"),
     params,
-  );
-  return { data: result.rows.map(contactToDto), total: result.rows[0]?.total ?? 0, limit, offset };
+    limit,
+    offset,
+  });
+  return { data: rows.map(contactToDto), total, limit, offset };
 }
 
 export interface UpdateContactInput {

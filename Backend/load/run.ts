@@ -53,7 +53,7 @@ if (guard) {
 }
 const dbUrl = new URL(LOAD_DB_URL!);
 
-const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv", "mixed", "reads"];
+const AREAS = ["suppressions", "brain-companies", "brain-contacts", "brain-calls", "brain-email", "brain-handovers", "csv", "mixed", "reads", "lists"];
 /** `--only reads`: the slowest reads of the baseline (group: name, as in the report). */
 const SLOW_READS = new Set([
   "Pages: Company page (4 calls + tasks of 10 open deals)",
@@ -66,13 +66,21 @@ const SLOW_READS = new Set([
 ]);
 const QUICK_BATCHES = 3;
 const onlyAt = process.argv.indexOf("--only");
+// One area or several, comma-separated (`--only lists,mixed`), run in one go on the same seed.
 const ONLY = onlyAt >= 0 ? (process.argv[onlyAt + 1] ?? "") : undefined;
-if (ONLY !== undefined && !AREAS.includes(ONLY)) {
+const ONLY_AREAS = ONLY?.split(",") ?? [];
+if (ONLY !== undefined && !ONLY_AREAS.every((a) => AREAS.includes(a))) {
   console.error(`[load] --only needs one of: ${AREAS.join(", ")}.`);
   process.exit(1);
 }
 const FULL = ONLY === undefined;
-const want = (area: string) => FULL || ONLY === area;
+const want = (area: string) => FULL || ONLY_AREAS.includes(area);
+/** Quick read areas: which benchmark rows each one times. */
+const READ_AREAS: Record<string, (group: string, name: string) => boolean> = {
+  reads: (group, name) => SLOW_READS.has(`${group}: ${name}`),
+  // Every sort key, the default order and the last page of the three lists, and the company page.
+  lists: (group, name) => (/^(Contacts|Companies|Deals) list$/.test(group) && /^(default|sort=|last page)/.test(name)) || name.startsWith("Company page"),
+};
 
 // --- HTTP client ---------------------------------------------------------------------------
 const agent = new http.Agent({ keepAlive: true, maxSockets: 64 });
@@ -137,7 +145,7 @@ const pct = (sorted: number[], p: number) => sorted[Math.min(sorted.length - 1, 
 
 /** Runs `fn` once to warm up, then RUNS times traced; one request (or one page) at a time. */
 async function bench(group: string, name: string, fn: (i: number) => Promise<Reply[]>, runs = RUNS, target = TARGET_MS) {
-  if (ONLY === "reads" && !SLOW_READS.has(`${group}: ${name}`)) return;
+  if (!FULL && group !== "Brain" && !ONLY_AREAS.some((a) => READ_AREAS[a]?.(group, name))) return;
   await fn(0);
   const times: number[] = [];
   const counts: number[] = [];
@@ -384,7 +392,7 @@ async function main() {
   // --- Lists, as a salesperson in workspace A ---
   const list = (group: string, name: string, path: string, who: Who = sam) => bench(group, name, one(path, who));
   const contactN = (i: number) => 1 + ((i * 37) % sA.openDeals);
-  if (want("reads")) {
+  if (want("reads") || want("lists")) {
     log("Lists…");
     await list("App shell", "GET /me", "/me");
     await list("App shell", "GET /workspaces", "/workspaces");
@@ -409,6 +417,7 @@ async function main() {
     ]) await list("Contacts list", name!, `/contacts${q}`);
     for (const [name, q] of [
       ["default (name)", ""],
+      ["sort=name", "?sort=name"],
       ["sort=contacts", "?sort=contacts"],
       ["sort=-openDeals", "?sort=-openDeals"],
       ["sort=created", "?sort=created"],
@@ -425,6 +434,7 @@ async function main() {
       ["sort=-amount", "?sort=-amount"],
       ["sort=-lastActivity", "?sort=-lastActivity"],
       ["sort=-closed", "?sort=-closed"],
+      ["sort=created", "?sort=created"],
       ["search=smith", "?search=smith"],
       ["ownerId=none", "?ownerId=none"],
       ["missingNextAction=true", "?outcome=open&missingNextAction=true"],
@@ -551,7 +561,7 @@ async function main() {
     const n = count(sequential);
     for (let b = 0; b < n; b++) await brainBatch(route, `${b + 1}/${FULL ? total : n}`, make(b), keyA, true);
   };
-  if (FULL || ONLY?.startsWith("brain-")) log("Brain batches…");
+  if (FULL || ONLY_AREAS.some((a) => a.startsWith("brain-"))) log("Brain batches…");
   await batches("brain-companies", "companies", 8, 8, companyBatch);
   await batches("brain-contacts", "contacts", 8, 5, contactBatch);
   await batches("brain-calls", "calls", 7, 7, callBatch);

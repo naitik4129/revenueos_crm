@@ -1,5 +1,5 @@
 import type { Actor } from "../authMiddleware.js";
-import { orderBySql, type Queryable } from "../dto.js";
+import { orderBySql, pageOf, type Queryable } from "../dto.js";
 import { ConflictError, isUniqueViolation, NotFoundError, ValidationError } from "../errors.js";
 import { LEAD_SOURCES, type LeadSource } from "../domain/enums.js";
 import { userNameSql } from "./profiles.service.js";
@@ -91,12 +91,21 @@ export async function getCompanyOr404(db: Queryable, workspaceId: string, id: st
   return row;
 }
 
-/** Sortable columns of the companies list (`sort` = key, or "-key" for descending). */
+/**
+ * Sortable columns of the companies list (`sort` = key, or "-key" for descending). The counts are
+ * the same as COMPANY_SELECT's, from one grouped join each (COUNT_JOINS) while paging.
+ */
 export const COMPANY_SORTS: Record<string, string[]> = {
   name: ["lower(co.name)"],
-  contacts: ["co.contact_count"],
-  openDeals: ["co.open_deal_count"],
+  contacts: ["coalesce(cc.n, 0)"],
+  openDeals: ["coalesce(od.n, 0)"],
   created: ["co.created_at"],
+};
+const COUNT_JOINS: Record<string, string> = {
+  contacts: `left join (select company_id, count(*)::int as n from crm.contacts
+                         where workspace_id = $1 and company_id is not null and status <> 'merged' group by company_id) cc on cc.company_id = co.id`,
+  openDeals: `left join (select company_id, count(*)::int as n from crm.deals
+                          where workspace_id = $1 and company_id is not null and outcome = 'open' group by company_id) od on od.company_id = co.id`,
 };
 
 export interface ListCompaniesFilters {
@@ -118,14 +127,20 @@ export async function listCompanies(db: Queryable, workspaceId: string, f: ListC
     where.push(`(co.name ilike ${p} or co.domain ilike ${p} or co.industry ilike ${p})`);
   }
   const limit = Math.min(f.limit ?? 50, 500);
-  const result = await db.query<CompanyRow & { total: number }>(
-    `select co.*, count(*) over()::int as total from (${COMPANY_SELECT}) co
-      where ${where.join(" and ")}
-      ${orderBySql(f.sort, COMPANY_SORTS, "co.name asc", "co.id")}
-      limit $${params.push(limit)} offset $${params.push(f.offset ?? 0)}`,
+  const offset = f.offset ?? 0;
+  // Filters read companies only: page first, then COMPANY_SELECT counts for the page's rows only.
+  const countJoin = COUNT_JOINS[f.sort?.replace(/^-/, "") ?? ""];
+  const { rows, total } = await pageOf<CompanyRow>(db, {
+    select: COMPANY_SELECT,
+    idColumn: "co.id",
+    from: `from crm.companies co ${countJoin ?? ""}`,
+    where: where.join(" and "),
+    order: orderBySql(f.sort, COMPANY_SORTS, "co.name asc", "co.id"),
     params,
-  );
-  return { data: result.rows.map(companyToDto), total: result.rows[0]?.total ?? 0, limit, offset: f.offset ?? 0 };
+    limit,
+    offset,
+  });
+  return { data: rows.map(companyToDto), total, limit, offset };
 }
 
 /** Distinct industries in the workspace (case-insensitive), for the list filter. */

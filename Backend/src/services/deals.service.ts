@@ -1,5 +1,5 @@
 import type { Actor } from "../authMiddleware.js";
-import { orderBySql, type Queryable } from "../dto.js";
+import { orderBySql, pageOf, type Queryable } from "../dto.js";
 import { ConflictError, InvalidTransitionError, isUniqueViolation, NotFoundError } from "../errors.js";
 import type {
   AutomationMode,
@@ -72,15 +72,9 @@ export interface DealRow {
 }
 
 /** Replaces the old lead_next_actions view: one lateral lookup of the earliest open task. */
-const DEAL_SELECT = `
-  select d.*, ${userNameSql("d.owner_id")} as owner_name,
-         c.first_name, c.last_name, c.job_title, c.email, c.phone, c.phone_e164, c.status as contact_status, c.lifecycle_stage,
-         co.name as company_name, co.industry, co.website,
-         na.id as next_task_id, na.task_type as next_task_type, na.title as next_task_title,
-         na.due_at as next_task_due_at, na.owner_id as next_task_owner_id, na.origin as next_task_origin
-    from crm.deals d
-    join crm.contacts c on c.id = d.contact_id
-    left join crm.companies co on co.id = d.company_id
+const DEAL_FROM = `from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id`;
+/** The deal's next action: its earliest open task. */
+const NEXT_TASK_JOIN = `
     left join lateral (
       select t.id, t.task_type, t.title, t.due_at, t.owner_id, t.origin
         from crm.tasks t
@@ -88,6 +82,14 @@ const DEAL_SELECT = `
        order by t.due_at
        limit 1
     ) na on true`;
+const DEAL_SELECT = `
+  select d.*, ${userNameSql("d.owner_id")} as owner_name,
+         c.first_name, c.last_name, c.job_title, c.email, c.phone, c.phone_e164, c.status as contact_status, c.lifecycle_stage,
+         co.name as company_name, co.industry, co.website,
+         na.id as next_task_id, na.task_type as next_task_type, na.title as next_task_title,
+         na.due_at as next_task_due_at, na.owner_id as next_task_owner_id, na.origin as next_task_origin
+    ${DEAL_FROM}
+    ${NEXT_TASK_JOIN}`;
 
 export function dealToDto(row: DealRow) {
   return {
@@ -250,14 +252,18 @@ export async function listDeals(db: Queryable, workspaceId: string, f: ListDeals
   }
   const limit = Math.min(f.limit ?? 50, 500);
   const offset = f.offset ?? 0;
-  const result = await db.query<DealRow & { total: number }>(
-    `${DEAL_SELECT.replace("select d.*,", "select d.*, count(*) over()::int as total,")}
-      where ${where.join(" and ")}
-      ${orderBySql(f.sort, DEAL_SORTS, "d.last_activity_at desc", "d.id")}
-      limit $${params.push(limit)} offset $${params.push(offset)}`,
+  const { rows, total } = await pageOf<DealRow>(db, {
+    select: DEAL_SELECT,
+    idColumn: "d.id",
+    // The next-task join only when the filter reads it (it runs per deal).
+    from: f.missingNextAction ? `${DEAL_FROM} ${NEXT_TASK_JOIN}` : DEAL_FROM,
+    where: where.join(" and "),
+    order: orderBySql(f.sort, DEAL_SORTS, "d.last_activity_at desc", "d.id"),
     params,
-  );
-  return { data: result.rows.map(dealToDto), total: result.rows[0]?.total ?? 0, limit, offset };
+    limit,
+    offset,
+  });
+  return { data: rows.map(dealToDto), total, limit, offset };
 }
 
 export interface UpdateDealInput {
