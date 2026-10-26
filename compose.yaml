@@ -21,6 +21,12 @@ services:
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
       GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
     restart: unless-stopped
+    # Reachable by the RevenueOS platform as "crm-backend" on the shared network, so the platform
+    # can serve /crm-api through itself (one origin, one login).
+    networks:
+      default: {}
+      crm:
+        aliases: [crm-backend]
 
   worker:
     build:
@@ -68,3 +74,16 @@ services:
     restart: unless-stopped
     depends_on:
       - backend
+    # Reachable by the RevenueOS platform as "crm-frontend" on the shared network, so the platform
+    # can serve /crm through itself.
+    networks:
+      default: {}
+      crm:
+        aliases: [crm-frontend]
+
+networks:
+  # Shared with the RevenueOS platform's compose. Create it once on the host:
+  #   docker network create revenueos-shared
+  crm:
+    external: true
+    name: revenueos-shared
