@@ -5,8 +5,8 @@
 
 begin;
 
-create table crm.integration_connections (
-  workspace_id uuid not null references crm.workspaces (id) on delete cascade,
+create table public.crm_integration_connections (
+  workspace_id uuid not null references public.crm_workspaces (id) on delete cascade,
   id text not null,
   provider text,
   enabled boolean not null default false,
@@ -15,20 +15,20 @@ create table crm.integration_connections (
   secret_iv bytea,
   secret_tag bytea,
   key_version integer not null default 1,
-  updated_by uuid references crm.profiles (id) on delete set null,
+  updated_by uuid references public.crm_profiles (id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (workspace_id, id),
-  constraint integration_connections_id_valid check (id in ('email')),
-  constraint integration_connections_provider_valid check (provider is null or provider in ('resend', 'smtp')),
-  constraint integration_connections_secret_complete check (
+  constraint crm_integration_connections_id_valid check (id in ('email')),
+  constraint crm_integration_connections_provider_valid check (provider is null or provider in ('resend', 'smtp')),
+  constraint crm_integration_connections_secret_complete check (
     (secret_ciphertext is null and secret_iv is null and secret_tag is null)
     or (secret_ciphertext is not null and secret_iv is not null and secret_tag is not null)
   )
 );
 
-create table crm.google_calendar_connection (
-  workspace_id uuid primary key references crm.workspaces (id) on delete cascade,
+create table public.crm_google_calendar_connection (
+  workspace_id uuid primary key references public.crm_workspaces (id) on delete cascade,
   enabled boolean not null default false,
   status text not null default 'disconnected',
   client_id text,
@@ -47,22 +47,22 @@ create table crm.google_calendar_connection (
   pending_oauth_state_expires_at timestamptz,
   last_error text,
   last_synced_at timestamptz,
-  updated_by uuid references crm.profiles (id) on delete set null,
+  updated_by uuid references public.crm_profiles (id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint google_calendar_status_valid check (status in ('disconnected', 'connected', 'error')),
-  constraint google_calendar_client_secret_complete check (
+  constraint crm_google_calendar_status_valid check (status in ('disconnected', 'connected', 'error')),
+  constraint crm_google_calendar_client_secret_complete check (
     (client_secret_ciphertext is null and client_secret_iv is null and client_secret_tag is null)
     or (client_secret_ciphertext is not null and client_secret_iv is not null and client_secret_tag is not null)
   ),
-  constraint google_calendar_refresh_token_complete check (
+  constraint crm_google_calendar_refresh_token_complete check (
     (refresh_token_ciphertext is null and refresh_token_iv is null and refresh_token_tag is null)
     or (refresh_token_ciphertext is not null and refresh_token_iv is not null and refresh_token_tag is not null)
   )
 );
 
-create table crm.whatsapp_connection (
-  workspace_id uuid primary key references crm.workspaces (id) on delete cascade,
+create table public.crm_whatsapp_connection (
+  workspace_id uuid primary key references public.crm_workspaces (id) on delete cascade,
   enabled boolean not null default false,
   desired_state text not null default 'disconnected',
   status text not null default 'disconnected',
@@ -84,26 +84,26 @@ create table crm.whatsapp_connection (
   daily_cap integer not null default 200,
   min_delay_seconds integer not null default 5,
   max_delay_seconds integer not null default 15,
-  updated_by uuid references crm.profiles (id) on delete set null,
+  updated_by uuid references public.crm_profiles (id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint whatsapp_desired_state_valid check (desired_state in ('connected', 'disconnected', 'restart')),
-  constraint whatsapp_status_valid check (
+  constraint crm_whatsapp_desired_state_valid check (desired_state in ('connected', 'disconnected', 'restart')),
+  constraint crm_whatsapp_status_valid check (
     status in ('disconnected', 'connecting', 'qr_ready', 'connected', 'reconnecting', 'reauth_required', 'error')
   ),
-  constraint whatsapp_qr_complete check (
+  constraint crm_whatsapp_qr_complete check (
     (qr_ciphertext is null and qr_iv is null and qr_tag is null and qr_expires_at is null)
     or (qr_ciphertext is not null and qr_iv is not null and qr_tag is not null and qr_expires_at is not null)
   ),
-  constraint whatsapp_daily_cap_positive check (daily_cap between 1 and 10000),
-  constraint whatsapp_delay_valid check (
+  constraint crm_whatsapp_daily_cap_positive check (daily_cap between 1 and 10000),
+  constraint crm_whatsapp_delay_valid check (
     min_delay_seconds between 1 and 300
     and max_delay_seconds between min_delay_seconds and 600
   )
 );
 
-create table crm.whatsapp_auth_credentials (
-  workspace_id uuid primary key references crm.workspaces (id) on delete cascade,
+create table public.crm_whatsapp_auth_credentials (
+  workspace_id uuid primary key references public.crm_workspaces (id) on delete cascade,
   ciphertext bytea not null,
   iv bytea not null,
   tag bytea not null,
@@ -111,8 +111,8 @@ create table crm.whatsapp_auth_credentials (
   updated_at timestamptz not null default now()
 );
 
-create table crm.whatsapp_auth_keys (
-  workspace_id uuid not null references crm.workspaces (id) on delete cascade,
+create table public.crm_whatsapp_auth_keys (
+  workspace_id uuid not null references public.crm_workspaces (id) on delete cascade,
   key_type text not null,
   key_id text not null,
   ciphertext bytea not null,
@@ -124,9 +124,9 @@ create table crm.whatsapp_auth_keys (
 );
 
 -- One row per outbound WhatsApp send, from exactly one source (workflow step, proposal or meeting).
-create table crm.whatsapp_outbound_messages (
+create table public.crm_whatsapp_outbound_messages (
   id uuid primary key default gen_random_uuid(),
-  workspace_id uuid not null references crm.workspaces (id) on delete cascade,
+  workspace_id uuid not null references public.crm_workspaces (id) on delete cascade,
   contact_id uuid not null,
   scheduled_action_id uuid unique,
   proposal_id uuid unique,
@@ -142,31 +142,31 @@ create table crm.whatsapp_outbound_messages (
   prepared_at timestamptz not null default now(),
   sent_at timestamptz,
   updated_at timestamptz not null default now(),
-  constraint whatsapp_outbound_contact_fk foreign key (contact_id, workspace_id)
-    references crm.contacts (id, workspace_id) on delete cascade,
-  constraint whatsapp_outbound_scheduled_action_fk foreign key (scheduled_action_id, workspace_id)
-    references crm.scheduled_actions (id, workspace_id) on delete cascade,
-  constraint whatsapp_outbound_proposal_fk foreign key (proposal_id, workspace_id)
-    references crm.proposals (id, workspace_id) on delete cascade,
-  constraint whatsapp_outbound_meeting_fk foreign key (meeting_id, workspace_id)
-    references crm.meetings (id, workspace_id) on delete cascade,
-  constraint whatsapp_outbound_status_valid check (status in ('prepared', 'sent', 'failed')),
-  constraint whatsapp_outbound_exactly_one_source check (
+  constraint crm_whatsapp_outbound_contact_fk foreign key (contact_id, workspace_id)
+    references public.crm_contacts (id, workspace_id) on delete cascade,
+  constraint crm_whatsapp_outbound_scheduled_action_fk foreign key (scheduled_action_id, workspace_id)
+    references public.crm_scheduled_actions (id, workspace_id) on delete cascade,
+  constraint crm_whatsapp_outbound_proposal_fk foreign key (proposal_id, workspace_id)
+    references public.crm_proposals (id, workspace_id) on delete cascade,
+  constraint crm_whatsapp_outbound_meeting_fk foreign key (meeting_id, workspace_id)
+    references public.crm_meetings (id, workspace_id) on delete cascade,
+  constraint crm_whatsapp_outbound_status_valid check (status in ('prepared', 'sent', 'failed')),
+  constraint crm_whatsapp_outbound_exactly_one_source check (
     ((scheduled_action_id is not null)::int + (proposal_id is not null)::int + (meeting_id is not null)::int) = 1
   ),
-  constraint whatsapp_outbound_payload_complete check (
+  constraint crm_whatsapp_outbound_payload_complete check (
     (payload_ciphertext is null and payload_iv is null and payload_tag is null)
     or (payload_ciphertext is not null and payload_iv is not null and payload_tag is not null)
   )
 );
 
-create index whatsapp_outbound_workspace_sent_at_idx on crm.whatsapp_outbound_messages (workspace_id, sent_at desc);
-create index whatsapp_outbound_contact_id_idx on crm.whatsapp_outbound_messages (contact_id);
+create index crm_whatsapp_outbound_workspace_sent_at_idx on public.crm_whatsapp_outbound_messages (workspace_id, sent_at desc);
+create index crm_whatsapp_outbound_contact_id_idx on public.crm_whatsapp_outbound_messages (contact_id);
 
 -- Inbound reply metadata only, never the message body. contact_id is set when exactly one
 -- contact matched; ambiguous/unmatched rows wait for review.
-create table crm.whatsapp_inbound_events (
-  workspace_id uuid not null references crm.workspaces (id) on delete cascade,
+create table public.crm_whatsapp_inbound_events (
+  workspace_id uuid not null references public.crm_workspaces (id) on delete cascade,
   message_id text not null,
   contact_id uuid,
   sender_jid text not null,
@@ -177,13 +177,16 @@ create table crm.whatsapp_inbound_events (
   disposition text not null,
   created_at timestamptz not null default now(),
   primary key (workspace_id, message_id),
-  constraint whatsapp_inbound_contact_fk foreign key (contact_id, workspace_id)
-    references crm.contacts (id, workspace_id) on delete set null (contact_id),
-  constraint whatsapp_inbound_match_count_non_negative check (match_count >= 0),
-  constraint whatsapp_inbound_disposition_valid check (disposition in ('matched', 'ambiguous', 'unmatched', 'ignored'))
+  constraint crm_whatsapp_inbound_contact_fk foreign key (contact_id, workspace_id)
+    references public.crm_contacts (id, workspace_id) on delete set null (contact_id),
+  constraint crm_whatsapp_inbound_match_count_non_negative check (match_count >= 0),
+  constraint crm_whatsapp_inbound_disposition_valid check (disposition in ('matched', 'ambiguous', 'unmatched', 'ignored'))
 );
 
-create index whatsapp_inbound_workspace_received_at_idx on crm.whatsapp_inbound_events (workspace_id, received_at desc);
-create index whatsapp_inbound_contact_id_idx on crm.whatsapp_inbound_events (contact_id) where contact_id is not null;
+create index crm_whatsapp_inbound_workspace_received_at_idx on public.crm_whatsapp_inbound_events (workspace_id, received_at desc);
+create index crm_whatsapp_inbound_contact_id_idx on public.crm_whatsapp_inbound_events (contact_id) where contact_id is not null;
+
+-- Locks down the new crm_* objects (see 001).
+select public.crm_secure_objects();
 
 commit;

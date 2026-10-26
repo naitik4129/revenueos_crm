@@ -54,9 +54,9 @@ describe("automation and worker (PGlite)", () => {
     const contactId = await newContact();
     return { contactId, dealId: (await api("post", "/deals", { contactId })).body.id as string };
   };
-  const runOf = (dealId: string) => one(`select id, status, cancel_reason from crm.workflow_runs where deal_id = $1 order by created_at desc limit 1`, [dealId]);
+  const runOf = (dealId: string) => one(`select id, status, cancel_reason from crm_workflow_runs where deal_id = $1 order by created_at desc limit 1`, [dealId]);
   const actionsOf = async (runId: string) =>
-    (await seed.query(`select action_type, status, attempt_count, scheduled_for from crm.scheduled_actions where workflow_run_id = $1 order by created_at`, [runId])).rows;
+    (await seed.query(`select action_type, status, attempt_count, scheduled_for from crm_scheduled_actions where workflow_run_id = $1 order by created_at`, [runId])).rows;
   const claimAll = () => db.withTransaction((c) => automation.claimDueActionIds(c, 50));
 
   beforeAll(async () => {
@@ -70,9 +70,9 @@ describe("automation and worker (PGlite)", () => {
 
     sam = (await seed.query(`insert into auth.users (email) values ('sam@x.com') returning id`)).rows[0].id;
     await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, 'Sam Seller', 'sam@x.com')`, [sam]);
-    await seed.query(`insert into crm.profiles (id, role) values ($1, 'salesperson')`, [sam]);
-    ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sam]);
+    await seed.query(`insert into crm_profiles (id, role) values ($1, 'salesperson')`, [sam]);
+    ws = (await seed.query(`insert into crm_workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sam]);
 
     templateId = (
       await api("post", "/templates", {
@@ -158,7 +158,7 @@ describe("automation and worker (PGlite)", () => {
   it("deal_created enrolls a new deal; a prospect (contact without a deal) never enrolls", async () => {
     await workflow("deal_created", [{ action: "send_email", templateId }]);
     const prospect = await newContact();
-    expect(await one(`select count(*)::int n from crm.workflow_runs where contact_id = $1`, [prospect])).toEqual({ n: 0 });
+    expect(await one(`select count(*)::int n from crm_workflow_runs where contact_id = $1`, [prospect])).toEqual({ n: 0 });
 
     const { dealId } = await newDeal();
     expect(await runOf(dealId)).toMatchObject({ status: "running" });
@@ -166,7 +166,7 @@ describe("automation and worker (PGlite)", () => {
   });
 
   it("the worker (dry run) runs every step to completion and renders contact/company/deal variables", async () => {
-    await seed.query(`update crm.workflows set status = 'paused' where workspace_id = $1`, [ws]);
+    await seed.query(`update crm_workflows set status = 'paused' where workspace_id = $1`, [ws]);
     const id = await workflow("manual_enrollment", [
       { action: "create_call_task", config: "Call after intro" },
       { action: "send_email", templateId },
@@ -186,7 +186,7 @@ describe("automation and worker (PGlite)", () => {
     expect((await actionsOf(run.id)).map((a) => a.status)).toEqual(["completed", "completed", "completed"]);
     expect((await api("get", `/deals/${dealId}`)).body.stage).toBe("connected_qualifying");
     expect((await api("get", `/deals/${dealId}/tasks`)).body.data.map((t: { title: string }) => t.title)).toContain("Call after intro");
-    expect(await one(`select title from crm.timeline_events where deal_id = $1 and event_kind = 'email'`, [dealId])).toEqual({ title: "Email Sent (dry run)" });
+    expect(await one(`select title from crm_timeline_events where deal_id = $1 and event_kind = 'email'`, [dealId])).toEqual({ title: "Email Sent (dry run)" });
 
     const sent = logs.find((l) => l.includes("DRY RUN send_email"))!;
     expect(sent).toContain("Subject: Hi Asha");
@@ -198,7 +198,7 @@ describe("automation and worker (PGlite)", () => {
       (await api("post", "/templates", { name, channel: "email", subject: "Hi", body: "<p>Hello {{contact.firstName}}</p>" })).body.id as string;
     const remove = (path: string) => request(app).delete(`/api/v1${path}`).set("Authorization", `Bearer ${sam}`).set("X-Workspace-Id", ws);
     const notices = (dealId: string) =>
-      seed.query(`select recipient_id, title, detail, kind from crm.notifications where deal_id = $1 order by recipient_id`, [dealId]).then((r) => r.rows);
+      seed.query(`select recipient_id, title, detail, kind from crm_notifications where deal_id = $1 order by recipient_id`, [dealId]).then((r) => r.rows);
 
     it("a draft saves a send step without a template; publishing refuses it until one is set", async () => {
       const wf = (await api("post", "/workflows", { name: "Draft only", trigger: "manual_enrollment" })).body;
@@ -220,7 +220,7 @@ describe("automation and worker (PGlite)", () => {
     it("refuses deleting or switching off a template the live version uses, naming the workflow", async () => {
       const live = await newTemplate("Live intro");
       const id = await workflow("manual_enrollment", [{ action: "send_email", templateId: live }]);
-      const name = (await one(`select name from crm.workflows where id = $1`, [id])).name as string;
+      const name = (await one(`select name from crm_workflows where id = $1`, [id])).name as string;
 
       const del = await remove(`/templates/${live}`);
       expect(del.status).toBe(409);
@@ -232,7 +232,7 @@ describe("automation and worker (PGlite)", () => {
     });
 
     it("also guards an older version that still has a run in progress; once the run ends it can be switched off", async () => {
-      await seed.query(`update crm.workflows set status = 'paused' where workspace_id = $1`, [ws]);
+      await seed.query(`update crm_workflows set status = 'paused' where workspace_id = $1`, [ws]);
       const old = await newTemplate("Old version email");
       const id = await workflow("manual_enrollment", [{ action: "send_email", templateId: old, delayDays: 3 }]);
       const { dealId } = await newDeal();
@@ -272,19 +272,19 @@ describe("automation and worker (PGlite)", () => {
       [
         "missing",
         "No template resolved for this step.",
-        `update crm.scheduled_actions set payload = jsonb_set(payload, '{templateId}', '"00000000-0000-4000-8000-000000000000"')
+        `update crm_scheduled_actions set payload = jsonb_set(payload, '{templateId}', '"00000000-0000-4000-8000-000000000000"')
           where payload->>'templateId' = $1::text`,
       ],
-      ["inactive", "Template is inactive.", "update crm.message_templates set is_active = false where id = $1"],
+      ["inactive", "Template is inactive.", "update crm_message_templates set is_active = false where id = $1"],
     ])("worker: a %s template skips the send, the run carries on, and the owner is told", async (problem, reason, breakSql) => {
-      await seed.query(`update crm.workflows set status = 'paused' where workspace_id = $1`, [ws]);
+      await seed.query(`update crm_workflows set status = 'paused' where workspace_id = $1`, [ws]);
       const tpl = await newTemplate(`Skip ${problem}`);
       const id = await workflow("manual_enrollment", [
         { action: "send_email", templateId: tpl },
         { action: "create_call_task", config: "Follow up" },
       ]);
       const { dealId } = await newDeal();
-      await seed.query(`update crm.deals set owner_id = $2 where id = $1`, [dealId, sam]);
+      await seed.query(`update crm_deals set owner_id = $2 where id = $1`, [dealId, sam]);
       expect((await api("post", "/runs", { dealId, workflowId: id })).status).toBe(201);
       await seed.query(breakSql, [tpl]);
 
@@ -295,10 +295,10 @@ describe("automation and worker (PGlite)", () => {
         ["send_email", "skipped"],
         ["create_call_task", "completed"],
       ]);
-      expect(await one(`select last_error from crm.scheduled_actions where workflow_run_id = $1 and action_type = 'send_email'`, [run.id])).toEqual({
+      expect(await one(`select last_error from crm_scheduled_actions where workflow_run_id = $1 and action_type = 'send_email'`, [run.id])).toEqual({
         last_error: reason,
       });
-      const name = (await one(`select name from crm.workflows where id = $1`, [id])).name as string;
+      const name = (await one(`select name from crm_workflows where id = $1`, [id])).name as string;
       expect(await notices(dealId)).toEqual([
         {
           recipient_id: sam,
@@ -310,11 +310,11 @@ describe("automation and worker (PGlite)", () => {
     });
 
     it("worker: an unowned deal's skip notice goes to every salesperson member, never to admins", async () => {
-      await seed.query(`update crm.workflows set status = 'paused' where workspace_id = $1`, [ws]);
+      await seed.query(`update crm_workflows set status = 'paused' where workspace_id = $1`, [ws]);
       const member = async (email: string, role: string) => {
         const id = (await seed.query(`insert into auth.users (email) values ($1) returning id`, [email])).rows[0].id as string;
-        await seed.query(`insert into crm.profiles (id, role) values ($1, $2)`, [id, role]);
-        await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, id]);
+        await seed.query(`insert into crm_profiles (id, role) values ($1, $2)`, [id, role]);
+        await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, id]);
         return id;
       };
       const sue = await member("sue@x.com", "salesperson");
@@ -322,9 +322,9 @@ describe("automation and worker (PGlite)", () => {
       const tpl = await newTemplate("Skip unowned");
       const id = await workflow("manual_enrollment", [{ action: "send_email", templateId: tpl }]);
       const { dealId } = await newDeal();
-      await seed.query(`update crm.deals set owner_id = null where id = $1`, [dealId]);
+      await seed.query(`update crm_deals set owner_id = null where id = $1`, [dealId]);
       expect((await api("post", "/runs", { dealId, workflowId: id })).status).toBe(201);
-      await seed.query(`update crm.message_templates set is_active = false where id = $1`, [tpl]);
+      await seed.query(`update crm_message_templates set is_active = false where id = $1`, [tpl]);
 
       for (let i = 0; i < 5 && (await runner.runAutomationTick(opts)); i++);
       expect((await notices(dealId)).map((n) => n.recipient_id)).toEqual([sam, sue].sort());
@@ -333,12 +333,12 @@ describe("automation and worker (PGlite)", () => {
 
   describe("eligibility is checked right before each action", () => {
     async function claimedEmail() {
-      await seed.query(`update crm.workflows set status = 'paused' where workspace_id = $1`, [ws]);
+      await seed.query(`update crm_workflows set status = 'paused' where workspace_id = $1`, [ws]);
       const id = await workflow("manual_enrollment", [{ action: "send_email", templateId }]);
       const deal = await newDeal();
       await api("post", "/runs", { dealId: deal.dealId, workflowId: id });
       const run = await runOf(deal.dealId);
-      const actionId = (await one(`select id from crm.scheduled_actions where workflow_run_id = $1`, [run.id])).id as string;
+      const actionId = (await one(`select id from crm_scheduled_actions where workflow_run_id = $1`, [run.id])).id as string;
       expect(await claimAll()).toContain(actionId);
       return { ...deal, runId: run.id as string, actionId };
     }
@@ -346,17 +346,17 @@ describe("automation and worker (PGlite)", () => {
     it("the app pool cancels statements after 15 s; the claim has an index per branch (014)", async () => {
       // PGlite (one shared session) ignores per-connection settings; the load run checks the live value on Postgres 17.
       expect(db.pool.options).toMatchObject({ statement_timeout: 15_000, connectionTimeoutMillis: 5_000, max: 10 });
-      const idx = await seed.query(`select indexname from pg_indexes where schemaname = 'crm' and tablename = 'scheduled_actions' order by 1`);
-      expect(idx.rows.map((r) => r.indexname)).toEqual(expect.arrayContaining(["scheduled_actions_due_idx", "scheduled_actions_executing_idx"]));
+      const idx = await seed.query(`select indexname from pg_indexes where schemaname = 'public' and tablename = 'crm_scheduled_actions' order by 1`);
+      expect(idx.rows.map((r) => r.indexname)).toEqual(expect.arrayContaining(["crm_scheduled_actions_due_idx", "crm_scheduled_actions_executing_idx"]));
     });
 
     it("an action left executing is claimed again after 15 minutes, not before", async () => {
       const { actionId } = await claimedEmail();
-      await seed.query(`update crm.scheduled_actions set last_attempt_at = now() - interval '5 minutes' where id = $1`, [actionId]);
+      await seed.query(`update crm_scheduled_actions set last_attempt_at = now() - interval '5 minutes' where id = $1`, [actionId]);
       expect(await claimAll()).not.toContain(actionId);
-      await seed.query(`update crm.scheduled_actions set last_attempt_at = now() - interval '20 minutes' where id = $1`, [actionId]);
+      await seed.query(`update crm_scheduled_actions set last_attempt_at = now() - interval '20 minutes' where id = $1`, [actionId]);
       expect(await claimAll()).toContain(actionId);
-      expect(await one(`select status, last_attempt_at > now() - interval '1 minute' as fresh from crm.scheduled_actions where id = $1`, [actionId])).toEqual({ status: "executing", fresh: true });
+      expect(await one(`select status, last_attempt_at > now() - interval '1 minute' as fresh from crm_scheduled_actions where id = $1`, [actionId])).toEqual({ status: "executing", fresh: true });
     });
 
     it("DNC contact: the action is skipped and the run stopped", async () => {
@@ -364,7 +364,7 @@ describe("automation and worker (PGlite)", () => {
       await api("post", `/contacts/${contactId}/dnc`, { reason: "Asked to stop" });
       await runner.processAction(actionId, opts);
       expect((await actionsOf(runId))[0].status).toBe("skipped");
-      expect((await one(`select status from crm.workflow_runs where id = $1`, [runId])).status).toBe("cancelled");
+      expect((await one(`select status from crm_workflow_runs where id = $1`, [runId])).status).toBe("cancelled");
     });
 
     it("closed deal: the action is skipped", async () => {
@@ -372,25 +372,25 @@ describe("automation and worker (PGlite)", () => {
       await api("post", `/deals/${dealId}/won`);
       await runner.processAction(actionId, opts);
       expect((await actionsOf(runId))[0].status).toBe("skipped");
-      expect((await one(`select status from crm.workflow_runs where id = $1`, [runId])).status).toBe("cancelled");
+      expect((await one(`select status from crm_workflow_runs where id = $1`, [runId])).status).toBe("cancelled");
     });
 
     it("manual automation: the action is skipped and the run stopped by the check itself", async () => {
       const { dealId, runId, actionId } = await claimedEmail();
-      await seed.query(`update crm.deals set automation_mode = 'manual' where id = $1`, [dealId]);
+      await seed.query(`update crm_deals set automation_mode = 'manual' where id = $1`, [dealId]);
       await runner.processAction(actionId, opts);
       expect((await actionsOf(runId))[0].status).toBe("skipped");
-      expect(await one(`select status, cancel_reason from crm.workflow_runs where id = $1`, [runId])).toEqual({ status: "cancelled", cancel_reason: 'Deal automation is "manual".' });
+      expect(await one(`select status, cancel_reason from crm_workflow_runs where id = $1`, [runId])).toEqual({ status: "cancelled", cancel_reason: 'Deal automation is "manual".' });
     });
 
     it("paused automation: the action is deferred (back to pending later, no retry used)", async () => {
       const { dealId, runId, actionId } = await claimedEmail();
-      await seed.query(`update crm.deals set automation_mode = 'paused' where id = $1`, [dealId]);
+      await seed.query(`update crm_deals set automation_mode = 'paused' where id = $1`, [dealId]);
       await runner.processAction(actionId, opts);
       const [action] = await actionsOf(runId);
       expect(action).toMatchObject({ status: "pending", attempt_count: 0 });
       expect(new Date(action.scheduled_for).getTime()).toBeGreaterThan(Date.now() + 30 * 60_000);
-      expect((await one(`select status from crm.workflow_runs where id = $1`, [runId])).status).toBe("running");
+      expect((await one(`select status from crm_workflow_runs where id = $1`, [runId])).status).toBe("running");
     });
 
     it("unsubscribed email channel: the email is skipped but the run carries on", async () => {
@@ -398,11 +398,11 @@ describe("automation and worker (PGlite)", () => {
       await api("post", `/contacts/${contactId}/contactability`, { channel: "email", status: "unsubscribed" });
       await runner.processAction(actionId, opts);
       expect((await actionsOf(runId))[0].status).toBe("skipped");
-      expect((await one(`select status from crm.workflow_runs where id = $1`, [runId])).status).toBe("completed");
+      expect((await one(`select status from crm_workflow_runs where id = $1`, [runId])).status).toBe("completed");
     });
 
     it("nurture deal: a workflow enrolled after parking still runs", async () => {
-      await seed.query(`update crm.workflows set status = 'paused' where workspace_id = $1`, [ws]);
+      await seed.query(`update crm_workflows set status = 'paused' where workspace_id = $1`, [ws]);
       const id = await workflow("meeting_not_a_fit", [{ action: "send_email", templateId }]);
       const { dealId } = await newDeal();
       await api("post", `/deals/${dealId}/nurture`);

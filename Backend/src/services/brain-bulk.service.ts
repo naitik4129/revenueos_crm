@@ -34,7 +34,7 @@ const insertTimeline = (db: Queryable, workspaceId: string, rows: TimelineRow[])
 async function insertRefs(db: Queryable, workspaceId: string, kind: "company" | "contact", rows: { id: string; source: string; external_id: string }[]) {
   if (!rows.length) return;
   await db.query(
-    `insert into crm.external_refs (workspace_id, ${kind}_id, source, external_id)
+    `insert into crm_external_refs (workspace_id, ${kind}_id, source, external_id)
      select $1, x.id, x.source, x.external_id from jsonb_to_recordset($2::jsonb) as x(id uuid, source text, external_id text)
      on conflict do nothing`,
     [workspaceId, json(rows)],
@@ -57,9 +57,9 @@ class Lifecycle {
     if (!this.moves.length) return;
     const final = [...new Map(this.moves.map((m) => [m.contact_id, m])).values()];
     await db.query(
-      `update crm.contacts c set lifecycle_stage = x.stage::crm.lifecycle_stage, lifecycle_changed_at = now()
+      `update crm_contacts c set lifecycle_stage = x.stage::crm_lifecycle_stage, lifecycle_changed_at = now()
          from jsonb_to_recordset($1::jsonb) as x(contact_id uuid, stage text)
-        where c.id = x.contact_id and c.lifecycle_stage < x.stage::crm.lifecycle_stage`,
+        where c.id = x.contact_id and c.lifecycle_stage < x.stage::crm_lifecycle_stage`,
       [json(final)],
     );
     await insertTimeline(db, workspaceId, this.moves.map((m) => ({ contact_id: m.contact_id, event_kind: "lifecycle", title: `Lifecycle: ${m.stage}` })));
@@ -95,16 +95,16 @@ async function resolveContacts(db: Queryable, workspaceId: string, inputs: Conta
   const companyRefs = uniq(inputs.map((c) => (c.companyRef ? refKey(c.companyRef.source, c.companyRef.externalId) : null))).map((k) => k.split("\u0000") as [string, string]);
   const found = await db.query<{ kind: string; a: string; b: string | null; id: string }>(
     `select 'ref' as kind, r.source as a, r.external_id as b, r.contact_id as id
-       from crm.external_refs r join unnest($2::text[], $3::text[]) p(s, e) on r.source = p.s and r.external_id = p.e
+       from crm_external_refs r join unnest($2::text[], $3::text[]) p(s, e) on r.source = p.s and r.external_id = p.e
       where r.workspace_id = $1 and r.contact_id is not null
      union all
      select 'company', r.source, r.external_id, r.company_id
-       from crm.external_refs r join unnest($4::text[], $5::text[]) p(s, e) on r.source = p.s and r.external_id = p.e
+       from crm_external_refs r join unnest($4::text[], $5::text[]) p(s, e) on r.source = p.s and r.external_id = p.e
       where r.workspace_id = $1 and r.company_id is not null
      union all
-     select 'email', lower(c.email), null, c.id from crm.contacts c where c.workspace_id = $1 and lower(c.email) = any($6::text[])
+     select 'email', lower(c.email), null, c.id from crm_contacts c where c.workspace_id = $1 and lower(c.email) = any($6::text[])
      union all
-     select 'phone', c.phone_e164, null, c.id from crm.contacts c where c.workspace_id = $1 and c.phone_e164 = any($7::text[])`,
+     select 'phone', c.phone_e164, null, c.id from crm_contacts c where c.workspace_id = $1 and c.phone_e164 = any($7::text[])`,
     [workspaceId, refs.map((r) => r[0]), refs.map((r) => r[1]), companyRefs.map((r) => r[0]), companyRefs.map((r) => r[1]), uniq(cleaned.map((c) => c.email)), uniq(cleaned.map((c) => c.phoneE164))],
   );
   const byRef = new Map<string, string>();
@@ -121,15 +121,15 @@ async function resolveContacts(db: Queryable, workspaceId: string, inputs: Conta
   if (starts.length) {
     const chains = await db.query<ContactRowState & { start: string }>(
       `with recursive chain (start, id, next, hops) as (
-         select c.id, c.id, c.merged_into_contact_id, 0 from crm.contacts c where c.id = any($1::uuid[])
+         select c.id, c.id, c.merged_into_contact_id, 0 from crm_contacts c where c.id = any($1::uuid[])
          union all
          select ch.start, c.id, c.merged_into_contact_id, ch.hops + 1
-           from chain ch join crm.contacts c on c.id = ch.next
+           from chain ch join crm_contacts c on c.id = ch.next
           where ch.hops < 10
        ),
        target as (select distinct on (start) start, id from chain order by start, hops desc)
        select t.start, ${CONTACT_FIELDS.split(", ").map((f) => `c.${f}`).join(", ")}
-         from target t join crm.contacts c on c.id = t.id
+         from target t join crm_contacts c on c.id = t.id
         order by c.id
           for update of c`,
       [starts],
@@ -215,7 +215,7 @@ async function resolveContacts(db: Queryable, workspaceId: string, inputs: Conta
 
   if (created.length) {
     await db.query(
-      `insert into crm.contacts (id, workspace_id, company_id, first_name, last_name, job_title, email, phone, phone_e164, linkedin_url, country, location, source)
+      `insert into crm_contacts (id, workspace_id, company_id, first_name, last_name, job_title, email, phone, phone_e164, linkedin_url, country, location, source)
        select x.id, $1, x.company_id, x.first_name, x.last_name, x.job_title, x.email, x.phone, x.phone_e164, x.linkedin_url, x.country, x.location, 'brain'
          from jsonb_to_recordset($2::jsonb) as x(id uuid, company_id uuid, first_name text, last_name text, job_title text, email text, phone text,
                                                  phone_e164 text, linkedin_url text, country text, location text)`,
@@ -224,7 +224,7 @@ async function resolveContacts(db: Queryable, workspaceId: string, inputs: Conta
   }
   if (patched.size) {
     await db.query(
-      `update crm.contacts t set first_name = x.first_name, last_name = x.last_name, job_title = x.job_title, email = x.email, phone = x.phone,
+      `update crm_contacts t set first_name = x.first_name, last_name = x.last_name, job_title = x.job_title, email = x.email, phone = x.phone,
               phone_e164 = x.phone_e164, linkedin_url = x.linkedin_url, country = x.country, location = x.location, company_id = x.company_id
          from jsonb_to_recordset($1::jsonb) as x(id uuid, company_id uuid, first_name text, last_name text, job_title text, email text, phone text,
                                                  phone_e164 text, linkedin_url text, country text, location text)
@@ -262,10 +262,10 @@ export const bulkCompanies: BulkHandler<z.infer<typeof companyItem>> = async (db
   const refs = uniq(items.map((i) => refKey(i.source, i.externalId))).map((k) => k.split("\u0000") as [string, string]);
   const found = await db.query<{ kind: string; a: string; b: string | null; id: string }>(
     `select 'ref' as kind, r.source as a, r.external_id as b, r.company_id as id
-       from crm.external_refs r join unnest($2::text[], $3::text[]) p(s, e) on r.source = p.s and r.external_id = p.e
+       from crm_external_refs r join unnest($2::text[], $3::text[]) p(s, e) on r.source = p.s and r.external_id = p.e
       where r.workspace_id = $1 and r.company_id is not null
      union all
-     select 'domain', lower(co.domain), null, co.id from crm.companies co where co.workspace_id = $1 and lower(co.domain) = any($4::text[])`,
+     select 'domain', lower(co.domain), null, co.id from crm_companies co where co.workspace_id = $1 and lower(co.domain) = any($4::text[])`,
     [workspaceId, refs.map((r) => r[0]), refs.map((r) => r[1]), uniq(domains)],
   );
   const byRef = new Map<string, string>();
@@ -277,7 +277,7 @@ export const bulkCompanies: BulkHandler<z.infer<typeof companyItem>> = async (db
   if (matched.length) {
     const locked = await db.query<CompanyRowState>(
       `select id, name, domain, website, industry, location, city, country, headcount, phone, linkedin_url
-         from crm.companies where id = any($1::uuid[]) order by id for update`,
+         from crm_companies where id = any($1::uuid[]) order by id for update`,
       [matched],
     );
     for (const r of locked.rows) rows.set(r.id, r);
@@ -329,7 +329,7 @@ export const bulkCompanies: BulkHandler<z.infer<typeof companyItem>> = async (db
   const columns = `id uuid, name text, domain text, website text, industry text, location text, city text, country text, headcount integer, phone text, linkedin_url text`;
   if (created.length) {
     await db.query(
-      `insert into crm.companies (id, workspace_id, name, domain, website, industry, location, city, country, headcount, phone, linkedin_url, source)
+      `insert into crm_companies (id, workspace_id, name, domain, website, industry, location, city, country, headcount, phone, linkedin_url, source)
        select x.id, $1, x.name, x.domain, x.website, x.industry, x.location, x.city, x.country, x.headcount, x.phone, x.linkedin_url, 'brain'
          from jsonb_to_recordset($2::jsonb) as x(${columns})`,
       [workspaceId, json(created)],
@@ -337,7 +337,7 @@ export const bulkCompanies: BulkHandler<z.infer<typeof companyItem>> = async (db
   }
   if (patched.size) {
     await db.query(
-      `update crm.companies t set domain = x.domain, website = x.website, industry = x.industry, location = x.location, city = x.city,
+      `update crm_companies t set domain = x.domain, website = x.website, industry = x.industry, location = x.location, city = x.city,
               country = x.country, headcount = x.headcount, phone = x.phone, linkedin_url = x.linkedin_url
          from jsonb_to_recordset($1::jsonb) as x(${columns})
         where t.id = x.id`,
@@ -370,7 +370,7 @@ interface CallState {
 export const bulkCalls: BulkHandler<z.infer<typeof callItem>> = async (db, workspaceId, items) => {
   const contacts = await resolveContacts(db, workspaceId, items.map((i) => i.contact));
   const existing = await db.query<{ external_id: string; id: string }>(
-    `select external_id, id from crm.calls where workspace_id = $1 and external_source = 'quickhowl' and external_id = any($2::text[])`,
+    `select external_id, id from crm_calls where workspace_id = $1 and external_source = 'quickhowl' and external_id = any($2::text[])`,
     [workspaceId, uniq(items.map((i) => i.externalId))],
   );
   const known = new Map(existing.rows.map((r) => [r.external_id, r.id]));
@@ -428,7 +428,7 @@ export const bulkCalls: BulkHandler<z.infer<typeof callItem>> = async (db, works
   const fresh = all.filter((c) => c.isNew);
   if (fresh.length) {
     await db.query(
-      `insert into crm.calls (id, workspace_id, contact_id, source, connected, direction, occurred_at, duration_seconds, ai_outcome,
+      `insert into crm_calls (id, workspace_id, contact_id, source, connected, direction, occurred_at, duration_seconds, ai_outcome,
                               summary, sentiment, transcript, recording_url, external_source, external_id)
        select x.id, $1, x.contact_id, 'ai', x.connected, x.direction, coalesce(x.started_at, now()), x.duration_seconds, x.ai_outcome,
               x.summary, x.sentiment, x.transcript, x.recording_url, 'quickhowl', x.external_id
@@ -439,7 +439,7 @@ export const bulkCalls: BulkHandler<z.infer<typeof callItem>> = async (db, works
   const resent = all.filter((c) => !c.isNew);
   if (resent.length) {
     await db.query(
-      `update crm.calls t set connected = x.connected, direction = coalesce(x.direction, t.direction), occurred_at = coalesce(x.started_at, t.occurred_at),
+      `update crm_calls t set connected = x.connected, direction = coalesce(x.direction, t.direction), occurred_at = coalesce(x.started_at, t.occurred_at),
               duration_seconds = coalesce(x.duration_seconds, t.duration_seconds), ai_outcome = coalesce(x.ai_outcome, t.ai_outcome),
               summary = coalesce(x.summary, t.summary), sentiment = coalesce(x.sentiment, t.sentiment),
               transcript = coalesce(x.transcript, t.transcript), recording_url = coalesce(x.recording_url, t.recording_url)
@@ -484,7 +484,7 @@ export const bulkEmailEvents: BulkHandler<z.infer<typeof emailEventItem>> = asyn
   const existing = await db.query<{ external_id: string; id: string; seen: EmailStatus[] }>(
     `select external_id, id,
             array_remove(array[${EMAIL_STATUSES.map((s) => `case when ${AT[s]} is not null then '${s}' end`).join(", ")}], null) as seen
-       from crm.email_activities where workspace_id = $1 and external_source = 'email_tool' and external_id = any($2::text[])`,
+       from crm_email_activities where workspace_id = $1 and external_source = 'email_tool' and external_id = any($2::text[])`,
     [workspaceId, uniq(items.map((i) => i.messageId))],
   );
   const seen = new Map(existing.rows.map((r) => [r.external_id, { id: r.id, events: new Set(r.seen) }]));
@@ -548,30 +548,30 @@ export const bulkEmailEvents: BulkHandler<z.infer<typeof emailEventItem>> = asyn
   if (messages.size) {
     const rows = [...messages.values()].map(({ at, ...m }) => ({ ...m, ...Object.fromEntries(EMAIL_STATUSES.map((s) => [AT[s], at[s] ?? null])) }));
     await db.query(
-      `insert into crm.email_activities (id, workspace_id, contact_id, external_source, external_id, campaign_ref, campaign_name, step, subject, status, reply_text,
+      `insert into crm_email_activities (id, workspace_id, contact_id, external_source, external_id, campaign_ref, campaign_name, step, subject, status, reply_text,
                                          ${EMAIL_STATUSES.map((s) => AT[s]).join(", ")})
-       select x.id, $1, x.contact_id, 'email_tool', x.external_id, x.campaign_ref, x.campaign_name, x.step, x.subject, x.status::crm.email_status, x.reply_text,
+       select x.id, $1, x.contact_id, 'email_tool', x.external_id, x.campaign_ref, x.campaign_name, x.step, x.subject, x.status::crm_email_status, x.reply_text,
               ${EMAIL_STATUSES.map((s) => `x.${AT[s]}`).join(", ")}
          from jsonb_to_recordset($2::jsonb) as x(id uuid, contact_id uuid, external_id text, campaign_ref text, campaign_name text, step integer, subject text,
                                                  status text, reply_text text, ${EMAIL_STATUSES.map((s) => `${AT[s]} timestamptz`).join(", ")})
        on conflict (workspace_id, external_source, external_id) where external_id is not null
-       do update set status = greatest(email_activities.status, excluded.status),
-                     ${EMAIL_STATUSES.map((s) => `${AT[s]} = coalesce(email_activities.${AT[s]}, excluded.${AT[s]})`).join(",\n                     ")},
-                     reply_text = coalesce(email_activities.reply_text, excluded.reply_text),
-                     campaign_ref = coalesce(email_activities.campaign_ref, excluded.campaign_ref),
-                     campaign_name = coalesce(email_activities.campaign_name, excluded.campaign_name),
-                     step = coalesce(email_activities.step, excluded.step),
-                     subject = coalesce(email_activities.subject, excluded.subject)`,
+       do update set status = greatest(crm_email_activities.status, excluded.status),
+                     ${EMAIL_STATUSES.map((s) => `${AT[s]} = coalesce(crm_email_activities.${AT[s]}, excluded.${AT[s]})`).join(",\n                     ")},
+                     reply_text = coalesce(crm_email_activities.reply_text, excluded.reply_text),
+                     campaign_ref = coalesce(crm_email_activities.campaign_ref, excluded.campaign_ref),
+                     campaign_name = coalesce(crm_email_activities.campaign_name, excluded.campaign_name),
+                     step = coalesce(crm_email_activities.step, excluded.step),
+                     subject = coalesce(crm_email_activities.subject, excluded.subject)`,
       [workspaceId, json(rows)],
     );
   }
   await lifecycle.write(db, workspaceId);
   if (channels.size) {
     await db.query(
-      `insert into crm.contact_channels (contact_id, channel, status, reason)
+      `insert into crm_contact_channels (contact_id, channel, status, reason)
        select x.contact_id, 'email', x.status, x.reason from jsonb_to_recordset($1::jsonb) as x(contact_id uuid, status text, reason text)
        on conflict (contact_id, channel) do update set status = excluded.status, reason = excluded.reason
-         where contact_channels.status <> 'unsubscribed'`,
+         where crm_contact_channels.status <> 'unsubscribed'`,
       [json([...channels.values()])],
     );
   }

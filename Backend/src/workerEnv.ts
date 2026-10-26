@@ -5,6 +5,9 @@ const WorkerEnvSchema = z.object({
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
   WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   WORKER_DRY_RUN: z.string().default("false").transform((value) => value === "true"),
+  // Brain feed reader (brain-feed.service.ts): off until set to "true"; one pass every interval.
+  BRAIN_FEED_ENABLED: z.string().default("false").transform((value) => value === "true"),
+  BRAIN_FEED_INTERVAL_MS: z.coerce.number().int().min(30_000).default(300_000),
 });
 
 function loadWorkerEnv() {

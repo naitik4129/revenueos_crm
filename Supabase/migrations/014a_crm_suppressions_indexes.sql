@@ -5,7 +5,7 @@
 
 begin;
 
-create index contact_channels_updated_at_idx on crm.contact_channels (updated_at);
-create index dnc_events_reactivated_at_idx on crm.dnc_events (created_at) where action = 'reactivated';
+create index crm_contact_channels_updated_at_idx on public.crm_contact_channels (updated_at);
+create index crm_dnc_events_reactivated_at_idx on public.crm_dnc_events (created_at) where action = 'reactivated';
 
 commit;

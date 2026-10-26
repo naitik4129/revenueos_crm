@@ -6,8 +6,8 @@
 
 begin;
 
-create table crm.send_policies (
-  workspace_id uuid not null references crm.workspaces (id) on delete cascade,
+create table public.crm_send_policies (
+  workspace_id uuid not null references public.crm_workspaces (id) on delete cascade,
   channel text not null,
   paused boolean not null default false,
   pause_reason text,
@@ -27,22 +27,21 @@ create table crm.send_policies (
   counter_day date,
   sent_today integer not null default 0,
   next_send_at timestamptz,
-  updated_by uuid references crm.profiles (id) on delete set null,
+  updated_by uuid references public.crm_profiles (id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (workspace_id, channel),
-  constraint send_policies_channel_valid check (channel in ('email', 'whatsapp')),
-  constraint send_policies_cap_valid check (daily_cap between 1 and 2000 and ramp_start between 1 and 2000 and ramp_step_per_day between 0 and 500),
-  constraint send_policies_gap_valid check (min_gap_seconds between 0 and 3600 and max_gap_seconds between min_gap_seconds and 7200),
-  constraint send_policies_window_valid check (window_start < window_end),
-  constraint send_policies_days_valid check (cardinality(window_days) between 1 and 7 and window_days <@ '{1,2,3,4,5,6,7}'::smallint[]),
-  constraint send_policies_pause_reason check (not paused or pause_reason is not null)
+  constraint crm_send_policies_channel_valid check (channel in ('email', 'whatsapp')),
+  constraint crm_send_policies_cap_valid check (daily_cap between 1 and 2000 and ramp_start between 1 and 2000 and ramp_step_per_day between 0 and 500),
+  constraint crm_send_policies_gap_valid check (min_gap_seconds between 0 and 3600 and max_gap_seconds between min_gap_seconds and 7200),
+  constraint crm_send_policies_window_valid check (window_start < window_end),
+  constraint crm_send_policies_days_valid check (cardinality(window_days) between 1 and 7 and window_days <@ '{1,2,3,4,5,6,7}'::smallint[]),
+  constraint crm_send_policies_pause_reason check (not paused or pause_reason is not null)
 );
 
-create trigger send_policies_set_updated_at before update on crm.send_policies
-  for each row execute function crm.set_updated_at();
+create trigger crm_send_policies_set_updated_at before update on public.crm_send_policies
+  for each row execute function public.crm_set_updated_at();
 
-alter table crm.send_policies enable row level security;
-revoke all on crm.send_policies from public, anon, authenticated;
+select public.crm_secure_objects();
 
 commit;

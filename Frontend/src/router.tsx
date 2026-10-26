@@ -32,6 +32,8 @@ export const getRouter = () => {
 
   const router = createRouter({
     routeTree,
+    // Served under /crm on the platform's domain (matches Vite's base).
+    basepath: "/crm",
     context: { queryClient },
     scrollRestoration: true,
     defaultPreloadStaleTime: 0,

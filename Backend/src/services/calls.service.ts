@@ -75,7 +75,7 @@ export async function logCall(db: Queryable, actor: Actor, workspaceId: string, 
   let dealId = contact.open_deal_id;
   if (!dealId && callNeedsDeal(input)) {
     const parked = await db.query<{ id: string }>(
-      `select id from crm.deals where contact_id = $1 and outcome = 'nurture' order by updated_at desc limit 1`,
+      `select id from crm_deals where contact_id = $1 and outcome = 'nurture' order by updated_at desc limit 1`,
       [contactId],
     );
     dealId = parked.rows[0]
@@ -85,7 +85,7 @@ export async function logCall(db: Queryable, actor: Actor, workspaceId: string, 
 
   const call = (
     await db.query<{ id: string }>(
-      `insert into crm.calls
+      `insert into crm_calls
         (workspace_id, contact_id, deal_id, salesperson_id, connected, not_connected_reason, connected_outcome, notes, callback_due_at)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
       [
@@ -112,7 +112,7 @@ export async function logCall(db: Queryable, actor: Actor, workspaceId: string, 
     relatedCallId: call.id,
   });
   if (task) await completeTask(db, actor, workspaceId, task.id);
-  await db.query(`update crm.contacts set last_activity_at = now() where id = $1`, [contactId]);
+  await db.query(`update crm_contacts set last_activity_at = now() where id = $1`, [contactId]);
   await advanceLifecycle(db, contactId, input.connected ? "engaged" : "contacted", actor);
 
   const result = async (workflowTrigger?: string, promptScheduleMeeting = false) => ({
@@ -149,7 +149,7 @@ export async function logCall(db: Queryable, actor: Actor, workspaceId: string, 
 
   const deal = await getDealOr404(db, workspaceId, dealId);
   // stage and objection type (and the interested-later capture) land in one update:
-  // deals_objection_stage_has_type checks the written row.
+  // crm_deals_objection_stage_has_type checks the written row.
   if (routing.stage || routing.objectionType) {
     await updateDeal(db, actor, workspaceId, dealId, {
       ...(routing.stage ? { stage: routing.stage } : {}),
@@ -203,7 +203,7 @@ export async function listCallsForContact(db: Queryable, workspaceId: string, co
   await getContactOr404(db, workspaceId, contactId);
   const result = await db.query<CallListRow>(
     `select c.*, ${userNameSql("c.salesperson_id")} as salesperson_name
-       from crm.calls c where c.contact_id = $1 order by c.occurred_at desc`,
+       from crm_calls c where c.contact_id = $1 order by c.occurred_at desc`,
     [contactId],
   );
   return result.rows.map((r) => ({
@@ -247,7 +247,7 @@ export async function listEmailActivities(db: Queryable, workspaceId: string, co
     bounced_at: Date | null;
     unsubscribed_at: Date | null;
     created_at: Date;
-  }>(`select * from crm.email_activities where contact_id = $1 order by coalesce(sent_at, created_at) desc`, [contactId]);
+  }>(`select * from crm_email_activities where contact_id = $1 order by coalesce(sent_at, created_at) desc`, [contactId]);
   return result.rows.map((r) => ({
     id: r.id,
     dealId: r.deal_id ?? undefined,

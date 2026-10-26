@@ -25,13 +25,13 @@ function createWorkflowDb() {
     row,
     db: {
       query: async (sql: string, params?: unknown[]) => {
-        if (sql.startsWith("select * from crm.workflows ")) {
+        if (sql.startsWith("select * from crm_workflows ")) {
           return { rows: [row] };
         }
-        if (sql.startsWith("update crm.workflows set")) {
+        if (sql.startsWith("update crm_workflows set")) {
           row.updated_at = new Date("2030-01-02T00:00:00.000Z");
           const assignments = sql
-            .slice("update crm.workflows set ".length)
+            .slice("update crm_workflows set ".length)
             .split(" where ")[0]!;
           const columns = assignments
             .split(", ")
@@ -43,10 +43,10 @@ function createWorkflowDb() {
           });
           return { rows: [] };
         }
-        if (sql.includes("from crm.workflow_versions")) {
+        if (sql.includes("from crm_workflow_versions")) {
           return { rows: [] };
         }
-        if (sql.includes("from crm.workflow_runs")) {
+        if (sql.includes("from crm_workflow_runs")) {
           return { rows: [{ count: "0" }] };
         }
         throw new Error(`Unexpected query: ${sql}`);

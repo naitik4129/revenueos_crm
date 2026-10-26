@@ -23,9 +23,9 @@ export function subjectNamesJoin(dealIdCol: string, contactIdCol = "null::uuid")
   return `left join lateral (
       select nullif(trim(concat_ws(' ', nc.first_name, nc.last_name)), '') as contact_name, nco.name as company_name
         from (select ${dealIdCol} as deal_id, ${contactIdCol} as contact_id) s
-        left join crm.deals nd on nd.id = s.deal_id
-        join crm.contacts nc on nc.id = coalesce(s.contact_id, nd.contact_id)
-        left join crm.companies nco on nco.id = coalesce(nd.company_id, nc.company_id)
+        left join crm_deals nd on nd.id = s.deal_id
+        join crm_contacts nc on nc.id = coalesce(s.contact_id, nd.contact_id)
+        left join crm_companies nco on nco.id = coalesce(nd.company_id, nc.company_id)
     ) names on true`;
 }
 

@@ -27,7 +27,7 @@ describe("brain intake API (PGlite)", () => {
   async function mkUser(email: string, role: "admin" | "salesperson") {
     const id = (await seed.query(`insert into auth.users (email) values ($1) returning id`, [email])).rows[0].id as string;
     await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, $2, $3)`, [id, email.split("@")[0], email]);
-    await seed.query(`insert into crm.profiles (id, role) values ($1, $2)`, [id, role]);
+    await seed.query(`insert into crm_profiles (id, role) values ($1, $2)`, [id, role]);
     return id;
   }
 
@@ -41,7 +41,7 @@ describe("brain intake API (PGlite)", () => {
   };
   const one = async (sql: string, params: unknown[] = []) => (await seed.query(sql, params)).rows[0];
   const contactIdOf = async (externalId: string) =>
-    (await one(`select contact_id from crm.external_refs where source = 'quickicp' and external_id = $1`, [externalId])).contact_id as string;
+    (await one(`select contact_id from crm_external_refs where source = 'quickicp' and external_id = $1`, [externalId])).contact_id as string;
 
   const acme = { source: "quickicp", externalId: "co-1", name: "Acme", website: "https://www.acme.com/about", headcount: 40 };
   const ann = { source: "quickicp", externalId: "p-1", fullName: "Ann Lee", email: "Ann@Acme.com", jobTitle: "Head of Sales", companyRef: { source: "quickicp", externalId: "co-1" } };
@@ -56,8 +56,8 @@ describe("brain intake API (PGlite)", () => {
     admin = await mkUser("admin@x.com", "admin");
     sam = await mkUser("sam@x.com", "salesperson");
     sue = await mkUser("sue@x.com", "salesperson");
-    ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('Client', 'client') returning id`)).rows[0].id;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2), ($1, $3)`, [ws, sam, sue]);
+    ws = (await seed.query(`insert into crm_workspaces (name, slug) values ('Client', 'client') returning id`)).rows[0].id;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2), ($1, $3)`, [ws, sam, sue]);
 
     const created = await request(app).post(`/api/v1/workspaces/${ws}/brain-keys`).set("Authorization", `Bearer ${admin}`).send({ label: "brain" });
     expect(created.status).toBe(201);
@@ -88,7 +88,7 @@ describe("brain intake API (PGlite)", () => {
     it("are admin-only, stored as a hash, and shown once", async () => {
       expect(key).toMatch(/^nbk_[A-Za-z0-9_-]{43}$/);
       expect((await request(app).post(`/api/v1/workspaces/${ws}/brain-keys`).set("Authorization", `Bearer ${sam}`).send({ label: "x" })).status).toBe(403);
-      expect(await one(`select count(*)::int n from crm.brain_api_keys where key_hash = $1 or key_prefix = $1`, [key])).toEqual({ n: 0 });
+      expect(await one(`select count(*)::int n from crm_brain_api_keys where key_hash = $1 or key_prefix = $1`, [key])).toEqual({ n: 0 });
 
       expect((await brain("/suppressions")).status).toBe(200);
       const list = (await request(app).get(`/api/v1/workspaces/${ws}/brain-keys`).set("Authorization", `Bearer ${admin}`)).body.data;
@@ -122,12 +122,12 @@ describe("brain intake API (PGlite)", () => {
     const c2 = await brain("/contacts", [ann]);
     expect(c2.body.results[0]).toMatchObject({ status: "updated", id: c1.body.results[0].id });
 
-    expect(await one(`select count(*)::int n from crm.companies where workspace_id = $1`, [ws])).toEqual({ n: 1 });
-    expect(await one(`select count(*)::int n from crm.contacts where workspace_id = $1`, [ws])).toEqual({ n: 1 });
-    expect(await one(`select count(*)::int n from crm.external_refs where workspace_id = $1`, [ws])).toEqual({ n: 2 });
+    expect(await one(`select count(*)::int n from crm_companies where workspace_id = $1`, [ws])).toEqual({ n: 1 });
+    expect(await one(`select count(*)::int n from crm_contacts where workspace_id = $1`, [ws])).toEqual({ n: 1 });
+    expect(await one(`select count(*)::int n from crm_external_refs where workspace_id = $1`, [ws])).toEqual({ n: 2 });
     const contact = (await user("get", `/contacts/${c1.body.results[0].id}`, sam)).body;
     expect(contact).toMatchObject({ firstName: "Ann", lastName: "Lee", email: "ann@acme.com", companyName: "Acme", source: "brain", lifecycleStage: "prospect" });
-    expect(await one(`select domain, headcount from crm.companies where workspace_id = $1`, [ws])).toEqual({ domain: "acme.com", headcount: 40 });
+    expect(await one(`select domain, headcount from crm_companies where workspace_id = $1`, [ws])).toEqual({ domain: "acme.com", headcount: 40 });
   });
 
   it("never overwrites a human-edited field; only fills empty ones", async () => {
@@ -135,7 +135,7 @@ describe("brain intake API (PGlite)", () => {
     await user("patch", `/contacts/${id}`, sam, { jobTitle: "CTO" });
     const res = await brain("/contacts", [{ ...ann, jobTitle: "Intern", country: "India", email: "other@acme.com" }]);
     expect(res.body.results[0]).toMatchObject({ status: "updated", id });
-    expect(await one(`select job_title, country, email from crm.contacts where id = $1`, [id])).toEqual({ job_title: "CTO", country: "India", email: "ann@acme.com" });
+    expect(await one(`select job_title, country, email from crm_contacts where id = $1`, [id])).toEqual({ job_title: "CTO", country: "India", email: "ann@acme.com" });
   });
 
   it("matches a call by the QuickICP id alone; re-sends update the same call", async () => {
@@ -147,7 +147,7 @@ describe("brain intake API (PGlite)", () => {
 
     const again = await brain("/calls", [{ ...call, transcript: "Hello Ann...", summary: "Wants a demo" }]);
     expect(again.body.results[0]).toMatchObject({ status: "updated", id: res.body.results[0].id });
-    expect(await one(`select contact_id, source, ai_outcome, duration_seconds, transcript, summary from crm.calls where external_id = 'call-1'`)).toEqual({
+    expect(await one(`select contact_id, source, ai_outcome, duration_seconds, transcript, summary from crm_calls where external_id = 'call-1'`)).toEqual({
       contact_id: id,
       source: "ai",
       ai_outcome: "interested",
@@ -155,7 +155,7 @@ describe("brain intake API (PGlite)", () => {
       transcript: "Hello Ann...",
       summary: "Wants a demo",
     });
-    expect(await one(`select count(*)::int n from crm.timeline_events where related_call_id = $1`, [res.body.results[0].id])).toEqual({ n: 1 });
+    expect(await one(`select count(*)::int n from crm_timeline_events where related_call_id = $1`, [res.body.results[0].id])).toEqual({ n: 1 });
     expect((await user("get", `/contacts/${id}`, sam)).body.lifecycleStage).toBe("engaged");
   });
 
@@ -167,11 +167,11 @@ describe("brain intake API (PGlite)", () => {
     expect(created.body.results[0]).toMatchObject({ status: "created" });
     const dealId = created.body.results[0].id;
     expect((await user("get", `/deals/${dealId}`, sam)).body).toMatchObject({ outcome: "open", ownerId: sam, contactId: id, lifecycleStage: "qualified" });
-    expect(await one(`select actor_source, title from crm.timeline_events where deal_id = $1 and event_kind = 'handover'`, [dealId])).toEqual({
+    expect(await one(`select actor_source, title from crm_timeline_events where deal_id = $1 and event_kind = 'handover'`, [dealId])).toEqual({
       actor_source: "brain",
       title: "Qualified Handover",
     });
-    expect((await seed.query(`select recipient_id from crm.notifications where deal_id = $1`, [dealId])).rows).toEqual([{ recipient_id: sam }]);
+    expect((await seed.query(`select recipient_id from crm_notifications where deal_id = $1`, [dealId])).rows).toEqual([{ recipient_id: sam }]);
 
     expect((await brain("/handovers", [handover])).body.results[0]).toMatchObject({ status: "unchanged", id: dealId });
     expect((await brain("/handovers", [{ ...handover, externalId: "h-2" }])).body.results[0]).toMatchObject({ status: "updated", id: dealId });
@@ -180,7 +180,7 @@ describe("brain intake API (PGlite)", () => {
     const reopened = await brain("/handovers", [{ ...handover, externalId: "h-3" }]);
     expect(reopened.body.results[0]).toMatchObject({ status: "updated", id: dealId });
     expect((await user("get", `/deals/${dealId}`, sam)).body).toMatchObject({ outcome: "open", automationMode: "manual" });
-    expect(await one(`select count(*)::int n from crm.deals where contact_id = $1`, [id])).toEqual({ n: 1 });
+    expect(await one(`select count(*)::int n from crm_deals where contact_id = $1`, [id])).toEqual({ n: 1 });
   });
 
   it("handover amount fills an empty deal amount and never overwrites one", async () => {
@@ -196,15 +196,15 @@ describe("brain intake API (PGlite)", () => {
 
   it("handover owner: member ownerEmail, else the workspace default owner, else unassigned + notify all members", async () => {
     const person = (n: number) => ({ source: "quickicp", externalId: `p-${n}`, fullName: `Person ${n}`, email: `p${n}@x.com` });
-    await seed.query(`update crm.workspaces set default_owner_id = $1 where id = $2`, [sue, ws]);
+    await seed.query(`update crm_workspaces set default_owner_id = $1 where id = $2`, [sue, ws]);
     const withDefault = await brain("/handovers", [{ source: "quickicp", externalId: "h-10", contact: person(10), ownerEmail: "stranger@x.com", summary: "Fit" }]);
     expect((await user("get", `/deals/${withDefault.body.results[0].id}`, sam)).body.ownerId).toBe(sue);
 
-    await seed.query(`update crm.workspaces set default_owner_id = null where id = $1`, [ws]);
+    await seed.query(`update crm_workspaces set default_owner_id = null where id = $1`, [ws]);
     const unassigned = await brain("/handovers", [{ source: "quickicp", externalId: "h-11", contact: person(11), summary: "Fit" }]);
     const dealId = unassigned.body.results[0].id;
     expect((await user("get", `/deals/${dealId}`, sam)).body.ownerId).toBeUndefined();
-    const notified = (await seed.query(`select recipient_id from crm.notifications where deal_id = $1 order by recipient_id`, [dealId])).rows.map((r) => r.recipient_id);
+    const notified = (await seed.query(`select recipient_id from crm_notifications where deal_id = $1 order by recipient_id`, [dealId])).rows.map((r) => r.recipient_id);
     expect(notified).toEqual([sam, sue].sort());
   });
 
@@ -218,7 +218,7 @@ describe("brain intake API (PGlite)", () => {
       { ...event, event: "bounced", occurredAt: "2026-10-02T11:00:00Z" },
     ]);
     expect(res.body.results.map((r: { status: string }) => r.status)).toEqual(["updated", "updated"]);
-    expect(await one(`select status, sent_at is not null as sent, unsubscribed_at is not null as unsub from crm.email_activities where external_id = 'm-1'`)).toEqual({
+    expect(await one(`select status, sent_at is not null as sent, unsubscribed_at is not null as unsub from crm_email_activities where external_id = 'm-1'`)).toEqual({
       status: "unsubscribed",
       sent: true,
       unsub: true,
@@ -242,7 +242,7 @@ describe("brain intake API (PGlite)", () => {
     const before = new Date().toISOString();
     await new Promise((r) => setTimeout(r, 10));
     const annId = await contactIdOf("p-1");
-    const rajId = (await one(`select id from crm.contacts where phone_e164 = '+919811111111'`)).id;
+    const rajId = (await one(`select id from crm_contacts where phone_e164 = '+919811111111'`)).id;
     await user("post", `/contacts/${annId}/contactability`, sam, { channel: "email", status: "valid", reason: "Re-subscribed" });
     await user("post", `/contacts/${rajId}/dnc/reactivate`, sam, { reason: "Asked to be called again" });
 
@@ -280,7 +280,7 @@ describe("brain intake API (PGlite)", () => {
     /** One statement, so every row gets the same updated_at (a bulk unsubscribe). */
     const bulkUnsubscribe = (ids: string[]) =>
       seed.query(
-        `insert into crm.contact_channels (contact_id, channel, status) select unnest($1::uuid[]), 'email', 'unsubscribed'
+        `insert into crm_contact_channels (contact_id, channel, status) select unnest($1::uuid[]), 'email', 'unsubscribed'
          on conflict (contact_id, channel) do update set status = 'unsubscribed', updated_at = now()`,
         [ids],
       );
@@ -315,8 +315,8 @@ describe("brain intake API (PGlite)", () => {
     });
 
     it("never lists another workspace's contacts", async () => {
-      const other = (await seed.query(`insert into crm.workspaces (name, slug) values ('Other', 'other') returning id`)).rows[0].id;
-      const outsider = (await seed.query(`insert into crm.contacts (workspace_id, first_name, email) values ($1, 'Out', 'out@other.com') returning id`, [other])).rows[0].id;
+      const other = (await seed.query(`insert into crm_workspaces (name, slug) values ('Other', 'other') returning id`)).rows[0].id;
+      const outsider = (await seed.query(`insert into crm_contacts (workspace_id, first_name, email) values ($1, 'Out', 'out@other.com') returning id`, [other])).rows[0].id;
       await bulkUnsubscribe([outsider]);
       const { ids } = await pageAll("/suppressions", 1000);
       expect(ids).not.toContain(outsider);
@@ -343,13 +343,13 @@ describe("brain intake API (PGlite)", () => {
       ]);
       expect(statuses(res)).toEqual(["created", "updated", "updated"]);
       expect(new Set(ids(res)).size).toBe(1);
-      expect(await one(`select first_name, job_title, phone_e164, country from crm.contacts where id = $1`, [ids(res)[0]])).toEqual({
+      expect(await one(`select first_name, job_title, phone_e164, country from crm_contacts where id = $1`, [ids(res)[0]])).toEqual({
         first_name: "Dee",
         job_title: "Founder",
         phone_e164: "+919800000101",
         country: "India",
       });
-      expect(await one(`select count(*)::int n from crm.external_refs where contact_id = $1`, [ids(res)[0]])).toEqual({ n: 2 });
+      expect(await one(`select count(*)::int n from crm_external_refs where contact_id = $1`, [ids(res)[0]])).toEqual({ n: 2 });
 
       const again = await brain("/contacts", [
         { source: "quickicp", externalId: "dup-1", fullName: "Dee Upp", email: "dee@dup.com" },
@@ -369,11 +369,11 @@ describe("brain intake API (PGlite)", () => {
       expect(statuses(res)).toEqual(["created", "created", "updated"]);
       expect(ids(res)[2]).toBe(ids(res)[0]);
       const contactId = await contactIdOf("bc-person");
-      expect(await one(`select count(*)::int n from crm.calls where contact_id = $1`, [contactId])).toEqual({ n: 2 });
-      expect(await one(`select count(*)::int n from crm.timeline_events where contact_id = $1 and event_kind = 'call'`, [contactId])).toEqual({ n: 2 });
+      expect(await one(`select count(*)::int n from crm_calls where contact_id = $1`, [contactId])).toEqual({ n: 2 });
+      expect(await one(`select count(*)::int n from crm_timeline_events where contact_id = $1 and event_kind = 'call'`, [contactId])).toEqual({ n: 2 });
       // prospect -> contacted -> engaged, one timeline entry per move
-      expect(await one(`select lifecycle_stage from crm.contacts where id = $1`, [contactId])).toEqual({ lifecycle_stage: "engaged" });
-      expect(await one(`select count(*)::int n from crm.timeline_events where contact_id = $1 and event_kind = 'lifecycle'`, [contactId])).toEqual({ n: 2 });
+      expect(await one(`select lifecycle_stage from crm_contacts where id = $1`, [contactId])).toEqual({ lifecycle_stage: "engaged" });
+      expect(await one(`select count(*)::int n from crm_timeline_events where contact_id = $1 and event_kind = 'lifecycle'`, [contactId])).toEqual({ n: 2 });
     });
 
     it("folds several events for one message, and never turns an unsubscribe into a bounce", async () => {
@@ -382,15 +382,15 @@ describe("brain intake API (PGlite)", () => {
       const res = await brain("/email-events", [ev("sent", 1), ev("opened", 2), ev("unsubscribed", 3), ev("bounced", 4), ev("opened", 5)]);
       expect(statuses(res)).toEqual(["created", "updated", "updated", "updated", "updated"]);
       expect(new Set(ids(res)).size).toBe(1);
-      expect(await one(`select status, sent_at, opened_at, bounced_at is not null as bounced from crm.email_activities where external_id = 'em-1'`)).toEqual({
+      expect(await one(`select status, sent_at, opened_at, bounced_at is not null as bounced from crm_email_activities where external_id = 'em-1'`)).toEqual({
         status: "unsubscribed",
         sent_at: new Date("2026-10-01T10:00:00Z"),
         opened_at: new Date("2026-10-02T10:00:00Z"),
         bounced: true,
       });
       const contactId = await contactIdOf("em-person");
-      expect(await one(`select status from crm.contact_channels where contact_id = $1 and channel = 'email'`, [contactId])).toEqual({ status: "unsubscribed" });
-      const titles = (await seed.query(`select title from crm.timeline_events where contact_id = $1 and event_kind = 'email' order by title`, [contactId])).rows.map((r) => r.title);
+      expect(await one(`select status from crm_contact_channels where contact_id = $1 and channel = 'email'`, [contactId])).toEqual({ status: "unsubscribed" });
+      const titles = (await seed.query(`select title from crm_timeline_events where contact_id = $1 and event_kind = 'email' order by title`, [contactId])).rows.map((r) => r.title);
       expect(titles).toEqual(["Campaign Email Bounced", "Unsubscribed"]);
     });
 
@@ -403,7 +403,7 @@ describe("brain intake API (PGlite)", () => {
       expect((await user("post", `/contacts/${gone}/merge`, sam, { targetContactId: keep })).status).toBe(200);
       const res = await brain("/contacts", [{ source: "quickicp", externalId: "mg-c", email: "gone@merge.com", jobTitle: "CEO" }]);
       expect(res.body.results[0]).toMatchObject({ status: "updated", id: keep });
-      expect(await one(`select job_title from crm.contacts where id = $1`, [keep])).toEqual({ job_title: "CEO" });
+      expect(await one(`select job_title from crm_contacts where id = $1`, [keep])).toEqual({ job_title: "CEO" });
     });
 
     it("falls back to one item at a time on a database error: only the bad item fails", async () => {
@@ -412,7 +412,7 @@ describe("brain intake API (PGlite)", () => {
       const res = await brain("/companies", [co(1), co(2, { headcount: 3_000_000_000 }), co(3)]);
       expect(statuses(res)).toEqual(["created", "error", "created"]);
       expect(res.body.results[1].error).toEqual({ code: "internal_error", message: "Item failed." });
-      expect(await one(`select count(*)::int n from crm.companies where name like 'Fallback %'`)).toEqual({ n: 2 });
+      expect(await one(`select count(*)::int n from crm_companies where name like 'Fallback %'`)).toEqual({ n: 2 });
     });
 
     it("runs handovers side by side, but two for one person one after another", async () => {
@@ -421,7 +421,7 @@ describe("brain intake API (PGlite)", () => {
       const res = await brain("/handovers", items);
       expect(statuses(res)).toEqual(["created", "created", "created", "created", "created", "updated"]);
       expect(ids(res)[5]).toBe(ids(res)[0]);
-      expect(await one(`select count(*)::int n from crm.deals d join crm.contacts c on c.id = d.contact_id where c.email like 'hv%@x.com'`)).toEqual({ n: 5 });
+      expect(await one(`select count(*)::int n from crm_deals d join crm_contacts c on c.id = d.contact_id where c.email like 'hv%@x.com'`)).toEqual({ n: 5 });
     });
   });
 

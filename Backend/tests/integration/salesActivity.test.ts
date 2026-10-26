@@ -52,10 +52,10 @@ describe("calls, tasks, meetings, proposals (PGlite)", () => {
 
     sam = (await seed.query(`insert into auth.users (email) values ('sam@x.com') returning id`)).rows[0].id;
     await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, 'Sam', 'sam@x.com')`, [sam]);
-    await seed.query(`insert into crm.profiles (id, role) values ($1, 'salesperson')`, [sam]);
-    w1 = (await seed.query(`insert into crm.workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
-    w2 = (await seed.query(`insert into crm.workspaces (name, slug) values ('Two', 'two') returning id`)).rows[0].id;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3)`, [w1, w2, sam]);
+    await seed.query(`insert into crm_profiles (id, role) values ($1, 'salesperson')`, [sam]);
+    w1 = (await seed.query(`insert into crm_workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
+    w2 = (await seed.query(`insert into crm_workspaces (name, slug) values ('Two', 'two') returning id`)).rows[0].id;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3)`, [w1, w2, sam]);
   }, 60_000);
 
   afterAll(async () => {
@@ -173,12 +173,12 @@ describe("calls, tasks, meetings, proposals (PGlite)", () => {
     const contactId = await newContact();
     await logCall(contactId, { connected: false, notConnectedReason: "busy" });
     await seed.query(
-      `insert into crm.calls (workspace_id, contact_id, source, connected, ai_outcome, transcript, occurred_at)
+      `insert into crm_calls (workspace_id, contact_id, source, connected, ai_outcome, transcript, occurred_at)
        values ($1, $2, 'ai', true, 'interested', 'Hello...', now() - interval '1 day')`,
       [w1, contactId],
     );
     await seed.query(
-      `insert into crm.email_activities (workspace_id, contact_id, campaign_name, step, status, sent_at, replied_at, reply_text)
+      `insert into crm_email_activities (workspace_id, contact_id, campaign_name, step, status, sent_at, replied_at, reply_text)
        values ($1, $2, 'Launch', 1, 'replied', now() - interval '2 days', now(), 'Sounds good')`,
       [w1, contactId],
     );

@@ -76,20 +76,20 @@ describe("integrations (PGlite, providers mocked)", () => {
     const user = async (email: string) => {
       const id = (await seed.query(`insert into auth.users (email) values ($1) returning id`, [email])).rows[0].id as string;
       await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, $2, $2)`, [id, email]);
-      await seed.query(`insert into crm.profiles (id, role) values ($1, 'salesperson')`, [id]);
+      await seed.query(`insert into crm_profiles (id, role) values ($1, 'salesperson')`, [id]);
       return id;
     };
     sam = await user("sam@x.com");
     sue = await user("sue@x.com");
-    w1 = (await seed.query(`insert into crm.workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
-    w2 = (await seed.query(`insert into crm.workspaces (name, slug) values ('Two', 'two') returning id`)).rows[0].id;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3), ($2, $4)`, [w1, w2, sam, sue]);
+    w1 = (await seed.query(`insert into crm_workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
+    w2 = (await seed.query(`insert into crm_workspaces (name, slug) values ('Two', 'two') returning id`)).rows[0].id;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3), ($2, $4)`, [w1, w2, sam, sue]);
 
     emailTemplate = (await api("post", "/templates", { name: "Email", channel: "email", subject: "Hi {{contact.firstName}}", body: "<p>Hello {{contact.firstName}}</p>" })).body.id;
     whatsappTemplate = (await api("post", "/templates", { name: "WA", channel: "whatsapp", body: "<p>Hello {{contact.firstName}}</p>" })).body.id;
     // Sending policies wide open (any hour, no gap): these tests are about the providers, sendPolicy.test.ts about the limits.
     await seed.query(
-      `insert into crm.send_policies (workspace_id, channel, daily_cap, ramp_start, min_gap_seconds, max_gap_seconds, window_start, window_end, window_days)
+      `insert into crm_send_policies (workspace_id, channel, daily_cap, ramp_start, min_gap_seconds, max_gap_seconds, window_start, window_end, window_days)
        select w, ch, 2000, 2000, 0, 0, '00:00', '24:00', '{1,2,3,4,5,6,7}' from unnest($1::uuid[]) w, unnest('{email,whatsapp}'::text[]) ch`,
       [[w1, w2]],
     );
@@ -119,8 +119,8 @@ describe("integrations (PGlite, providers mocked)", () => {
     await api("patch", `/workflows/${wf}`, { status: "active" });
     const { contactId, dealId } = await newDeal();
     await api("post", "/runs", { dealId, workflowId: wf });
-    const run = await one(`select id from crm.workflow_runs where deal_id = $1`, [dealId]);
-    const action = await one(`select id from crm.scheduled_actions where workflow_run_id = $1`, [run.id]);
+    const run = await one(`select id from crm_workflow_runs where deal_id = $1`, [dealId]);
+    const action = await one(`select id from crm_scheduled_actions where workflow_run_id = $1`, [run.id]);
     expect(await db.withTransaction((c) => automation.claimDueActionIds(c, 50))).toContain(action.id);
     return { contactId, dealId, actionId: action.id, runId: run.id };
   }
@@ -130,8 +130,8 @@ describe("integrations (PGlite, providers mocked)", () => {
       const { dealId, actionId, contactId } = await claimedEmailAction();
       await runner.processAction(actionId, { batchSize: 50, dryRun: false });
       expect(mocks.sendEmail).toHaveBeenCalledWith(w1, expect.objectContaining({ to: expect.stringMatching(/^asha\d+@acme\.com$/), subject: "Hi Asha" }));
-      expect(await one(`select status from crm.scheduled_actions where id = $1`, [actionId])).toEqual({ status: "completed" });
-      expect(await one(`select title, detail, contact_id from crm.timeline_events where deal_id = $1 and event_kind = 'email'`, [dealId])).toEqual({
+      expect(await one(`select status from crm_scheduled_actions where id = $1`, [actionId])).toEqual({ status: "completed" });
+      expect(await one(`select title, detail, contact_id from crm_timeline_events where deal_id = $1 and event_kind = 'email'`, [dealId])).toEqual({
         title: "Email Sent",
         detail: "Provider message id: re_123",
         contact_id: contactId,
@@ -143,7 +143,7 @@ describe("integrations (PGlite, providers mocked)", () => {
       mocks.sendEmail.mockRejectedValueOnce(new ProviderDeferredError("Email sending is disabled for this workspace."));
       const { actionId } = await claimedEmailAction();
       await runner.processAction(actionId, { batchSize: 50, dryRun: false });
-      expect(await one(`select status, attempt_count from crm.scheduled_actions where id = $1`, [actionId])).toEqual({ status: "pending", attempt_count: 0 });
+      expect(await one(`select status, attempt_count from crm_scheduled_actions where id = $1`, [actionId])).toEqual({ status: "pending", attempt_count: 0 });
     });
   });
 
@@ -153,7 +153,7 @@ describe("integrations (PGlite, providers mocked)", () => {
       await api("post", `/contacts/${contactId}/dnc`, { reason: "Stop" });
       await runner.processAction(actionId, { batchSize: 50, dryRun: false });
       expect(mocks.sendEmail).not.toHaveBeenCalled();
-      expect(await one(`select status from crm.scheduled_actions where id = $1`, [actionId])).toEqual({ status: "skipped" });
+      expect(await one(`select status from crm_scheduled_actions where id = $1`, [actionId])).toEqual({ status: "skipped" });
     });
 
     it("proposal send (409) and its queued WhatsApp", async () => {
@@ -171,7 +171,7 @@ describe("integrations (PGlite, providers mocked)", () => {
       await tick();
       expect(mocks.sendWhatsApp).not.toHaveBeenCalled();
       expect(mocks.sendEmail).not.toHaveBeenCalled();
-      expect(await one(`select whatsapp_send_status, whatsapp_send_error from crm.proposals where id = $1`, [proposalId])).toEqual({
+      expect(await one(`select whatsapp_send_status, whatsapp_send_error from crm_proposals where id = $1`, [proposalId])).toEqual({
         whatsapp_send_status: "failed",
         whatsapp_send_error: "Contact is Do Not Contact.",
       });
@@ -179,10 +179,10 @@ describe("integrations (PGlite, providers mocked)", () => {
 
     it("WhatsApp claim refuses a DNC contact even when the send is already queued", async () => {
       const { claimOutboundSend } = await import("../../src/providers/baileys.manager.js");
-      await seed.query(`insert into crm.whatsapp_connection (workspace_id, enabled, status) values ($1, true, 'connected') on conflict (workspace_id) do update set enabled = true, status = 'connected'`, [w1]);
+      await seed.query(`insert into crm_whatsapp_connection (workspace_id, enabled, status) values ($1, true, 'connected') on conflict (workspace_id) do update set enabled = true, status = 'connected'`, [w1]);
       const { dealId, contactId, phone } = await newDeal();
       const proposalId = (await api("post", "/proposals", { dealId, title: "P" })).body.id;
-      await seed.query(`update crm.proposals set whatsapp_send_status = 'sending' where id = $1`, [proposalId]);
+      await seed.query(`update crm_proposals set whatsapp_send_status = 'sending' where id = $1`, [proposalId]);
       await api("post", `/contacts/${contactId}/dnc`, { reason: "Stop" });
 
       const claim = db.withTransaction((c) => claimOutboundSend(c, w1, { source: { type: "proposal", id: proposalId }, phoneE164: phone, preparedMessageId: "m1" }, fakeSocket(), true));
@@ -201,7 +201,7 @@ describe("integrations (PGlite, providers mocked)", () => {
     const { claimOutboundSend } = await import("../../src/providers/baileys.manager.js");
     for (const ws of [w1, w2]) {
       await seed.query(
-        `insert into crm.whatsapp_connection (workspace_id, enabled, status, daily_cap) values ($1, true, 'connected', 1)
+        `insert into crm_whatsapp_connection (workspace_id, enabled, status, daily_cap) values ($1, true, 'connected', 1)
          on conflict (workspace_id) do update set enabled = true, status = 'connected', daily_cap = 1`,
         [ws],
       );
@@ -209,14 +209,14 @@ describe("integrations (PGlite, providers mocked)", () => {
     const sendable = async (ws: string) => {
       const { dealId, phone } = await newDeal(ws);
       const proposalId = (await api("post", "/proposals", { dealId, title: "P" }, { ws })).body.id as string;
-      await seed.query(`update crm.proposals set whatsapp_send_status = 'sending' where id = $1`, [proposalId]);
+      await seed.query(`update crm_proposals set whatsapp_send_status = 'sending' where id = $1`, [proposalId]);
       return { proposalId, phone };
     };
     // Workspace 1 already sent one message today.
     const sent = await sendable(w1);
     await seed.query(
-      `insert into crm.whatsapp_outbound_messages (workspace_id, contact_id, proposal_id, message_id, remote_jid, status, sent_at)
-       select $1, d.contact_id, p.id, 'sent-1', 'x@s.whatsapp.net', 'sent', now() from crm.proposals p join crm.deals d on d.id = p.deal_id where p.id = $2`,
+      `insert into crm_whatsapp_outbound_messages (workspace_id, contact_id, proposal_id, message_id, remote_jid, status, sent_at)
+       select $1, d.contact_id, p.id, 'sent-1', 'x@s.whatsapp.net', 'sent', now() from crm_proposals p join crm_deals d on d.id = p.deal_id where p.id = $2`,
       [w1, sent.proposalId],
     );
 
@@ -232,11 +232,11 @@ describe("integrations (PGlite, providers mocked)", () => {
   it("an inbound WhatsApp reply stops automation on that contact's deals only (no body stored)", async () => {
     const { processInboundUpsert } = await import("../../src/services/whatsapp-inbound.service.js");
     const { contactId, dealId, runId } = await claimedEmailAction();
-    const phone = (await one(`select phone_e164 from crm.contacts where id = $1`, [contactId])).phone_e164 as string;
+    const phone = (await one(`select phone_e164 from crm_contacts where id = $1`, [contactId])).phone_e164 as string;
     // Same number in another workspace must not be touched.
     const other = (await api("post", "/contacts", { firstName: "Other", phone }, { ws: w2 })).body.id;
     const otherDeal = (await api("post", "/deals", { contactId: other }, { ws: w2 })).body.id;
-    await seed.query(`update crm.deals set automation_mode = 'active' where id = $1`, [otherDeal]);
+    await seed.query(`update crm_deals set automation_mode = 'active' where id = $1`, [otherDeal]);
 
     await processInboundUpsert(w1, {
       type: "notify",
@@ -245,13 +245,13 @@ describe("integrations (PGlite, providers mocked)", () => {
 
     // A reply means "engaged", but this contact (with a deal) is already "qualified": lifecycle only moves forward.
     expect((await api("get", `/deals/${dealId}`)).body).toMatchObject({ automationMode: "manual", responseState: "responded", lifecycleStage: "qualified" });
-    expect(await one(`select status from crm.workflow_runs where id = $1`, [runId])).toEqual({ status: "cancelled" });
-    expect(await one(`select disposition, contact_id, message_type from crm.whatsapp_inbound_events where message_id = 'in-1'`)).toEqual({
+    expect(await one(`select status from crm_workflow_runs where id = $1`, [runId])).toEqual({ status: "cancelled" });
+    expect(await one(`select disposition, contact_id, message_type from crm_whatsapp_inbound_events where message_id = 'in-1'`)).toEqual({
       disposition: "matched",
       contact_id: contactId,
       message_type: "conversation",
     });
-    expect(JSON.stringify(await one(`select * from crm.whatsapp_inbound_events where message_id = 'in-1'`))).not.toContain("Call me");
+    expect(JSON.stringify(await one(`select * from crm_whatsapp_inbound_events where message_id = 'in-1'`))).not.toContain("Call me");
     expect((await api("get", `/deals/${otherDeal}`, undefined, { ws: w2 })).body.automationMode).toBe("active");
   });
 
@@ -259,7 +259,7 @@ describe("integrations (PGlite, providers mocked)", () => {
     const { encryptText } = await import("../../src/security/encryption.js");
     const token = encryptText("refresh-token", "integration:google_calendar:refresh_token");
     await seed.query(
-      `insert into crm.google_calendar_connection (workspace_id, status, refresh_token_ciphertext, refresh_token_iv, refresh_token_tag)
+      `insert into crm_google_calendar_connection (workspace_id, status, refresh_token_ciphertext, refresh_token_iv, refresh_token_tag)
        values ($1, 'connected', $2, $3, $4)
        on conflict (workspace_id) do update set status = 'connected', refresh_token_ciphertext = $2, refresh_token_iv = $3, refresh_token_tag = $4`,
       [w1, token.ciphertext, token.iv, token.tag],
@@ -296,9 +296,9 @@ describe("integrations (PGlite, providers mocked)", () => {
   });
 
   it("connections are per workspace: rows created on first use, settings never cross workspaces", async () => {
-    expect(await one(`select count(*)::int n from crm.integration_connections where workspace_id = $1`, [w2])).toEqual({ n: 0 });
+    expect(await one(`select count(*)::int n from crm_integration_connections where workspace_id = $1`, [w2])).toEqual({ n: 0 });
     expect((await api("get", "/connections/email", undefined, { ws: w2 })).body).toMatchObject({ provider: null, source: "unconfigured" });
-    expect(await one(`select count(*)::int n from crm.integration_connections where workspace_id = $1`, [w2])).toEqual({ n: 1 });
+    expect(await one(`select count(*)::int n from crm_integration_connections where workspace_id = $1`, [w2])).toEqual({ n: 1 });
 
     const saved = await api("put", "/connections/email", { provider: "resend", enabled: true, senderName: "One", senderAddress: "one@x.com", resendApiKey: "re_secret" });
     expect(saved.body).toMatchObject({ provider: "resend", resendApiKeyConfigured: true });

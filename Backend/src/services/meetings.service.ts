@@ -42,7 +42,7 @@ export interface MeetingRow extends SubjectNames {
   updated_at: Date;
 }
 
-const MEETING_SELECT = `select m.*, ${userNameSql("m.owner_id")} as owner_name, names.* from crm.meetings m ${subjectNamesJoin("m.deal_id")}`;
+const MEETING_SELECT = `select m.*, ${userNameSql("m.owner_id")} as owner_name, names.* from crm_meetings m ${subjectNamesJoin("m.deal_id")}`;
 
 function meetingToDto(row: MeetingRow) {
   return {
@@ -95,14 +95,14 @@ export async function scheduleMeeting(db: Queryable, actor: Actor, workspaceId: 
   // A booked meeting has a confirmed time, so it starts as 'scheduled', not the DB default 'tentative'.
   const id = (
     await db.query<{ id: string }>(
-      `insert into crm.meetings (workspace_id, deal_id, owner_id, title, scheduled_at, duration_minutes, meeting_url, status, created_by)
+      `insert into crm_meetings (workspace_id, deal_id, owner_id, title, scheduled_at, duration_minutes, meeting_url, status, created_by)
        values ($1,$2,$3,$4,$5,$6,$7,'scheduled',$8) returning id`,
       [workspaceId, input.dealId, ownerId, input.title.trim(), input.at, input.durationMin ?? 30, input.url ?? null, actor.id],
     )
   ).rows[0]!.id;
 
   for (const p of (input.participants ?? []).filter((p) => p.email.trim())) {
-    await db.query(`insert into crm.meeting_participants (meeting_id, name, email) values ($1, $2, $3)`, [id, p.name?.trim() || null, p.email.trim()]);
+    await db.query(`insert into crm_meeting_participants (meeting_id, name, email) values ($1, $2, $3)`, [id, p.name?.trim() || null, p.email.trim()]);
   }
   await addTimelineEvent(db, { dealId: input.dealId, kind: "meeting", title: "Meeting Scheduled", detail: input.title.trim(), ...actorEvent(actor), relatedMeetingId: id });
 
@@ -197,13 +197,13 @@ export async function updateMeeting(db: Queryable, actor: Actor, workspaceId: st
   if (patch.url !== undefined) set("meeting_url", patch.url || null);
   if (patch.status !== undefined) {
     set("status", patch.status);
-    // meetings_outcome_requires_completed: leaving 'completed' must clear the outcome.
+    // crm_meetings_outcome_requires_completed: leaving 'completed' must clear the outcome.
     if (patch.status !== "completed") set("outcome", null);
   }
   if (patch.notes !== undefined) set("notes", patch.notes);
   if (sets.length === 0) return meetingToDto(current);
 
-  await db.query(`update crm.meetings set ${sets.join(", ")} where id = $${params.push(id)}`, params);
+  await db.query(`update crm_meetings set ${sets.join(", ")} where id = $${params.push(id)}`, params);
 
   if (patch.status && patch.status !== current.status) {
     const title = patch.status === "rescheduled" ? "Meeting Rescheduled" : patch.status === "cancelled" ? "Meeting Cancelled" : `Meeting ${patch.status}`;
@@ -224,7 +224,7 @@ export async function recordMeetingOutcome(db: Queryable, actor: Actor, workspac
   const meeting = await getMeetingRowOr404(db, workspaceId, id);
   if (meeting.status === "completed" && meeting.outcome === outcome) return meetingToDto(meeting);
 
-  await db.query(`update crm.meetings set status = 'completed', outcome = $2, notes = coalesce($3, notes) where id = $1`, [id, outcome, notes ?? null]);
+  await db.query(`update crm_meetings set status = 'completed', outcome = $2, notes = coalesce($3, notes) where id = $1`, [id, outcome, notes ?? null]);
   await addTimelineEvent(db, { dealId: meeting.deal_id, kind: "meeting", title: "Meeting Completed", detail: `Outcome: ${outcome}`, ...actorEvent(actor), relatedMeetingId: id });
 
   const routing = routeMeetingOutcome(outcome);

@@ -40,14 +40,14 @@ describe("email safety (PGlite)", () => {
     return body ? r.send(body) : r;
   };
   const one = async (sql: string, params: unknown[] = []) => (await seed.query(sql, params)).rows[0];
-  const channel = async (contactId: string) => (await one(`select status, reason from crm.contact_channels where contact_id = $1 and channel = 'email'`, [contactId])) ?? null;
+  const channel = async (contactId: string) => (await one(`select status, reason from crm_contact_channels where contact_id = $1 and channel = 'email'`, [contactId])) ?? null;
 
   /** A new deal (enrolled in the one-step email workflow), its contact and its claimed-and-run action. */
   async function workflowEmail() {
     const contactId = (await api("post", "/contacts", { firstName: "Asha", email: `asha${++n}@acme.com` })).body.id as string;
     const dealId = (await api("post", "/deals", { contactId })).body.id as string;
     await runner.runAutomationTick({ batchSize: 50, dryRun: false });
-    return { contactId, dealId, action: await one(`select id, status, last_error from crm.scheduled_actions where deal_id = $1`, [dealId]) };
+    return { contactId, dealId, action: await one(`select id, status, last_error from crm_scheduled_actions where deal_id = $1`, [dealId]) };
   }
 
   const secret = () => process.env.RESEND_WEBHOOK_SECRET!;
@@ -72,15 +72,15 @@ describe("email safety (PGlite)", () => {
     const user = async (email: string, role: string) => {
       const id = (await seed.query(`insert into auth.users (email) values ($1) returning id`, [email])).rows[0].id as string;
       await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, $2, $2)`, [id, email]);
-      await seed.query(`insert into crm.profiles (id, role) values ($1, $2)`, [id, role]);
+      await seed.query(`insert into crm_profiles (id, role) values ($1, $2)`, [id, role]);
       return id;
     };
     admin = await user("admin@x.com", "admin");
     sam = await user("sam@x.com", "salesperson");
-    ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('Acme <Client>', 'one') returning id`)).rows[0].id;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sam]);
+    ws = (await seed.query(`insert into crm_workspaces (name, slug) values ('Acme <Client>', 'one') returning id`)).rows[0].id;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sam]);
     await seed.query(
-      `insert into crm.send_policies (workspace_id, channel, daily_cap, ramp_start, min_gap_seconds, max_gap_seconds, window_start, window_end, window_days)
+      `insert into crm_send_policies (workspace_id, channel, daily_cap, ramp_start, min_gap_seconds, max_gap_seconds, window_start, window_end, window_days)
        values ($1, 'email', 2000, 2000, 0, 0, '00:00', '24:00', '{1,2,3,4,5,6,7}')`,
       [ws],
     );
@@ -126,7 +126,7 @@ describe("email safety (PGlite)", () => {
         headers: { "List-Unsubscribe": `<${url}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" },
       }),
     );
-    expect(await one(`select contact_id, to_email from crm.email_sends where scheduled_action_id = $1`, [action.id])).toEqual({ contact_id: contactId, to_email: `asha${n}@acme.com` });
+    expect(await one(`select contact_id, to_email from crm_email_sends where scheduled_action_id = $1`, [action.id])).toEqual({ contact_id: contactId, to_email: `asha${n}@acme.com` });
   });
 
   it("/u/:token: GET only asks (no login), POST unsubscribes once; a bad token is 404; the next email is skipped", async () => {
@@ -142,7 +142,7 @@ describe("email safety (PGlite)", () => {
     expect(done.text).toContain("You're unsubscribed");
     expect(await channel(contactId)).toEqual({ status: "unsubscribed", reason: "Unsubscribed by email link" });
     await request(app).post(path);
-    expect((await one(`select count(*)::int as n from crm.timeline_events where contact_id = $1 and title = 'email contactability: unsubscribed'`, [contactId])).n).toBe(1);
+    expect((await one(`select count(*)::int as n from crm_timeline_events where contact_id = $1 and title = 'email contactability: unsubscribed'`, [contactId])).n).toBe(1);
     expect((await request(app).get(path)).text).toContain("You're unsubscribed");
     expect((await request(app).get(`/u/${path.slice(3, -3)}AAA`)).status).toBe(404);
 
@@ -153,7 +153,7 @@ describe("email safety (PGlite)", () => {
     mocks.sendEmail.mockClear();
     await runner.runAutomationTick({ batchSize: 50, dryRun: false });
     expect(mocks.sendEmail).not.toHaveBeenCalled();
-    expect(await one(`select status, last_error from crm.scheduled_actions where deal_id = $1`, [dealId])).toEqual({ status: "skipped", last_error: 'Email channel is "unsubscribed".' });
+    expect(await one(`select status, last_error from crm_scheduled_actions where deal_id = $1`, [dealId])).toEqual({ status: "skipped", last_error: 'Email channel is "unsubscribed".' });
   });
 
   describe("Resend webhook", () => {
@@ -167,7 +167,7 @@ describe("email safety (PGlite)", () => {
 
     it("a hard bounce blocks the address (once); a soft bounce does not; a complaint unsubscribes", async () => {
       const a = await workflowEmail();
-      const emailId = (await one(`select provider_message_id from crm.email_sends where contact_id = $1`, [a.contactId])).provider_message_id;
+      const emailId = (await one(`select provider_message_id from crm_email_sends where contact_id = $1`, [a.contactId])).provider_message_id;
       expect((await bounce(emailId, "Transient")).body).toEqual({ result: "ignored" });
       expect(await channel(a.contactId)).toBeNull();
       expect((await bounce(emailId)).body).toEqual({ result: "bounced" });
@@ -175,35 +175,35 @@ describe("email safety (PGlite)", () => {
       expect((await bounce(emailId)).body).toEqual({ result: "ignored" });
 
       const b = await workflowEmail();
-      const bId = (await one(`select provider_message_id from crm.email_sends where contact_id = $1`, [b.contactId])).provider_message_id;
+      const bId = (await one(`select provider_message_id from crm_email_sends where contact_id = $1`, [b.contactId])).provider_message_id;
       expect((await webhook({ type: "email.complained", data: { email_id: bId } })).body).toEqual({ result: "complained" });
       expect(await channel(b.contactId)).toEqual({ status: "unsubscribed", reason: "Marked a nurture email as spam" });
       expect((await webhook({ type: "email.delivered", data: { email_id: bId } })).body).toEqual({ result: "ignored" });
     });
 
     it("pauses the email channel at 3% hard bounces + complaints over 7 days (min 50 sends) and alerts admins only", async () => {
-      await seed.query(`delete from crm.email_sends`);
+      await seed.query(`delete from crm_email_sends`);
       const send = (i: number, daysAgo = 0) =>
-        seed.query(`insert into crm.email_sends (workspace_id, provider_message_id, to_email, sent_at) values ($1, $2, 'x@acme.com', now() - $3::interval)`, [ws, `bulk_${i}`, `${daysAgo} days`]);
+        seed.query(`insert into crm_email_sends (workspace_id, provider_message_id, to_email, sent_at) values ($1, $2, 'x@acme.com', now() - $3::interval)`, [ws, `bulk_${i}`, `${daysAgo} days`]);
       for (let i = 0; i < 40; i++) await send(i);
       for (let i = 40; i < 50; i++) await send(i, 8); // older than 7 days: not counted
       for (let i = 0; i < 2; i++) await bounce(`bulk_${i}`);
-      expect((await one(`select paused from crm.send_policies where workspace_id = $1 and channel = 'email'`, [ws])).paused).toBe(false); // 2 of 40 < 50 sends
+      expect((await one(`select paused from crm_send_policies where workspace_id = $1 and channel = 'email'`, [ws])).paused).toBe(false); // 2 of 40 < 50 sends
 
       for (let i = 50; i < 70; i++) await send(i);
       await bounce("bulk_2"); // 3 of 60 = 5%
-      const policy = await one(`select paused, pause_reason, paused_at from crm.send_policies where workspace_id = $1 and channel = 'email'`, [ws]);
+      const policy = await one(`select paused, pause_reason, paused_at from crm_send_policies where workspace_id = $1 and channel = 'email'`, [ws]);
       expect(policy).toMatchObject({ paused: true, pause_reason: "Bounce + complaint rate 5.0% over 7 days (3 of 60 sends)." });
-      const alerts = (await seed.query(`select recipient_id, title, kind from crm.notifications where workspace_id = $1`, [ws])).rows;
+      const alerts = (await seed.query(`select recipient_id, title, kind from crm_notifications where workspace_id = $1`, [ws])).rows;
       expect(alerts).toEqual([{ recipient_id: admin, title: "Email sending paused automatically", kind: "warning" }]);
 
       await webhook({ type: "email.complained", data: { email_id: "bulk_3" } });
-      expect((await seed.query(`select 1 from crm.notifications where workspace_id = $1`, [ws])).rowCount).toBe(1); // already paused: no second alert
+      expect((await seed.query(`select 1 from crm_notifications where workspace_id = $1`, [ws])).rowCount).toBe(1); // already paused: no second alert
 
       const { action } = await workflowEmail();
       expect(action).toMatchObject({ status: "pending", last_error: expect.stringContaining("Email sending is paused: Bounce + complaint rate") });
-      await seed.query(`update crm.send_policies set paused = false, pause_reason = null where workspace_id = $1`, [ws]);
-      await seed.query(`delete from crm.email_sends where provider_message_id like 'bulk_%'`);
+      await seed.query(`update crm_send_policies set paused = false, pause_reason = null where workspace_id = $1`, [ws]);
+      await seed.query(`delete from crm_email_sends where provider_message_id like 'bulk_%'`);
     });
   });
 

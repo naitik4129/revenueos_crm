@@ -31,11 +31,11 @@ function toDto(row: NotificationRow) {
 }
 
 // Everything here is scoped to (recipient, current workspace). Admins are never recipients:
-// every insert into crm.notifications selects active salespeople only.
+// every insert into crm_notifications selects active salespeople only.
 
 export async function listNotificationsFor(db: Queryable, recipientId: string, workspaceId: string) {
   const result = await db.query<NotificationRow>(
-    `select * from crm.notifications
+    `select * from crm_notifications
       where recipient_id = $1 and workspace_id = $2
       order by created_at desc
       limit 100`,
@@ -46,7 +46,7 @@ export async function listNotificationsFor(db: Queryable, recipientId: string, w
 
 export async function markNotificationRead(db: Queryable, recipientId: string, workspaceId: string, id: string) {
   const result = await db.query<NotificationRow>(
-    `update crm.notifications set read = true
+    `update crm_notifications set read = true
       where id = $1 and recipient_id = $2 and workspace_id = $3
       returning *`,
     [id, recipientId, workspaceId],
@@ -57,7 +57,7 @@ export async function markNotificationRead(db: Queryable, recipientId: string, w
 }
 
 export async function markAllNotificationsRead(db: Queryable, recipientId: string, workspaceId: string) {
-  await db.query(`update crm.notifications set read = true where recipient_id = $1 and workspace_id = $2 and read = false`, [recipientId, workspaceId]);
+  await db.query(`update crm_notifications set read = true where recipient_id = $1 and workspace_id = $2 and read = false`, [recipientId, workspaceId]);
   return listNotificationsFor(db, recipientId, workspaceId);
 }
 
@@ -79,12 +79,12 @@ export async function notifyOwnerOrMembers(
   },
 ) {
   await db.query(
-    `insert into crm.notifications (workspace_id, recipient_id, contact_id, deal_id, title, detail, kind, href)
+    `insert into crm_notifications (workspace_id, recipient_id, contact_id, deal_id, title, detail, kind, href)
      select $1, p.id, $2, $3, $4, $5, $6, $8
-       from crm.profiles p
+       from crm_profiles p
       where p.is_active and p.role = 'salesperson'
         and (p.id = $7 or ($7::uuid is null and exists (
-              select 1 from crm.workspace_members m where m.workspace_id = $1 and m.user_id = p.id)))`,
+              select 1 from crm_workspace_members m where m.workspace_id = $1 and m.user_id = p.id)))`,
     [n.workspaceId, n.contactId, n.dealId, n.title, n.detail, n.kind, n.ownerId, n.href],
   );
 }
@@ -95,8 +95,8 @@ export async function notifyOwnerOrMembers(
  */
 export async function notifyAdmins(db: Queryable, n: { workspaceId: string; title: string; detail: string; href: string }) {
   await db.query(
-    `insert into crm.notifications (workspace_id, recipient_id, title, detail, kind, href)
-     select $1, p.id, $2, $3, 'warning', $4 from crm.profiles p where p.is_active and p.role = 'admin'`,
+    `insert into crm_notifications (workspace_id, recipient_id, title, detail, kind, href)
+     select $1, p.id, $2, $3, 'warning', $4 from crm_profiles p where p.is_active and p.role = 'admin'`,
     [n.workspaceId, n.title, n.detail, n.href],
   );
 }

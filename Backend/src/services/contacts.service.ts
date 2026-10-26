@@ -49,10 +49,10 @@ export interface ContactRow {
   updated_at: Date;
 }
 
-const CONTACT_FROM = `from crm.contacts c left join crm.companies co on co.id = c.company_id`;
+const CONTACT_FROM = `from crm_contacts c left join crm_companies co on co.id = c.company_id`;
 const CONTACT_SELECT = `
   select c.*, co.name as company_name, ${userNameSql("c.owner_id")} as owner_name,
-         (select d.id from crm.deals d where d.contact_id = c.id and d.outcome = 'open') as open_deal_id
+         (select d.id from crm_deals d where d.contact_id = c.id and d.outcome = 'open') as open_deal_id
     ${CONTACT_FROM}`;
 
 export function contactToDto(row: ContactRow) {
@@ -156,10 +156,10 @@ export function validateContactFields(input: ContactFieldsInput): ValidatedConta
 }
 
 function duplicateConflict(err: unknown): never {
-  if (isUniqueViolation(err, "contacts_workspace_email_key")) {
+  if (isUniqueViolation(err, "crm_contacts_workspace_email_key")) {
     throw new ConflictError("A contact with this email already exists in this workspace.", { field: "email" });
   }
-  if (isUniqueViolation(err, "contacts_workspace_phone_key")) {
+  if (isUniqueViolation(err, "crm_contacts_workspace_phone_key")) {
     throw new ConflictError("A contact with this phone number already exists in this workspace.", { field: "phone" });
   }
   throw err;
@@ -167,7 +167,7 @@ function duplicateConflict(err: unknown): never {
 
 async function assertCompanyInWorkspace(db: Queryable, workspaceId: string, companyId: string | null | undefined) {
   if (!companyId) return;
-  const found = await db.query(`select 1 from crm.companies where id = $1 and workspace_id = $2`, [companyId, workspaceId]);
+  const found = await db.query(`select 1 from crm_companies where id = $1 and workspace_id = $2`, [companyId, workspaceId]);
   if (!found.rows[0]) throw new NotFoundError("Company");
 }
 
@@ -190,7 +190,7 @@ async function insertContact(
 ): Promise<string> {
   return db
     .query<{ id: string }>(
-      `insert into crm.contacts
+      `insert into crm_contacts
         (workspace_id, company_id, first_name, last_name, job_title, email, phone, phone_e164,
          linkedin_url, country, location, owner_id, source, created_by)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
@@ -254,7 +254,7 @@ export async function listContacts(db: Queryable, workspaceId: string, f: ListCo
   if (f.ownerId) where.push(f.ownerId === "none" ? `c.owner_id is null` : `c.owner_id = $${params.push(f.ownerId)}`);
   if (f.companyId) where.push(`c.company_id = $${params.push(f.companyId)}`);
   if (f.hasOpenDeal !== undefined) {
-    where.push(`${f.hasOpenDeal ? "" : "not "}exists (select 1 from crm.deals d where d.contact_id = c.id and d.outcome = 'open')`);
+    where.push(`${f.hasOpenDeal ? "" : "not "}exists (select 1 from crm_deals d where d.contact_id = c.id and d.outcome = 'open')`);
   }
   if (f.search) {
     const p = `$${params.push(`%${f.search}%`)}`;
@@ -311,7 +311,7 @@ export async function updateContact(db: Queryable, actor: Actor, workspaceId: st
 
   await db
     .query(
-      `update crm.contacts
+      `update crm_contacts
           set first_name = $2, last_name = $3, job_title = $4, email = $5, phone = $6, phone_e164 = $7,
               linkedin_url = $8, country = $9, location = $10, source = $11,
               company_id = case when $12 then $13::uuid else company_id end,
@@ -351,14 +351,14 @@ export async function addNote(db: Queryable, actor: Actor, workspaceId: string, 
   if (!body) throw new ValidationError("Note body is required.");
   await getContactOr404(db, workspaceId, contactId);
   if (input.dealId) {
-    const deal = await db.query(`select 1 from crm.deals where id = $1 and contact_id = $2`, [input.dealId, contactId]);
+    const deal = await db.query(`select 1 from crm_deals where id = $1 and contact_id = $2`, [input.dealId, contactId]);
     if (!deal.rows[0]) throw new NotFoundError("Deal");
   }
   const note = await db.query<{ id: string; created_at: Date }>(
-    `insert into crm.notes (workspace_id, contact_id, deal_id, author_id, body) values ($1,$2,$3,$4,$5) returning id, created_at`,
+    `insert into crm_notes (workspace_id, contact_id, deal_id, author_id, body) values ($1,$2,$3,$4,$5) returning id, created_at`,
     [workspaceId, contactId, input.dealId ?? null, actor.id, body],
   );
-  await db.query(`update crm.contacts set last_activity_at = now() where id = $1`, [contactId]);
+  await db.query(`update crm_contacts set last_activity_at = now() where id = $1`, [contactId]);
   await addTimelineEvent(db, { contactId, dealId: input.dealId ?? null, kind: "note", title: "Note Added", detail: body, ...actorEvent(actor) });
   const row = note.rows[0]!;
   return { id: row.id, dealId: input.dealId, author: actor.fullName, body, at: row.created_at.toISOString() };
@@ -368,7 +368,7 @@ export async function listNotes(db: Queryable, workspaceId: string, contactId: s
   await getContactOr404(db, workspaceId, contactId);
   const result = await db.query<{ id: string; deal_id: string | null; author: string | null; body: string; created_at: Date }>(
     `select n.id, n.deal_id, ${userNameSql("n.author_id")} as author, n.body, n.created_at
-       from crm.notes n where n.contact_id = $1 order by n.created_at desc`,
+       from crm_notes n where n.contact_id = $1 order by n.created_at desc`,
     [contactId],
   );
   return result.rows.map((r) => ({ id: r.id, dealId: r.deal_id ?? undefined, author: r.author ?? "", body: r.body, at: r.created_at.toISOString() }));
@@ -390,7 +390,7 @@ export async function setContactability(db: Queryable, actor: Actor, workspaceId
   }
   await getContactOr404(db, workspaceId, contactId);
   await db.query(
-    `insert into crm.contact_channels (contact_id, channel, status, reason, updated_by)
+    `insert into crm_contact_channels (contact_id, channel, status, reason, updated_by)
      values ($1, $2, $3, $4, $5)
      on conflict (contact_id, channel)
      do update set status = excluded.status, reason = excluded.reason, updated_by = excluded.updated_by`,
@@ -403,7 +403,7 @@ export async function setContactability(db: Queryable, actor: Actor, workspaceId
 export async function listContactability(db: Queryable, workspaceId: string, contactId: string) {
   await getContactOr404(db, workspaceId, contactId);
   const result = await db.query<{ channel: ContactChannel; status: string; reason: string | null; updated_at: Date }>(
-    `select channel, status, reason, updated_at from crm.contact_channels where contact_id = $1 order by channel`,
+    `select channel, status, reason, updated_at from crm_contact_channels where contact_id = $1 order by channel`,
     [contactId],
   );
   return result.rows.map((r) => ({ channel: r.channel, status: r.status, reason: r.reason ?? undefined, updatedAt: r.updated_at.toISOString() }));
@@ -428,7 +428,7 @@ export async function logManualCommunication(
     detail: input.detail?.trim() || `Manual ${input.channel} from contact record`,
     ...actorEvent(actor),
   });
-  await db.query(`update crm.contacts set last_activity_at = now() where id = $1`, [contactId]);
+  await db.query(`update crm_contacts set last_activity_at = now() where id = $1`, [contactId]);
   await advanceLifecycle(db, contactId, "contacted", actor);
   return { channel: input.channel, title };
 }
@@ -441,8 +441,8 @@ export async function logManualCommunication(
  */
 export async function advanceLifecycle(db: Queryable, contactId: string, stage: LifecycleStage, actor: Actor | EventActor | null) {
   const moved = await db.query(
-    `update crm.contacts set lifecycle_stage = $2, lifecycle_changed_at = now()
-      where id = $1 and lifecycle_stage < $2::crm.lifecycle_stage`,
+    `update crm_contacts set lifecycle_stage = $2, lifecycle_changed_at = now()
+      where id = $1 and lifecycle_stage < $2::crm_lifecycle_stage`,
     [contactId, stage],
   );
   if (!moved.rowCount) return false;
@@ -474,8 +474,8 @@ type Decision = "ok" | { unchanged: string } | AppError;
 async function decideEach(db: Queryable, workspaceId: string, ids: string[], decide: (c: LockedContact) => Decision) {
   const locked = await db.query<LockedContact>(
     `select c.id, c.status, c.owner_id, c.lifecycle_stage,
-            exists (select 1 from crm.deals d where d.contact_id = c.id and d.outcome = 'open') as has_open_deal
-       from crm.contacts c where c.workspace_id = $1 and c.id = any($2::uuid[]) order by c.id for update of c`,
+            exists (select 1 from crm_deals d where d.contact_id = c.id and d.outcome = 'open') as has_open_deal
+       from crm_contacts c where c.workspace_id = $1 and c.id = any($2::uuid[]) order by c.id for update of c`,
     [workspaceId, ids],
   );
   const byId = new Map(locked.rows.map((r) => [r.id, r]));
@@ -502,7 +502,7 @@ export async function assignContactOwners(db: Queryable, actor: Actor, workspace
     c.status === "merged" ? MERGED() : c.owner_id === ownerId ? { unchanged: "Already has this owner." } : "ok",
   );
   if (ok.length) {
-    await db.query(`update crm.contacts set owner_id = $2 where id = any($1::uuid[])`, [ok.map((c) => c.id), ownerId]);
+    await db.query(`update crm_contacts set owner_id = $2 where id = any($1::uuid[])`, [ok.map((c) => c.id), ownerId]);
     const owner = await db.query<{ name: string | null }>(`select ${userNameSql("$1::uuid")} as name`, [ownerId]);
     const detail = `Owner: ${owner.rows[0]?.name ?? "Unassigned"}`;
     await insertTimelineRows(db, workspaceId, actorEvent(actor), ok.map((c) => ({ contact_id: c.id, event_kind: "system", title: "Contact Assigned", detail })));
@@ -525,14 +525,14 @@ export async function markDncMany(db: Queryable, actor: Actor | EventActor, work
     const okIds = ok.map((c) => c.id);
     const user = "fullName" in actor ? actor : null;
     await db.query(
-      `update crm.contacts
+      `update crm_contacts
           set status = 'do_not_contact', dnc_reason = $2, dnc_by = $3, dnc_by_name = $4, dnc_at = now(), last_activity_at = now()
         where id = any($1::uuid[])`,
       [okIds, reason, user?.id ?? null, user?.fullName ?? (actor as EventActor).actorName],
     );
     await db.query(
-      `update crm.tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = 'Contact marked Do Not Contact'
-        where status = 'open' and (contact_id = any($1::uuid[]) or deal_id in (select id from crm.deals where contact_id = any($1::uuid[])))`,
+      `update crm_tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = 'Contact marked Do Not Contact'
+        where status = 'open' and (contact_id = any($1::uuid[]) or deal_id in (select id from crm_deals where contact_id = any($1::uuid[])))`,
       [okIds],
     );
     await insertTimelineRows(db, workspaceId, toEventActor(actor), okIds.map((id) => ({ contact_id: id, event_kind: "system", title: "Do Not Contact", detail: reason })));
@@ -554,7 +554,7 @@ export async function reactivateFromDncMany(db: Queryable, actor: Actor, workspa
   );
   if (ok.length) {
     await db.query(
-      `update crm.contacts set status = 'active', dnc_reason = $2, dnc_by = $3, dnc_by_name = $4, last_activity_at = now() where id = any($1::uuid[])`,
+      `update crm_contacts set status = 'active', dnc_reason = $2, dnc_by = $3, dnc_by_name = $4, last_activity_at = now() where id = any($1::uuid[])`,
       [ok.map((c) => c.id), reason, actor.id, actor.fullName],
     );
     await insertTimelineRows(db, workspaceId, actorEvent(actor), ok.map((c) => ({ contact_id: c.id, event_kind: "system", title: "Do Not Contact Lifted", detail: reason })));
@@ -579,7 +579,7 @@ export async function setLifecycleStageMany(db: Queryable, actor: Actor, workspa
     return "ok";
   });
   if (ok.length) {
-    await db.query(`update crm.contacts set lifecycle_stage = $2, lifecycle_changed_at = now() where id = any($1::uuid[])`, [ok.map((c) => c.id), input.stage]);
+    await db.query(`update crm_contacts set lifecycle_stage = $2, lifecycle_changed_at = now() where id = any($1::uuid[])`, [ok.map((c) => c.id), input.stage]);
     await insertTimelineRows(
       db,
       workspaceId,
@@ -612,11 +612,11 @@ export async function deleteContactsMany(db: Queryable, actor: Actor, workspaceI
     const okIds = ok.map((c) => c.id);
     const rows = await db.query<ContactRow>(`${CONTACT_SELECT} where c.id = any($1::uuid[])`, [okIds]);
     await db.query(
-      `insert into crm.deleted_records_audit (workspace_id, entity_type, entity_id, snapshot, deleted_by, deleted_by_name)
+      `insert into crm_deleted_records_audit (workspace_id, entity_type, entity_id, snapshot, deleted_by, deleted_by_name)
        select $1, 'contact', x.id, x.snapshot, $2, $3 from jsonb_to_recordset($4::jsonb) as x(id uuid, snapshot jsonb)`,
       [workspaceId, actor.id, actor.fullName, JSON.stringify(rows.rows.map((r) => ({ id: r.id, snapshot: contactToDto(r) })))],
     );
-    await db.query(`delete from crm.contacts where id = any($1::uuid[])`, [okIds]);
+    await db.query(`delete from crm_contacts where id = any($1::uuid[])`, [okIds]);
   }
   return results;
 }
@@ -647,7 +647,7 @@ export async function runContactBulk(db: Queryable, actor: Actor, workspaceId: s
     case "owner":
       if (input.ownerId) {
         const member = await db.query(
-          `select 1 from crm.workspace_members m join crm.profiles p on p.id = m.user_id
+          `select 1 from crm_workspace_members m join crm_profiles p on p.id = m.user_id
             where m.workspace_id = $1 and m.user_id = $2 and p.is_active`,
           [workspaceId, input.ownerId],
         );
@@ -697,7 +697,7 @@ export async function runContactBulk(db: Queryable, actor: Actor, workspaceId: s
 export async function mergeContacts(db: Queryable, actor: Actor, workspaceId: string, sourceId: string, targetId: string, reason?: string) {
   if (sourceId === targetId) throw new ValidationError("A contact cannot be merged into itself.");
   const locked = await db.query<{ id: string }>(
-    `select id from crm.contacts where id = any($1::uuid[]) and workspace_id = $2 order by id for update`,
+    `select id from crm_contacts where id = any($1::uuid[]) and workspace_id = $2 order by id for update`,
     [[sourceId, targetId], workspaceId],
   );
   if (locked.rows.length !== 2) throw new NotFoundError("Contact");
@@ -712,15 +712,15 @@ export async function mergeContacts(db: Queryable, actor: Actor, workspaceId: st
     });
   }
 
-  await db.query(`update crm.deals set contact_id = $2 where contact_id = $1`, [sourceId, targetId]);
-  await db.query(`update crm.tasks set contact_id = $2 where contact_id = $1`, [sourceId, targetId]);
+  await db.query(`update crm_deals set contact_id = $2 where contact_id = $1`, [sourceId, targetId]);
+  await db.query(`update crm_tasks set contact_id = $2 where contact_id = $1`, [sourceId, targetId]);
   for (const table of ["workflow_runs", "notes", "calls", "timeline_events", "notifications", "email_activities", "external_refs", "whatsapp_outbound_messages", "whatsapp_inbound_events"]) {
-    await db.query(`update crm.${table} set contact_id = $2 where contact_id = $1`, [sourceId, targetId]);
+    await db.query(`update crm_${table} set contact_id = $2 where contact_id = $1`, [sourceId, targetId]);
   }
 
   if (source.status === "do_not_contact" && target.status !== "do_not_contact") {
     await db.query(
-      `update crm.contacts set status = 'do_not_contact', dnc_reason = $2, dnc_by = $3, dnc_by_name = $4, dnc_at = now() where id = $1`,
+      `update crm_contacts set status = 'do_not_contact', dnc_reason = $2, dnc_by = $3, dnc_by_name = $4, dnc_at = now() where id = $1`,
       [targetId, `Merged from a Do Not Contact contact: ${source.dnc_reason ?? "no reason recorded"}`, actor.id, actor.fullName],
     );
   }
@@ -728,7 +728,7 @@ export async function mergeContacts(db: Queryable, actor: Actor, workspaceId: st
     await advanceLifecycle(db, targetId, source.lifecycle_stage, actor);
   }
   await db.query(
-    `update crm.contacts set status = 'merged', merged_into_contact_id = $2, last_activity_at = now() where id = $1`,
+    `update crm_contacts set status = 'merged', merged_into_contact_id = $2, last_activity_at = now() where id = $1`,
     [sourceId, targetId],
   );
 
@@ -795,7 +795,7 @@ export async function importContacts(
   const emails = [...new Set(valid.flatMap((v) => (v.fields.email ? [v.fields.email] : [])))];
   const phones = [...new Set(valid.flatMap((v) => (v.fields.phoneE164 ? [v.fields.phoneE164] : [])))];
   const existing = await db.query<{ email: string | null; phone_e164: string | null }>(
-    `select lower(email) as email, phone_e164 from crm.contacts
+    `select lower(email) as email, phone_e164 from crm_contacts
       where workspace_id = $1 and (lower(email) = any($2::text[]) or phone_e164 = any($3::text[]))`,
     [workspaceId, emails, phones],
   );
@@ -839,10 +839,10 @@ export async function importContacts(
   if (created.length) {
     await db
       .query(
-        `insert into crm.contacts
+        `insert into crm_contacts
           (id, workspace_id, company_id, first_name, last_name, job_title, email, phone, phone_e164, linkedin_url, country, location, owner_id, source, created_by)
          select x.id, $1, x.company_id, x.first_name, x.last_name, x.job_title, x.email, x.phone, x.phone_e164, x.linkedin_url, x.country, x.location,
-                $2, x.source::crm.lead_source, $3
+                $2, x.source::crm_lead_source, $3
            from jsonb_to_recordset($4::jsonb) as x(id uuid, company_id uuid, first_name text, last_name text, job_title text, email text, phone text,
                                                    phone_e164 text, linkedin_url text, country text, location text, source text)`,
         [workspaceId, defaultOwner(actor), actor.id, JSON.stringify(created)],
@@ -878,7 +878,7 @@ async function resolveImportCompanies(db: Queryable, actor: Actor, workspaceId: 
 
   const domains = [...new Set([...wanted.values()].flatMap((w) => (w.domain ? [w.domain] : [])))];
   const found = await db.query<{ id: string; domain: string | null; name: string }>(
-    `select id, lower(domain) as domain, lower(name) as name from crm.companies
+    `select id, lower(domain) as domain, lower(name) as name from crm_companies
       where workspace_id = $1 and (lower(domain) = any($2::text[]) or lower(name) = any($3::text[]))
       order by created_at, id`,
     [workspaceId, domains, [...wanted.keys()]],
@@ -905,7 +905,7 @@ async function resolveImportCompanies(db: Queryable, actor: Actor, workspaceId: 
   }
   if (fresh.length) {
     await db.query(
-      `insert into crm.companies (id, workspace_id, name, domain, website, industry, created_by)
+      `insert into crm_companies (id, workspace_id, name, domain, website, industry, created_by)
        select x.id, $1, x.name, x.domain, x.website, x.industry, $2
          from jsonb_to_recordset($3::jsonb) as x(id uuid, name text, domain text, website text, industry text)`,
       [workspaceId, actor.id, JSON.stringify(fresh)],

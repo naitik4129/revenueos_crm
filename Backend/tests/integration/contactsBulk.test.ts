@@ -28,7 +28,7 @@ describe("bulk contact actions (PGlite)", () => {
   async function mkUser(email: string, role: "admin" | "salesperson") {
     const id = (await seed.query(`insert into auth.users (email) values ($1) returning id`, [email])).rows[0].id as string;
     await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, $2, $3)`, [id, email.split("@")[0], email]);
-    await seed.query(`insert into crm.profiles (id, role) values ($1, $2)`, [id, role]);
+    await seed.query(`insert into crm_profiles (id, role) values ($1, $2)`, [id, role]);
     return id;
   }
   const api = (method: "get" | "post", path: string, opts: { as?: string; ws?: string; body?: object } = {}) => {
@@ -47,7 +47,7 @@ describe("bulk contact actions (PGlite)", () => {
   };
   const one = async (sql: string, params: unknown[]) => (await seed.query(sql, params)).rows[0];
   const audits = async (action: string) =>
-    (await seed.query(`select metadata from crm.admin_audit_events where action = $1 order by created_at`, [action])).rows.map((r) => r.metadata);
+    (await seed.query(`select metadata from crm_admin_audit_events where action = $1 order by created_at`, [action])).rows.map((r) => r.metadata);
 
   beforeAll(async () => {
     testDb = await startTestDb();
@@ -59,10 +59,10 @@ describe("bulk contact actions (PGlite)", () => {
     sales = await mkUser("sam@x.com", "salesperson");
     sue = await mkUser("sue@x.com", "salesperson");
     gone = await mkUser("gone@x.com", "salesperson");
-    ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
-    other = (await seed.query(`insert into crm.workspaces (name, slug) values ('Two', 'two') returning id`)).rows[0].id;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2), ($1, $3), ($1, $4), ($5, $2)`, [ws, sales, sue, gone, other]);
-    await seed.query(`update crm.profiles set is_active = false where id = $1`, [gone]);
+    ws = (await seed.query(`insert into crm_workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
+    other = (await seed.query(`insert into crm_workspaces (name, slug) values ('Two', 'two') returning id`)).rows[0].id;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2), ($1, $3), ($1, $4), ($5, $2)`, [ws, sales, sue, gone, other]);
+    await seed.query(`update crm_profiles set is_active = false where id = $1`, [gone]);
   }, 60_000);
 
   afterAll(async () => {
@@ -74,8 +74,8 @@ describe("bulk contact actions (PGlite)", () => {
   it("owner: an active member only; last activity stays; same owner, other workspace and unknown ids are skipped", async () => {
     const ids = await newContacts(3);
     const [foreign] = await newContacts(1, other);
-    await seed.query(`update crm.contacts set last_activity_at = '2026-01-01T00:00:00Z' where id = any($1::uuid[])`, [ids]);
-    await seed.query(`update crm.contacts set owner_id = $2 where id = $1`, [ids[2], sue]);
+    await seed.query(`update crm_contacts set last_activity_at = '2026-01-01T00:00:00Z' where id = any($1::uuid[])`, [ids]);
+    await seed.query(`update crm_contacts set owner_id = $2 where id = $1`, [ids[2], sue]);
 
     expect((await bulk({ action: "owner", ids, ownerId: gone })).status).toBe(400); // inactive
     expect((await bulk({ action: "owner", ids, ownerId: admin })).status).toBe(400); // not a member
@@ -90,9 +90,9 @@ describe("bulk contact actions (PGlite)", () => {
       { id: foreign, status: "skipped", reason: "Contact not found." },
       { id: unknown, status: "skipped", reason: "Contact not found." },
     ]);
-    const rows = await seed.query(`select owner_id, last_activity_at from crm.contacts where id = any($1::uuid[]) order by id`, [ids]);
+    const rows = await seed.query(`select owner_id, last_activity_at from crm_contacts where id = any($1::uuid[]) order by id`, [ids]);
     expect(rows.rows.every((r) => r.owner_id === sue && r.last_activity_at.toISOString() === "2026-01-01T00:00:00.000Z")).toBe(true);
-    expect(await one(`select count(*)::int n from crm.timeline_events where contact_id = $1 and title = 'Contact Assigned'`, [ids[0]])).toEqual({ n: 1 });
+    expect(await one(`select count(*)::int n from crm_timeline_events where contact_id = $1 and title = 'Contact Assigned'`, [ids[0]])).toEqual({ n: 1 });
     // Unassign.
     expect((await bulk({ action: "owner", ids: [ids[0]], ownerId: null })).body.counts).toEqual({ ok: 1, skipped: 0 });
     // One audit row per request, not per contact.
@@ -111,7 +111,7 @@ describe("bulk contact actions (PGlite)", () => {
     expect((await bulk({ action: "lifecycle", ids, stage: "contacted" }, admin)).body.results[0].reason).toBe("A note is required to move a lifecycle stage back.");
     const ok = await bulk({ action: "lifecycle", ids, stage: "contacted", note: "Premature" }, admin);
     expect(ok.body.counts).toEqual({ ok: 2, skipped: 0 });
-    expect(await one(`select title, detail from crm.timeline_events where contact_id = $1 order by occurred_at desc, id desc limit 1`, [ids[0]])).toEqual({
+    expect(await one(`select title, detail from crm_timeline_events where contact_id = $1 order by occurred_at desc, id desc limit 1`, [ids[0]])).toEqual({
       title: "Lifecycle: engaged -> contacted (moved back)",
       detail: "Premature",
     });
@@ -125,14 +125,14 @@ describe("bulk contact actions (PGlite)", () => {
     const res = await bulk({ action: "dnc", ids, reason: "Asked to stop" });
     expect(res.body.counts).toEqual({ ok: 2, skipped: 0 });
     expect((await bulk({ action: "dnc", ids, reason: "Again" })).body.results[0]).toEqual({ id: ids[0], status: "skipped", reason: "Already Do Not Contact." });
-    expect(await one(`select count(*)::int n from crm.dnc_events where contact_id = any($1::uuid[]) and action = 'suppressed'`, [ids])).toEqual({ n: 2 });
-    expect(await one(`select count(*)::int n from crm.tasks where deal_id = $1 and status = 'open'`, [deal.id])).toEqual({ n: 0 });
-    expect(await one(`select outcome from crm.deals where id = $1`, [deal.id])).toEqual({ outcome: "open" });
+    expect(await one(`select count(*)::int n from crm_dnc_events where contact_id = any($1::uuid[]) and action = 'suppressed'`, [ids])).toEqual({ n: 2 });
+    expect(await one(`select count(*)::int n from crm_tasks where deal_id = $1 and status = 'open'`, [deal.id])).toEqual({ n: 0 });
+    expect(await one(`select outcome from crm_deals where id = $1`, [deal.id])).toEqual({ outcome: "open" });
 
     expect((await bulk({ action: "dnc", ids, reason: "Consent given", lift: true })).status).toBe(403);
     const lift = await bulk({ action: "dnc", ids, reason: "Consent given", lift: true }, admin);
     expect(lift.body.counts).toEqual({ ok: 2, skipped: 0 });
-    expect(await one(`select status from crm.contacts where id = $1`, [ids[1]])).toEqual({ status: "active" });
+    expect(await one(`select status from crm_contacts where id = $1`, [ids[1]])).toEqual({ status: "active" });
   });
 
   it("delete: admin only, confirmed by the count; an open deal is skipped unless force; an audit snapshot per contact", async () => {
@@ -145,9 +145,9 @@ describe("bulk contact actions (PGlite)", () => {
     expect(res.body.counts).toEqual({ ok: 2, skipped: 1 });
     const forced = await bulk({ action: "delete", ids: [ids[0]], confirm: 1, force: true }, admin);
     expect(forced.body.counts).toEqual({ ok: 1, skipped: 0 });
-    expect(await one(`select count(*)::int n from crm.contacts where id = any($1::uuid[])`, [ids])).toEqual({ n: 0 });
-    expect(await one(`select count(*)::int n from crm.deleted_records_audit where entity_id = any($1::uuid[])`, [ids])).toEqual({ n: 3 });
-    expect(await one(`select count(*)::int n from crm.deals where contact_id = $1`, [ids[0]])).toEqual({ n: 0 });
+    expect(await one(`select count(*)::int n from crm_contacts where id = any($1::uuid[])`, [ids])).toEqual({ n: 0 });
+    expect(await one(`select count(*)::int n from crm_deleted_records_audit where entity_id = any($1::uuid[])`, [ids])).toEqual({ n: 3 });
+    expect(await one(`select count(*)::int n from crm_deals where contact_id = $1`, [ids[0]])).toEqual({ n: 0 });
   });
 
   it("takes at most 500 ids, de-duplicated; an unknown action is 400", async () => {

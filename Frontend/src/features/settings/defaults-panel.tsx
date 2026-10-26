@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Users } from "lucide-react";
+import { CalendarCheck } from "lucide-react";
 import { toast } from "sonner";
 import { backend, type Workspace } from "@/lib/backend-client";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,9 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { DefaultOwnerSelect } from "@/features/admin/default-owner-select";
-import { adminKeys, errorText } from "@/features/admin/admin-keys";
-import { messageFromError, useSession } from "@/store";
+import { messageFromError } from "@/store";
 import { keys } from "@/store/query";
 import type { TemplateType } from "@/types";
 import { PanelHeader } from "@/components/common/record-parts";
@@ -21,30 +19,15 @@ import { PanelHeader } from "@/components/common/record-parts";
 const NONE = "none";
 
 /**
- * Workspace defaults: the handover owner (admins only; the backend enforces it) and the
- * templates sent when a meeting is scheduled (anyone, as on the Templates page).
+ * Workspace defaults: the templates sent when a meeting is scheduled (anyone, as on the Templates
+ * page). The handover owner is no longer set here — access and ownership come from the RevenueOS
+ * platform; a handover with no owner notifies the project's people.
  */
 export function DefaultsPanel({ workspace }: { workspace: Workspace }) {
   const client = useQueryClient();
-  const { currentUser, userName } = useSession();
-  const isAdmin = currentUser?.role === "Admin";
-  const members = useQuery({
-    queryKey: adminKeys.members(workspace.id),
-    queryFn: ({ signal }) => backend.workspaces.members(workspace.id, signal),
-    enabled: isAdmin,
-  });
   const templates = useQuery({
     queryKey: keys.templates(workspace.id),
     queryFn: ({ signal }) => backend.templates.list(signal),
-  });
-  const owner = useMutation({
-    mutationFn: (defaultOwnerId: string | null) =>
-      backend.workspaces.update(workspace.id, { defaultOwnerId }),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: keys.workspaces });
-      toast.success("Default owner saved.");
-    },
-    onError: (error) => toast.error(errorText(error)),
   });
   const template = useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
@@ -92,28 +75,11 @@ export function DefaultsPanel({ workspace }: { workspace: Workspace }) {
 
   return (
     <Card>
-      <PanelHeader icon={Users} title="Defaults" />
-      <CardContent className="grid gap-4 md:grid-cols-3 p-4">
+      <PanelHeader icon={CalendarCheck} title="Defaults" />
+      <CardContent className="grid gap-4 md:grid-cols-2 p-4">
         <p className="text-sm text-muted-foreground md:col-span-full">
-          Who owns a brain handover that names no owner, and what is sent when a meeting is
-          scheduled.
+          What is sent when a meeting is scheduled.
         </p>
-        <div>
-          <Label className="mb-1.5 block text-xs">Default owner</Label>
-          {isAdmin ? (
-            <DefaultOwnerSelect
-              value={workspace.defaultOwnerId}
-              members={members.data?.data ?? []}
-              disabled={members.isLoading || owner.isPending}
-              onChange={(id) => owner.mutate(id)}
-            />
-          ) : (
-            <p className="py-2 text-sm">
-              {workspace.defaultOwnerId ? userName(workspace.defaultOwnerId) : "No default owner"}
-              <span className="block text-xs text-muted-foreground">Set by an admin.</span>
-            </p>
-          )}
-        </div>
         {templateSelect("email", "Meeting scheduled: email")}
         {templateSelect("whatsapp", "Meeting scheduled: WhatsApp")}
       </CardContent>

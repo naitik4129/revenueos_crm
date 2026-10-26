@@ -6,17 +6,17 @@
 
 begin;
 
-create type crm.user_role as enum ('admin', 'salesperson');
+create type public.crm_user_role as enum ('admin', 'salesperson');
 
-create type crm.lead_source as enum (
+create type public.crm_lead_source as enum (
   'linkedin', 'email', 'cold_call', 'referral', 'event', 'inbound_form', 'other'
 );
 
-create type crm.contact_status as enum ('active', 'do_not_contact', 'merged');
+create type public.crm_contact_status as enum ('active', 'do_not_contact', 'merged');
 
-create type crm.deal_outcome as enum ('open', 'won', 'lost', 'nurture', 'discarded');
+create type public.crm_deal_outcome as enum ('open', 'won', 'lost', 'nurture', 'discarded');
 
-create type crm.pipeline_stage as enum (
+create type public.crm_pipeline_stage as enum (
   'new',
   'ready_for_first_call',
   'contact_attempted',
@@ -34,19 +34,19 @@ create type crm.pipeline_stage as enum (
   'negotiation'
 );
 
-create type crm.automation_mode as enum ('active', 'paused', 'manual', 'stopped');
+create type public.crm_automation_mode as enum ('active', 'paused', 'manual', 'stopped');
 
-create type crm.response_state as enum (
+create type public.crm_response_state as enum (
   'no_response', 'responded', 'conversation_active', 'waiting_on_customer', 'waiting_on_us'
 );
 
-create type crm.contact_channel as enum ('phone', 'email', 'whatsapp');
+create type public.crm_contact_channel as enum ('phone', 'email', 'whatsapp');
 
-create type crm.objection_type as enum (
+create type public.crm_objection_type as enum (
   'commission_only', 'internal_hiring', 'existing_team', 'budget_price', 'internal_approval', 'wrong_fit'
 );
 
-create type crm.loss_reason as enum (
+create type public.crm_loss_reason as enum (
   'price_budget',
   'internal_hiring',
   'project_postponed',
@@ -57,7 +57,7 @@ create type crm.loss_reason as enum (
   'other'
 );
 
-create type crm.call_not_connected_reason as enum (
+create type public.crm_call_not_connected_reason as enum (
   'no_answer',
   'busy',
   'call_rejected',
@@ -70,7 +70,7 @@ create type crm.call_not_connected_reason as enum (
   'other'
 );
 
-create type crm.call_connected_outcome as enum (
+create type public.crm_call_connected_outcome as enum (
   'positive',
   'meeting_agreed',
   'interested_later',
@@ -87,7 +87,7 @@ create type crm.call_connected_outcome as enum (
   'do_not_contact'
 );
 
-create type crm.task_type as enum (
+create type public.crm_task_type as enum (
   'call',
   'follow_up',
   'send_information',
@@ -106,15 +106,15 @@ create type crm.task_type as enum (
   'general_task'
 );
 
-create type crm.task_status as enum ('open', 'completed', 'cancelled');
+create type public.crm_task_status as enum ('open', 'completed', 'cancelled');
 
-create type crm.task_origin as enum ('manual', 'automation');
+create type public.crm_task_origin as enum ('manual', 'automation');
 
-create type crm.meeting_status as enum (
+create type public.crm_meeting_status as enum (
   'tentative', 'scheduled', 'confirmed', 'rescheduled', 'completed', 'cancelled', 'no_show', 'failed'
 );
 
-create type crm.meeting_outcome as enum (
+create type public.crm_meeting_outcome as enum (
   'proposal_required',
   'highly_interested',
   'needs_internal_discussion',
@@ -126,7 +126,7 @@ create type crm.meeting_outcome as enum (
   'no_proposal_required'
 );
 
-create type crm.proposal_status as enum (
+create type public.crm_proposal_status as enum (
   'draft',
   'uploaded',
   'ready_to_send',
@@ -139,7 +139,7 @@ create type crm.proposal_status as enum (
   'expired'
 );
 
-create type crm.workflow_trigger as enum (
+create type public.crm_workflow_trigger as enum (
   'lead_created',
   'meeting_scheduled',
   'meeting_agreed',
@@ -161,11 +161,11 @@ create type crm.workflow_trigger as enum (
   'manual_enrollment'
 );
 
-create type crm.workflow_status as enum ('active', 'paused');
+create type public.crm_workflow_status as enum ('active', 'paused');
 
-create type crm.workflow_version_status as enum ('draft', 'published', 'previous');
+create type public.crm_workflow_version_status as enum ('draft', 'published', 'previous');
 
-create type crm.workflow_step_action as enum (
+create type public.crm_workflow_step_action as enum (
   'send_email',
   'send_whatsapp',
   'create_call_task',
@@ -174,18 +174,18 @@ create type crm.workflow_step_action as enum (
   'stop_workflow'
 );
 
-create type crm.workflow_run_status as enum (
+create type public.crm_workflow_run_status as enum (
   'running', 'waiting', 'paused', 'completed', 'failed', 'cancelled'
 );
 
-create type crm.scheduled_action_status as enum (
+create type public.crm_scheduled_action_status as enum (
   'pending', 'due', 'executing', 'completed', 'failed', 'cancelled', 'paused', 'skipped'
 );
 
-create type crm.template_channel as enum ('email', 'whatsapp');
+create type public.crm_template_channel as enum ('email', 'whatsapp');
 
-create type crm.notification_kind as enum ('info', 'warning', 'success', 'danger');
+create type public.crm_notification_kind as enum ('info', 'warning', 'success', 'danger');
 
-create type crm.actor_source as enum ('user', 'system', 'automation', 'brain');
+create type public.crm_actor_source as enum ('user', 'system', 'automation', 'brain');
 
 commit;

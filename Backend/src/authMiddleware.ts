@@ -3,7 +3,8 @@ import { pool } from "./db.js";
 import { supabaseAdmin } from "./supabaseAdmin.js";
 import { AuthenticationError, ForbiddenError, NotFoundError } from "./errors.js";
 import { asyncHandler } from "./asyncHandler.js";
-import { getProfile } from "./services/profiles.service.js";
+import { resolveActor } from "./services/profiles.service.js";
+import { ownsOrMemberOfProjectSql } from "./services/platform-sync.service.js";
 
 /** The authenticated CRM user (admin or salesperson) for the lifetime of one request. */
 export interface Actor {
@@ -27,8 +28,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * Establishes the CRM user for a request:
  *  1. Verify the bearer token against the shared Supabase Auth (never trust a
  *     client-supplied user id).
- *  2. Require an active crm.profiles row. A valid platform/brain account without
- *     one has no CRM access (403), and neither has a deactivated one.
+ *  2. Resolve CRM access from the platform (resolveActor): an admin is a crm_profiles row; everyone
+ *     else gets salesperson access if they own or belong to any platform project. No access → 403,
+ *     and a deactivated crm_profiles row → 403.
  */
 export const requireAuth = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
   if (req.actor) {
@@ -47,21 +49,15 @@ export const requireAuth = asyncHandler(async (req: Request, _res: Response, nex
     throw new AuthenticationError("Invalid or expired session.");
   }
 
-  const profile = await getProfile(pool, data.user.id);
-  if (!profile) {
-    throw new ForbiddenError("This account has no CRM access.");
-  }
-  if (!profile.active) {
+  const resolved = await resolveActor(pool, data.user.id);
+  if (resolved.status === "deactivated") {
     throw new ForbiddenError("This account has been deactivated.");
   }
+  if (resolved.status !== "ok") {
+    throw new ForbiddenError("This account has no CRM access.");
+  }
 
-  req.actor = {
-    id: profile.id,
-    fullName: profile.name,
-    email: profile.email,
-    isActive: profile.active,
-    role: profile.role,
-  };
+  req.actor = resolved.actor;
   next();
 });
 
@@ -84,18 +80,21 @@ export function requireCrmUser(req: Request, _res: Response, next: NextFunction)
 
 /**
  * Resolves the workspace from the `X-Workspace-Id` header. It must be active.
- * Admins may use any workspace; salespeople only those they are members of.
- * Must run after requireAuth + requireCrmUser.
+ * Admins may use any workspace; everyone else only those whose platform project they own or are a
+ * member of (revenueos_project_members). Must run after requireAuth + requireCrmUser.
  */
 export const requireWorkspace = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
   const header = req.header("x-workspace-id");
   if (!header || !UUID_RE.test(header)) {
     throw new NotFoundError("Workspace");
   }
-  const result = await pool.query<{ id: string; is_member: boolean }>(
+  // Access comes from the platform project (owner or member). crm_workspace_members is kept only as
+  // a secondary path for legacy rows; nothing writes it any more, so it is empty in production.
+  const result = await pool.query<{ id: string; has_access: boolean }>(
     `select w.id,
-            exists (select 1 from crm.workspace_members m where m.workspace_id = w.id and m.user_id = $2) as is_member
-       from crm.workspaces w
+            ((w.platform_project_id is not null and ${ownsOrMemberOfProjectSql("w.platform_project_id", "$2")})
+             or exists (select 1 from crm_workspace_members m where m.workspace_id = w.id and m.user_id = $2)) as has_access
+       from crm_workspaces w
       where w.id = $1 and w.is_active = true`,
     [header, req.actor!.id],
   );
@@ -103,8 +102,8 @@ export const requireWorkspace = asyncHandler(async (req: Request, _res: Response
   if (!workspace) {
     throw new NotFoundError("Workspace");
   }
-  if (req.actor!.role !== "admin" && !workspace.is_member) {
-    throw new ForbiddenError("You are not a member of this workspace.");
+  if (req.actor!.role !== "admin" && !workspace.has_access) {
+    throw new ForbiddenError("You do not have access to this workspace.");
   }
   req.workspaceId = workspace.id;
   next();

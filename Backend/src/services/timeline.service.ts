@@ -36,7 +36,7 @@ export interface AddTimelineEventInput {
  */
 export async function addTimelineEvent(db: Queryable, input: AddTimelineEventInput) {
   await db.query(
-    `insert into crm.timeline_events
+    `insert into crm_timeline_events
       (workspace_id, company_id, contact_id, deal_id, occurred_at, event_kind, title, detail,
        actor_id, actor_name, actor_source, related_task_id, related_meeting_id, related_proposal_id,
        related_call_id, related_workflow_run_id, metadata, external_source, external_id)
@@ -44,9 +44,9 @@ export async function addTimelineEvent(db: Queryable, input: AddTimelineEventInp
             co.id, coalesce(c.id, d.contact_id), d.id,
             coalesce($4, now()), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
        from (select 1) one
-       left join crm.deals d on d.id = $3
-       left join crm.contacts c on c.id = $2
-       left join crm.companies co on co.id = $1`,
+       left join crm_deals d on d.id = $3
+       left join crm_contacts c on c.id = $2
+       left join crm_companies co on co.id = $1`,
     [
       input.companyId ?? null,
       input.contactId ?? null,
@@ -95,7 +95,7 @@ export interface TimelineInsertRow {
 export async function insertTimelineRows(db: Queryable, workspaceId: string, actor: EventActor, rows: TimelineInsertRow[]) {
   if (!rows.length) return;
   await db.query(
-    `insert into crm.timeline_events (workspace_id, company_id, contact_id, occurred_at, event_kind, title, detail, actor_id, actor_name, actor_source, related_call_id)
+    `insert into crm_timeline_events (workspace_id, company_id, contact_id, occurred_at, event_kind, title, detail, actor_id, actor_name, actor_source, related_call_id)
      select $1, x.company_id, x.contact_id, coalesce(x.occurred_at, now()), x.event_kind, x.title, x.detail, $2, $3, $4, x.related_call_id
        from jsonb_to_recordset($5::jsonb) as x(company_id uuid, contact_id uuid, occurred_at timestamptz, event_kind text, title text, detail text, related_call_id uuid)`,
     [workspaceId, actor.actorId ?? null, actor.actorName, actor.actorSource, JSON.stringify(rows)],
@@ -161,7 +161,7 @@ export interface TimelineQuery {
 export async function listTimeline(db: Queryable, workspaceId: string, q: TimelineQuery) {
   const [column, value] = q.dealId ? ["deal_id", q.dealId] : q.contactId ? ["contact_id", q.contactId] : ["company_id", q.companyId];
   const result = await db.query<TimelineRow>(
-    `select * from crm.timeline_events
+    `select * from crm_timeline_events
       where workspace_id = $1 and ${column} = $2
       order by occurred_at desc, created_at desc
       limit $3 offset $4`,

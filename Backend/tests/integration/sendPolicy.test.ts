@@ -45,7 +45,7 @@ describe("send policies (PGlite)", () => {
   const newContact = async () => (await api("post", "/contacts", { firstName: "Asha", email: `asha${++n}@acme.com` })).body.id as string;
   const check = (at: Date, channel: "email" | "whatsapp" = "email", contact = contactId, random = () => 0.5) =>
     db.withTransaction((c) => policy.checkSendPolicy(c, { workspaceId: ws, channel, contactId: contact }, at, random));
-  const setPolicy = (sets: string, channel = "email") => seed.query(`update crm.send_policies set ${sets} where workspace_id = $1 and channel = $2`, [ws, channel]);
+  const setPolicy = (sets: string, channel = "email") => seed.query(`update crm_send_policies set ${sets} where workspace_id = $1 and channel = $2`, [ws, channel]);
 
   beforeAll(async () => {
     testDb = await startTestDb();
@@ -56,12 +56,12 @@ describe("send policies (PGlite)", () => {
     policy = await import("../../src/services/send-policy.service.js");
     sam = (await seed.query(`insert into auth.users (email) values ('sam@x.com') returning id`)).rows[0].id;
     await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, 'Sam', 'sam@x.com')`, [sam]);
-    await seed.query(`insert into crm.profiles (id, role) values ($1, 'salesperson')`, [sam]);
+    await seed.query(`insert into crm_profiles (id, role) values ($1, 'salesperson')`, [sam]);
     admin = (await seed.query(`insert into auth.users (email) values ('admin@x.com') returning id`)).rows[0].id;
     await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, 'Asha', 'admin@x.com')`, [admin]);
-    await seed.query(`insert into crm.profiles (id, role) values ($1, 'admin')`, [admin]);
-    ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sam]);
+    await seed.query(`insert into crm_profiles (id, role) values ($1, 'admin')`, [admin]);
+    ws = (await seed.query(`insert into crm_workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sam]);
     contactId = (await api("post", "/contacts", { firstName: "Ravi", email: "ravi@acme.com", phone: "+919876543210" })).body.id;
   }, 60_000);
 
@@ -71,12 +71,12 @@ describe("send policies (PGlite)", () => {
     await testDb?.stop();
   });
 
-  beforeEach(() => seed.query(`delete from crm.send_policies`));
+  beforeEach(() => seed.query(`delete from crm_send_policies`));
 
   it("creates each channel's row with its defaults on first use", async () => {
     await db.withTransaction((c) => policy.getSendPolicy(c, ws, "email"));
     await db.withTransaction((c) => policy.getSendPolicy(c, ws, "whatsapp"));
-    const rows = (await seed.query(`select channel, daily_cap, ramp_start, ramp_step_per_day, min_gap_seconds, max_gap_seconds, window_days from crm.send_policies order by channel`)).rows;
+    const rows = (await seed.query(`select channel, daily_cap, ramp_start, ramp_step_per_day, min_gap_seconds, max_gap_seconds, window_days from crm_send_policies order by channel`)).rows;
     expect(rows).toEqual([
       { channel: "email", daily_cap: 50, ramp_start: 20, ramp_step_per_day: 5, min_gap_seconds: 60, max_gap_seconds: 180, window_days: [1, 2, 3, 4, 5] },
       { channel: "whatsapp", daily_cap: 60, ramp_start: 20, ramp_step_per_day: 5, min_gap_seconds: 45, max_gap_seconds: 120, window_days: [1, 2, 3, 4, 5] },
@@ -88,7 +88,7 @@ describe("send policies (PGlite)", () => {
     await setPolicy(`paused = true, pause_reason = 'Bounce rate 4%', next_send_at = null`);
     const at = ist("2026-10-19T11:00:00");
     expect(await check(at)).toEqual({ ok: false, kind: "defer", reason: "Email sending is paused: Bounce rate 4%", retryAt: new Date(at.getTime() + 3_600_000) });
-    expect((await one(`select sent_today from crm.send_policies where channel = 'email'`)).sent_today).toBe(1);
+    expect((await one(`select sent_today from crm_send_policies where channel = 'email'`)).sent_today).toBe(1);
   });
 
   it("working hours (IST, weekdays): defers to the next window opening", async () => {
@@ -115,7 +115,7 @@ describe("send policies (PGlite)", () => {
     expect(await check(tuesday)).toMatchObject({ kind: "defer", reason: "Email daily cap reached (25/25 today)." });
 
     // Friday's cap is reached late at night -> the next window is Monday.
-    await seed.query(`update crm.send_policies set ramp_started_at = $2, counter_day = '2026-10-23', sent_today = 50 where workspace_id = $1`, [ws, ist("2026-10-01T10:00:00")]);
+    await seed.query(`update crm_send_policies set ramp_started_at = $2, counter_day = '2026-10-23', sent_today = 50 where workspace_id = $1`, [ws, ist("2026-10-01T10:00:00")]);
     expect(await check(ist("2026-10-23T18:00:00"))).toMatchObject({ kind: "defer", reason: "Email daily cap reached (50/50 today).", retryAt: ist("2026-10-26T09:00:00") });
     expect(policy.capForDay({ daily_cap: 50, ramp_start: 20, ramp_step_per_day: 5, ramp_started_at: ist("2026-10-19T23:59:00") }, ist("2026-10-21T00:01:00"))).toBe(30);
   });
@@ -127,14 +127,14 @@ describe("send policies (PGlite)", () => {
     expect(await check(at, "whatsapp")).toMatchObject({ ok: false, kind: "defer", retryAt: next });
     expect(await check(new Date(next.getTime() - 1000), "whatsapp")).toMatchObject({ kind: "defer" });
     expect(await check(next, "whatsapp", contactId, () => 0)).toEqual({ ok: true });
-    expect((await one(`select next_send_at from crm.send_policies where channel = 'whatsapp'`)).next_send_at).toEqual(new Date(next.getTime() + 45_000));
+    expect((await one(`select next_send_at from crm_send_policies where channel = 'whatsapp'`)).next_send_at).toEqual(new Date(next.getTime() + 45_000));
   });
 
   it("consent comes last: a DNC contact is a skip and uses no slot", async () => {
     const dnc = await newContact();
     expect((await api("post", "/contacts/bulk", { action: "dnc", ids: [dnc], reason: "Asked" })).status).toBe(200);
     expect(await check(ist("2026-10-19T10:00:00"), "email", dnc)).toEqual({ ok: false, kind: "skip", reason: "Contact is Do Not Contact." });
-    expect((await one(`select sent_today, next_send_at from crm.send_policies where channel = 'email'`))).toEqual({ sent_today: 0, next_send_at: null });
+    expect((await one(`select sent_today, next_send_at from crm_send_policies where channel = 'email'`))).toEqual({ sent_today: 0, next_send_at: null });
   });
 
   it("worker: a send over the policy is deferred with its reason (provider never called); allowed, it sends and counts", async () => {
@@ -150,17 +150,17 @@ describe("send policies (PGlite)", () => {
     await db.withTransaction((c) => policy.getSendPolicy(c, ws, "email"));
     await setPolicy(`paused = true, pause_reason = 'Checked by hand'`);
     await runner.runAutomationTick(opts);
-    const action = await one(`select status, last_error, scheduled_for, attempt_count from crm.scheduled_actions where deal_id = $1`, [deal]);
+    const action = await one(`select status, last_error, scheduled_for, attempt_count from crm_scheduled_actions where deal_id = $1`, [deal]);
     expect(action).toMatchObject({ status: "pending", last_error: "Email sending is paused: Checked by hand", attempt_count: 0 });
     expect(action.scheduled_for.getTime()).toBeGreaterThan(Date.now() + 55 * 60_000);
     expect(sendEmail).not.toHaveBeenCalled();
 
     await setPolicy(`paused = false, pause_reason = null, window_start = '00:00', window_end = '24:00', window_days = '{1,2,3,4,5,6,7}'`);
-    await seed.query(`update crm.scheduled_actions set scheduled_for = now() where deal_id = $1`, [deal]);
+    await seed.query(`update crm_scheduled_actions set scheduled_for = now() where deal_id = $1`, [deal]);
     await runner.runAutomationTick(opts);
     expect(sendEmail).toHaveBeenCalledTimes(1);
-    expect(await one(`select status from crm.scheduled_actions where deal_id = $1`, [deal])).toEqual({ status: "completed" });
-    expect((await one(`select sent_today from crm.send_policies where channel = 'email'`)).sent_today).toBe(1);
+    expect(await one(`select status from crm_scheduled_actions where deal_id = $1`, [deal])).toEqual({ status: "completed" });
+    expect((await one(`select sent_today from crm_send_policies where channel = 'email'`)).sent_today).toBe(1);
   });
 
   describe("admin Sending API (step 12)", () => {
@@ -184,7 +184,7 @@ describe("send policies (PGlite)", () => {
       await setPolicy(`window_start = '00:00', window_end = '24:00', window_days = '{1,2,3,4,5,6,7}', min_gap_seconds = 0, max_gap_seconds = 0`);
       await check(new Date());
       await check(new Date());
-      await seed.query(`update crm.send_policies set ramp_started_at = now() - interval '2 days' where channel = 'email'`);
+      await seed.query(`update crm_send_policies set ramp_started_at = now() - interval '2 days' where channel = 'email'`);
       expect((await as(admin, "get", `/${ws}`)).body.email).toMatchObject({ sentToday: 2, rampDay: 3, todayCap: 30 });
     });
 
@@ -218,12 +218,12 @@ describe("send policies (PGlite)", () => {
       expect(paused.body).toMatchObject({ paused: true, pauseReason: "New domain warming up", pausedAt: expect.any(String) });
       expect(await check(new Date())).toMatchObject({ ok: false, reason: "Email sending is paused: New domain warming up" });
 
-      await seed.query(`update crm.send_policies set ramp_started_at = now() - interval '5 days' where channel = 'email'`);
+      await seed.query(`update crm_send_policies set ramp_started_at = now() - interval '5 days' where channel = 'email'`);
       const resumed = await as(admin, "patch", `/${ws}/email`, { paused: false, restartRamp: true });
       expect(resumed.body).toMatchObject({ paused: false, pauseReason: null, pausedAt: null, rampStartedAt: null, rampDay: null, todayCap: 30 });
-      expect((await one(`select updated_by from crm.send_policies where channel = 'email'`)).updated_by).toBe(admin);
+      expect((await one(`select updated_by from crm_send_policies where channel = 'email'`)).updated_by).toBe(admin);
 
-      const audits = (await seed.query(`select action, target_id, metadata from crm.admin_audit_events where action like 'sending.%' order by created_at`)).rows;
+      const audits = (await seed.query(`select action, target_id, metadata from crm_admin_audit_events where action like 'sending.%' order by created_at`)).rows;
       expect(audits.map((a) => a.action)).toEqual(["sending.email.update", "sending.email.update", "sending.email.update"]);
       expect(audits[2]).toMatchObject({ target_id: ws, metadata: { paused: false, restartRamp: true } });
     });

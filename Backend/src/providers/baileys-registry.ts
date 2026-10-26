@@ -23,9 +23,13 @@ class BaileysManagerRegistry {
 
     const startPromise = (async () => {
       const manager = new BaileysManager(workspaceId);
-      await manager.start();
+      try {
+        await manager.start();
+      } finally {
+        // A failed start is retried at the next workspace scan instead of staying "starting" forever.
+        this.starting.delete(workspaceId);
+      }
       this.managers.set(workspaceId, manager);
-      this.starting.delete(workspaceId);
       return manager;
     })();
     this.starting.set(workspaceId, startPromise);
@@ -46,7 +50,7 @@ class BaileysManagerRegistry {
    * advisory lock) are logged and skipped rather than failing the others.
    */
   async ensureManagersForAllActiveWorkspaces(): Promise<void> {
-    const result = await pool.query<{ id: string }>(`select id from crm.workspaces where is_active = true`);
+    const result = await pool.query<{ id: string }>(`select id from crm_workspaces where is_active = true`);
     await Promise.all(
       result.rows.map(async (row) => {
         if (this.managers.has(row.id) || this.starting.has(row.id)) return;

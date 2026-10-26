@@ -73,12 +73,12 @@ export interface DealRow {
 }
 
 /** Replaces the old lead_next_actions view: one lateral lookup of the earliest open task. */
-const DEAL_FROM = `from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id`;
+const DEAL_FROM = `from crm_deals d join crm_contacts c on c.id = d.contact_id left join crm_companies co on co.id = d.company_id`;
 /** The deal's next action: its earliest open task. */
 const NEXT_TASK_JOIN = `
     left join lateral (
       select t.id, t.task_type, t.title, t.due_at, t.owner_id, t.origin
-        from crm.tasks t
+        from crm_tasks t
        where t.deal_id = d.id and t.status = 'open'
        order by t.due_at
        limit 1
@@ -156,7 +156,7 @@ export async function getDealOr404(db: Queryable, workspaceId: string, id: strin
 const eventActor = toEventActor;
 
 function openDealConflict(err: unknown): never {
-  if (isUniqueViolation(err, "deals_one_open_per_contact")) {
+  if (isUniqueViolation(err, "crm_deals_one_open_per_contact")) {
     throw new ConflictError("This contact already has an open deal.", { reason: "open_deal_exists" });
   }
   throw err;
@@ -180,7 +180,7 @@ export interface CreateDealInput {
 export async function createDeal(db: Queryable, actor: Actor | EventActor | null, workspaceId: string, input: CreateDealInput): Promise<DealRow> {
   const user = actor && "fullName" in actor ? actor : null;
   const contact = await db.query<{ status: ContactStatus; company_id: string | null; owner_id: string | null }>(
-    `select status, company_id, owner_id from crm.contacts where id = $1 and workspace_id = $2`,
+    `select status, company_id, owner_id from crm_contacts where id = $1 and workspace_id = $2`,
     [input.contactId, workspaceId],
   );
   const c = contact.rows[0];
@@ -188,7 +188,7 @@ export async function createDeal(db: Queryable, actor: Actor | EventActor | null
   if (c.status === "merged") throw new ConflictError("This contact was merged into another contact.");
   if (input.stage) assertValidPipelineStage(input.stage);
   // Name the open deal so the UI can link to it (the unique index still guards races).
-  const open = await db.query<{ id: string }>(`select id from crm.deals where contact_id = $1 and outcome = 'open'`, [input.contactId]);
+  const open = await db.query<{ id: string }>(`select id from crm_deals where contact_id = $1 and outcome = 'open'`, [input.contactId]);
   if (open.rows[0]) {
     throw new ConflictError("This contact already has an open deal.", { reason: "open_deal_exists", dealId: open.rows[0].id });
   }
@@ -196,7 +196,7 @@ export async function createDeal(db: Queryable, actor: Actor | EventActor | null
   const ownerId = input.ownerId !== undefined ? input.ownerId : c.owner_id ?? (user?.role === "salesperson" ? user.id : null);
   const id = await db
     .query<{ id: string }>(
-      `insert into crm.deals (workspace_id, contact_id, company_id, owner_id, stage, service_interest, created_by)
+      `insert into crm_deals (workspace_id, contact_id, company_id, owner_id, stage, service_interest, created_by)
        values ($1, $2, $3, $4, $5, $6, $7) returning id`,
       [workspaceId, input.contactId, c.company_id, ownerId, input.stage ?? "new", input.serviceInterest?.trim() || null, user?.id ?? null],
     )
@@ -247,7 +247,7 @@ function dealFilter(workspaceId: string, f: Omit<ListDealsFilters, "sort" | "lim
   if (f.contactId) where.push(`d.contact_id = $${params.push(f.contactId)}`);
   if (f.companyId) where.push(`d.company_id = $${params.push(f.companyId)}`);
   // No next action = no open task (NEXT_TASK_JOIN's na.id is null).
-  if (f.missingNextAction) where.push(`d.outcome = 'open' and not exists (select 1 from crm.tasks t where t.deal_id = d.id and t.status = 'open')`);
+  if (f.missingNextAction) where.push(`d.outcome = 'open' and not exists (select 1 from crm_tasks t where t.deal_id = d.id and t.status = 'open')`);
   if (f.search) {
     const p = `$${params.push(`%${f.search}%`)}`;
     // Full name too, so "Ann Lee" finds Ann Lee's deals.
@@ -336,7 +336,7 @@ export async function updateDeal(db: Queryable, actor: Actor | null, workspaceId
   if (patch.stage) {
     assertValidPipelineStage(patch.stage);
     assertPipelineStageEditable(current.outcome);
-    // deals_objection_stage_has_type: the objection type comes from call routing.
+    // crm_deals_objection_stage_has_type: the objection type comes from call routing.
     if (patch.stage === "objection_nurture" && !(patch.objectionType ?? current.objection_type)) {
       throw new InvalidTransitionError("Objection Nurture needs an objection type. Log a call with the objection outcome instead.");
     }
@@ -362,7 +362,7 @@ export async function updateDeal(db: Queryable, actor: Actor | null, workspaceId
     ([key, value]) => value !== undefined && key !== "amount" && key !== "ownerId",
   );
   await db.query(
-    `update crm.deals set ${sets.join(", ")}${activity ? ", last_activity_at = now()" : ""} where id = $${params.push(id)}`,
+    `update crm_deals set ${sets.join(", ")}${activity ? ", last_activity_at = now()" : ""} where id = $${params.push(id)}`,
     params,
   );
 
@@ -380,7 +380,7 @@ export async function updateDeal(db: Queryable, actor: Actor | null, workspaceId
 export async function deleteDeal(db: Queryable, actor: Actor, workspaceId: string, id: string) {
   const deal = await getDealOr404(db, workspaceId, id);
   await writeDeletedAudit(db, actor, workspaceId, "deal", id, dealToDto(deal));
-  await db.query(`delete from crm.deals where id = $1`, [id]);
+  await db.query(`delete from crm_deals where id = $1`, [id]);
 }
 
 // --- Automation ---------------------------------------------------------------------------
@@ -395,7 +395,7 @@ export async function setAutomationMode(db: Queryable, actor: Actor, workspaceId
   if (!canRunAutomation(current.outcome, current.contact_status)) {
     throw new ConflictError(`Cannot change automation: the deal is "${current.outcome}" and the contact is "${current.contact_status}" (automation stays stopped).`);
   }
-  await db.query(`update crm.deals set automation_mode = $2, last_activity_at = now() where id = $1`, [id, mode]);
+  await db.query(`update crm_deals set automation_mode = $2, last_activity_at = now() where id = $1`, [id, mode]);
   const title = mode === "active" ? "Automation Resumed" : mode === "paused" ? "Automation Paused" : mode === "stopped" ? "Automation Stopped" : "Switched to Manual";
   await addTimelineEvent(db, { dealId: id, kind: "automation", title, detail: reason, ...actorEvent(actor) });
   await applyAutomationModeToRuns(db, id, mode, reason ?? `Deal automation set to ${mode}`);
@@ -419,7 +419,7 @@ async function setOutcome(
   const current = await getDealOr404(db, workspaceId, id);
   if (current.outcome === outcome) return current;
   await db.query(
-    `update crm.deals
+    `update crm_deals
         set outcome = $2, loss_reason = coalesce($3, loss_reason), loss_notes = coalesce($4, loss_notes), last_activity_at = now()
       where id = $1`,
     [id, outcome, extra.loss_reason ?? null, extra.loss_notes ?? null],
@@ -432,7 +432,7 @@ async function setOutcome(
 export const markWon = (db: Queryable, actor: Actor | null, workspaceId: string, id: string, reason?: string) =>
   setOutcome(db, actor, workspaceId, id, "won", "Won", reason);
 
-/** A loss reason is required (also enforced by deals_lost_has_reason). */
+/** A loss reason is required (also enforced by crm_deals_lost_has_reason). */
 export const markLost = (db: Queryable, actor: Actor, workspaceId: string, id: string, lossReason: LeadLossReason, notes?: string) =>
   setOutcome(db, actor, workspaceId, id, "lost", "Lost", notes ?? lossReason, { loss_reason: lossReason, loss_notes: notes?.trim() || null });
 
@@ -449,7 +449,7 @@ export async function reopenDeal(db: Queryable, actor: Actor, workspaceId: strin
   if (current.outcome === "open") return current;
   if (current.contact_status === "merged") throw new ConflictError("This deal's contact was merged into another contact.");
   await db
-    .query(`update crm.deals set outcome = 'open', automation_mode = 'manual', last_activity_at = now() where id = $1`, [id])
+    .query(`update crm_deals set outcome = 'open', automation_mode = 'manual', last_activity_at = now() where id = $1`, [id])
     .catch(openDealConflict);
   await addTimelineEvent(db, { dealId: id, kind: "system", title: "Reopened", detail: reason ?? null, ...actorEvent(actor) });
   return getDealOr404(db, workspaceId, id);

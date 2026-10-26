@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@supabase/supabase-js", () => ({
-  createClient: vi.fn(() => ({})),
+vi.mock("@supabase/ssr", () => ({
+  createBrowserClient: vi.fn(() => ({})),
 }));
 
 async function loadWithApiBaseUrl(value: string) {
@@ -24,6 +24,8 @@ describe("backendBaseUrl", () => {
     ["https://api.example.com/api/", "https://api.example.com"],
     ["https://api.example.com/api/v1", "https://api.example.com"],
     ["https://api.example.com/api/v1/", "https://api.example.com"],
+    // Same-origin path (CRM served under /crm, API proxied at /crm-api) is kept as-is.
+    ["/crm-api", "/crm-api"],
   ])("normalizes %s to %s", async (input, expected) => {
     const { backendBaseUrl } = await loadWithApiBaseUrl(input);
     expect(backendBaseUrl).toBe(expected);

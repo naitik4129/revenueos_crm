@@ -29,9 +29,9 @@ export interface CompanyRow {
 
 const COMPANY_SELECT = `
   select co.*, ${userNameSql("co.owner_id")} as owner_name,
-         (select count(*)::int from crm.contacts c where c.company_id = co.id and c.status <> 'merged') as contact_count,
-         (select count(*)::int from crm.deals d where d.company_id = co.id and d.outcome = 'open') as open_deal_count
-    from crm.companies co`;
+         (select count(*)::int from crm_contacts c where c.company_id = co.id and c.status <> 'merged') as contact_count,
+         (select count(*)::int from crm_deals d where d.company_id = co.id and d.outcome = 'open') as open_deal_count
+    from crm_companies co`;
 
 export function companyToDto(row: CompanyRow) {
   return {
@@ -102,9 +102,9 @@ export const COMPANY_SORTS: Record<string, string[]> = {
   created: ["co.created_at"],
 };
 const COUNT_JOINS: Record<string, string> = {
-  contacts: `left join (select company_id, count(*)::int as n from crm.contacts
+  contacts: `left join (select company_id, count(*)::int as n from crm_contacts
                          where workspace_id = $1 and company_id is not null and status <> 'merged' group by company_id) cc on cc.company_id = co.id`,
-  openDeals: `left join (select company_id, count(*)::int as n from crm.deals
+  openDeals: `left join (select company_id, count(*)::int as n from crm_deals
                           where workspace_id = $1 and company_id is not null and outcome = 'open' group by company_id) od on od.company_id = co.id`,
 };
 
@@ -133,7 +133,7 @@ export async function listCompanies(db: Queryable, workspaceId: string, f: ListC
   const { rows, total } = await pageOf<CompanyRow>(db, {
     select: COMPANY_SELECT,
     idColumn: "co.id",
-    from: `from crm.companies co ${countJoin ?? ""}`,
+    from: `from crm_companies co ${countJoin ?? ""}`,
     where: where.join(" and "),
     order: orderBySql(f.sort, COMPANY_SORTS, "co.name asc", "co.id"),
     params,
@@ -146,7 +146,7 @@ export async function listCompanies(db: Queryable, workspaceId: string, f: ListC
 /** Distinct industries in the workspace (case-insensitive), for the list filter. */
 export async function listIndustries(db: Queryable, workspaceId: string) {
   const result = await db.query<{ industry: string }>(
-    `select min(industry) as industry from crm.companies
+    `select min(industry) as industry from crm_companies
       where workspace_id = $1 and nullif(trim(industry), '') is not null
       group by lower(trim(industry)) order by 1`,
     [workspaceId],
@@ -163,7 +163,7 @@ function validSource(source: string | null | undefined): LeadSource | null {
 }
 
 function domainConflict(err: unknown): never {
-  if (isUniqueViolation(err, "companies_workspace_domain_key")) {
+  if (isUniqueViolation(err, "crm_companies_workspace_domain_key")) {
     throw new ConflictError("A company with this domain already exists in this workspace.", { field: "domain" });
   }
   throw err;
@@ -176,7 +176,7 @@ export async function createCompany(db: Queryable, actor: Actor | null, workspac
 
   const id = await db
     .query<{ id: string }>(
-      `insert into crm.companies
+      `insert into crm_companies
         (workspace_id, name, domain, website, industry, phone, city, country, location, headcount, linkedin_url, owner_id, source, created_by)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
       [
@@ -225,7 +225,7 @@ export async function updateCompany(db: Queryable, actor: Actor, workspaceId: st
   if (patch.source !== undefined) set("source", validSource(patch.source));
   if (sets.length === 0) return getCompanyOr404(db, workspaceId, id);
 
-  await db.query(`update crm.companies set ${sets.join(", ")} where id = $${params.push(id)}`, params).catch(domainConflict);
+  await db.query(`update crm_companies set ${sets.join(", ")} where id = $${params.push(id)}`, params).catch(domainConflict);
   await addTimelineEvent(db, { companyId: id, kind: "system", title: "Company Updated", ...actorEvent(actor) });
   return getCompanyOr404(db, workspaceId, id);
 }
@@ -234,7 +234,7 @@ export async function updateCompany(db: Queryable, actor: Actor, workspaceId: st
 export async function deleteCompany(db: Queryable, actor: Actor, workspaceId: string, id: string) {
   const company = await getCompanyOr404(db, workspaceId, id);
   await writeDeletedAudit(db, actor, workspaceId, "company", id, companyToDto(company));
-  await db.query(`delete from crm.companies where id = $1`, [id]);
+  await db.query(`delete from crm_companies where id = $1`, [id]);
 }
 
 export async function writeDeletedAudit(
@@ -246,7 +246,7 @@ export async function writeDeletedAudit(
   snapshot: unknown,
 ) {
   await db.query(
-    `insert into crm.deleted_records_audit (workspace_id, entity_type, entity_id, snapshot, deleted_by, deleted_by_name)
+    `insert into crm_deleted_records_audit (workspace_id, entity_type, entity_id, snapshot, deleted_by, deleted_by_name)
      values ($1, $2, $3, $4, $5, $6)`,
     [workspaceId, entityType, entityId, JSON.stringify(snapshot), actor.id, actor.fullName],
   );

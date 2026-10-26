@@ -43,7 +43,7 @@ interface MeetingForSync {
 
 async function getMeetingForSync(meetingId: string): Promise<MeetingForSync | undefined> {
   const result = await pool.query<MeetingForSync>(
-    `select id, workspace_id, deal_id, title, scheduled_at, duration_minutes, calendar_event_id from crm.meetings where id = $1`,
+    `select id, workspace_id, deal_id, title, scheduled_at, duration_minutes, calendar_event_id from crm_meetings where id = $1`,
     [meetingId],
   );
   return result.rows[0];
@@ -51,7 +51,7 @@ async function getMeetingForSync(meetingId: string): Promise<MeetingForSync | un
 
 async function getMeetingParticipants(meetingId: string): Promise<{ name: string | null; email: string }[]> {
   const result = await pool.query<{ name: string | null; email: string }>(
-    `select name, email from crm.meeting_participants where meeting_id = $1`,
+    `select name, email from crm_meeting_participants where meeting_id = $1`,
     [meetingId],
   );
   return result.rows;
@@ -71,7 +71,7 @@ export async function syncMeetingCreated(meetingId: string): Promise<void> {
 
   const { row: connection, refreshToken, oauthConfig } = await loadGoogleCalendarConnection(meeting.workspace_id);
   if (connection.status !== "connected" || !refreshToken || !oauthConfig) {
-    await pool.query(`update crm.meetings set calendar_sync_status = 'not_applicable' where id = $1`, [meetingId]);
+    await pool.query(`update crm_meetings set calendar_sync_status = 'not_applicable' where id = $1`, [meetingId]);
     return;
   }
 
@@ -98,14 +98,14 @@ export async function syncMeetingCreated(meetingId: string): Promise<void> {
       attendees,
     });
     await pool.query(
-      `update crm.meetings
+      `update crm_meetings
           set calendar_event_id = $2, meet_link = $3, calendar_sync_status = 'synced', calendar_sync_error = null
         where id = $1`,
       [meetingId, result.eventId, result.meetLink],
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to sync meeting to Google Calendar.";
-    await pool.query(`update crm.meetings set calendar_sync_status = 'failed', calendar_sync_error = $2 where id = $1`, [meetingId, message]);
+    await pool.query(`update crm_meetings set calendar_sync_status = 'failed', calendar_sync_error = $2 where id = $1`, [meetingId, message]);
     await flagReauthIfRevoked(meeting.workspace_id, error);
   }
 }
@@ -130,10 +130,10 @@ export async function syncMeetingRescheduled(meetingId: string): Promise<void> {
       endIso,
       timeZone: MEETING_TIME_ZONE,
     });
-    await pool.query(`update crm.meetings set calendar_sync_status = 'synced', calendar_sync_error = null where id = $1`, [meetingId]);
+    await pool.query(`update crm_meetings set calendar_sync_status = 'synced', calendar_sync_error = null where id = $1`, [meetingId]);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to update the Google Calendar event.";
-    await pool.query(`update crm.meetings set calendar_sync_status = 'failed', calendar_sync_error = $2 where id = $1`, [meetingId, message]);
+    await pool.query(`update crm_meetings set calendar_sync_status = 'failed', calendar_sync_error = $2 where id = $1`, [meetingId, message]);
     await flagReauthIfRevoked(meeting.workspace_id, error);
   }
 }
@@ -150,7 +150,7 @@ export async function syncMeetingCancelled(meetingId: string): Promise<void> {
     await deleteCalendarEvent({ oauth: oauthConfig, calendarId: connection.connected_calendar_id, refreshToken, eventId: meeting.calendar_event_id });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to delete the Google Calendar event.";
-    await pool.query(`update crm.meetings set calendar_sync_error = $2 where id = $1`, [meetingId, message]);
+    await pool.query(`update crm_meetings set calendar_sync_error = $2 where id = $1`, [meetingId, message]);
     await flagReauthIfRevoked(meeting.workspace_id, error);
   }
 }

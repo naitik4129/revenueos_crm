@@ -4,14 +4,14 @@ The trusted business layer of the v2 CRM. The system overview is in
 [`../CONTEXT.md`](../CONTEXT.md); rules and decisions are in [`../CLAUDE.md`](../CLAUDE.md).
 
 ```
-Frontend / RevenueOS brain  →  Backend (this)  →  Supabase Postgres (schema crm) + Auth + Storage
+Frontend / RevenueOS brain  →  Backend (this)  →  Supabase Postgres (public.crm_* tables) + Auth + Storage
 Worker (src/worker.ts)      →  Email (Resend/SMTP), WhatsApp (Baileys), Google Calendar
 ```
 
 Node 22 + TypeScript (ESM) + Express + `pg` + `zod`. Auth identity comes from Supabase Auth
 (`supabase.auth.getUser(token)`); all CRM data goes through a direct Postgres connection, so
-multi-table writes (e.g. "log a call" touching `crm.calls`, `crm.deals`, `crm.tasks`,
-`crm.timeline_events`, `crm.workflow_runs`) run in one real transaction.
+multi-table writes (e.g. "log a call" touching `crm_calls`, `crm_deals`, `crm_tasks`,
+`crm_timeline_events`, `crm_workflow_runs`) run in one real transaction.
 
 ## Layout
 
@@ -20,7 +20,7 @@ src/
   env.ts / workerEnv.ts   zod-validated environment config (API / worker)
   db.ts                   pg Pool + withTransaction()
   supabaseAdmin.ts        server-only Supabase Auth/Storage client
-  authMiddleware.ts       token -> active crm.profiles row -> role; workspace access
+  authMiddleware.ts       token -> active crm_profiles row -> role; workspace access
   errors.ts / errorMiddleware.ts   typed AppError taxonomy -> JSON responses
   domain/                 pure rules, no I/O (enums, pipeline, call/meeting/proposal routing,
                           template renderer, phone/email normalisation)
@@ -37,14 +37,14 @@ demo/                     demo mode only; never built or shipped
 
 ## Database and access
 
-- Every CRM table and enum lives in schema **`crm`** in the shared RevenueOSDatabase Supabase
-  project. The backend never writes outside `crm`; it only reads `public.revenueos_profiles`
+- Every CRM table, enum and function lives in schema `public` with the prefix **`crm_`** in the
+  shared RevenueOSDatabase Supabase project. The backend never writes outside `crm_*`; it only reads `public.revenueos_profiles`
   (names, emails) and `public.revenueos_projects` (workspace links).
-- Backend and worker connect as role **`crm_app`** (created by `000_platform_grants.sql`, rights
-  on `crm` from `001`). It has `BYPASSRLS`: RLS is on for every `crm` table with no policies, and
-  this backend enforces access in code.
-- CRM access = an active **`crm.profiles`** row (`admin` or `salesperson`); a valid account
-  without one gets 403. Salespeople see only workspaces in `crm.workspace_members`; admins see
+- Backend and worker connect as role **`crm_app`** (created by `000_platform_grants.sql`, DML
+  on each `crm_*` table from `crm_secure_objects()` in `001`). It has `BYPASSRLS`: RLS is on for every `crm_*` table with no
+  policies, `anon`, `authenticated` and `service_role` have no rights on them, and this backend enforces access in code.
+- CRM access = an active **`crm_profiles`** row (`admin` or `salesperson`); a valid account
+  without one gets 403. Salespeople see only workspaces in `crm_workspace_members`; admins see
   all. The CRM never creates or changes auth accounts.
 
 ### Migrations (`../Supabase/migrations`, run by hand, in this order)
@@ -176,7 +176,7 @@ See `src/routes/*.ts` for the complete list.
 ### Automation execution
 
 `src/worker.ts` is a separate Node process (`npm run worker`) that calls the same service code
-in-process. Each tick it claims due `crm.scheduled_actions` (`SKIP LOCKED`), rechecks
+in-process. Each tick it claims due `crm_scheduled_actions` (`SKIP LOCKED`), rechecks
 eligibility (deal outcome, DNC, channel status, automation mode, reply state), renders the
 template, sends through the workspace's email connection or WhatsApp socket, records the result
 and schedules the next step (or retries with backoff). It also sends queued proposal and meeting
@@ -193,7 +193,7 @@ The person's account must already exist on the RevenueOS platform. Give it CRM a
 human runs this; the CRM never writes to `public.*`):
 
 ```sql
-insert into crm.profiles (id, role)
+insert into crm_profiles (id, role)
 select id, 'admin' from public.revenueos_profiles where lower(email) = lower('admin@example.com');
 ```
 

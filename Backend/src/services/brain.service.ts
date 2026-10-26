@@ -275,7 +275,7 @@ export function cleanContact(c: ContactData) {
 
 async function refTarget(db: Queryable, workspaceId: string, kind: "company" | "contact", source: string, id: string) {
   const r = await db.query<{ target: string }>(
-    `select ${kind}_id as target from crm.external_refs
+    `select ${kind}_id as target from crm_external_refs
       where workspace_id = $1 and source = $2 and external_id = $3 and ${kind}_id is not null`,
     [workspaceId, source, id],
   );
@@ -286,13 +286,13 @@ async function refTarget(db: Queryable, workspaceId: string, kind: "company" | "
 async function findContact(db: Queryable, workspaceId: string, c: ContactData, clean: ReturnType<typeof cleanContact>) {
   let id = c.source && c.externalId ? await refTarget(db, workspaceId, "contact", c.source, c.externalId) : null;
   if (!id && clean.email) {
-    id = (await db.query<{ id: string }>(`select id from crm.contacts where workspace_id = $1 and lower(email) = $2`, [workspaceId, clean.email])).rows[0]?.id ?? null;
+    id = (await db.query<{ id: string }>(`select id from crm_contacts where workspace_id = $1 and lower(email) = $2`, [workspaceId, clean.email])).rows[0]?.id ?? null;
   }
   if (!id && clean.phoneE164) {
-    id = (await db.query<{ id: string }>(`select id from crm.contacts where workspace_id = $1 and phone_e164 = $2`, [workspaceId, clean.phoneE164])).rows[0]?.id ?? null;
+    id = (await db.query<{ id: string }>(`select id from crm_contacts where workspace_id = $1 and phone_e164 = $2`, [workspaceId, clean.phoneE164])).rows[0]?.id ?? null;
   }
   for (let hops = 0; id && hops < 10; hops++) {
-    const row = (await db.query<{ merged_into_contact_id: string | null }>(`select merged_into_contact_id from crm.contacts where id = $1`, [id])).rows[0];
+    const row = (await db.query<{ merged_into_contact_id: string | null }>(`select merged_into_contact_id from crm_contacts where id = $1`, [id])).rows[0];
     if (!row?.merged_into_contact_id) break;
     id = row.merged_into_contact_id;
   }
@@ -301,7 +301,7 @@ async function findContact(db: Queryable, workspaceId: string, c: ContactData, c
 
 async function addRef(db: Queryable, workspaceId: string, kind: "company" | "contact", entityId: string, source: string, externalId: string) {
   await db.query(
-    `insert into crm.external_refs (workspace_id, ${kind}_id, source, external_id) values ($1, $2, $3, $4) on conflict do nothing`,
+    `insert into crm_external_refs (workspace_id, ${kind}_id, source, external_id) values ($1, $2, $3, $4) on conflict do nothing`,
     [workspaceId, entityId, source, externalId],
   );
 }
@@ -316,16 +316,16 @@ export async function upsertContact(db: Queryable, workspaceId: string, c: Conta
   if (id) {
     // Each field is filled only when empty; email/phone only when no other contact holds them.
     await db.query(
-      `update crm.contacts t set
+      `update crm_contacts t set
           first_name = case when t.first_name = 'Unknown' and $2::text is not null then $2 else t.first_name end,
           last_name = case when t.last_name = '' then coalesce($3, '') else t.last_name end,
           job_title = coalesce(t.job_title, $4),
           email = coalesce(t.email, case when not exists (
-            select 1 from crm.contacts o where o.workspace_id = t.workspace_id and lower(o.email) = $5) then $5 end),
+            select 1 from crm_contacts o where o.workspace_id = t.workspace_id and lower(o.email) = $5) then $5 end),
           phone = case when t.phone is null and $7::text is not null and not exists (
-            select 1 from crm.contacts o where o.workspace_id = t.workspace_id and o.phone_e164 = $7) then $6 else t.phone end,
+            select 1 from crm_contacts o where o.workspace_id = t.workspace_id and o.phone_e164 = $7) then $6 else t.phone end,
           phone_e164 = case when t.phone is null and $7::text is not null and not exists (
-            select 1 from crm.contacts o where o.workspace_id = t.workspace_id and o.phone_e164 = $7) then $7 else t.phone_e164 end,
+            select 1 from crm_contacts o where o.workspace_id = t.workspace_id and o.phone_e164 = $7) then $7 else t.phone_e164 end,
           linkedin_url = coalesce(t.linkedin_url, $8),
           country = coalesce(t.country, $9),
           location = coalesce(t.location, $10),
@@ -341,7 +341,7 @@ export async function upsertContact(db: Queryable, workspaceId: string, c: Conta
     }
     id = (
       await db.query<{ id: string }>(
-        `insert into crm.contacts
+        `insert into crm_contacts
           (workspace_id, company_id, first_name, last_name, job_title, email, phone, phone_e164, linkedin_url, country, location, source)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'brain') returning id`,
         [workspaceId, companyId, clean.firstName ?? "Unknown", clean.lastName ?? "", clean.jobTitle, clean.email, clean.phone, clean.phoneE164, clean.linkedinUrl, clean.country, clean.location],
@@ -360,16 +360,16 @@ export async function upsertCompany(db: Queryable, workspaceId: string, item: z.
   const domain = normalizeDomain(item.domain ?? item.website);
   let id = await refTarget(db, workspaceId, "company", item.source, item.externalId);
   if (!id && domain) {
-    id = (await db.query<{ id: string }>(`select id from crm.companies where workspace_id = $1 and lower(domain) = $2`, [workspaceId, domain])).rows[0]?.id ?? null;
+    id = (await db.query<{ id: string }>(`select id from crm_companies where workspace_id = $1 and lower(domain) = $2`, [workspaceId, domain])).rows[0]?.id ?? null;
   }
   let status: Status = "updated";
   const values = [item.website || null, item.industry || null, item.location || null, item.city || null, item.country || null, item.headcount ?? null, item.phone || null, item.linkedinUrl || null];
 
   if (id) {
     await db.query(
-      `update crm.companies t set
+      `update crm_companies t set
           domain = coalesce(t.domain, case when not exists (
-            select 1 from crm.companies o where o.workspace_id = t.workspace_id and lower(o.domain) = $2) then $2 end),
+            select 1 from crm_companies o where o.workspace_id = t.workspace_id and lower(o.domain) = $2) then $2 end),
           website = coalesce(t.website, $3), industry = coalesce(t.industry, $4), location = coalesce(t.location, $5),
           city = coalesce(t.city, $6), country = coalesce(t.country, $7), headcount = coalesce(t.headcount, $8),
           phone = coalesce(t.phone, $9), linkedin_url = coalesce(t.linkedin_url, $10)
@@ -379,7 +379,7 @@ export async function upsertCompany(db: Queryable, workspaceId: string, item: z.
   } else {
     id = (
       await db.query<{ id: string }>(
-        `insert into crm.companies
+        `insert into crm_companies
           (workspace_id, name, domain, website, industry, location, city, country, headcount, phone, linkedin_url, source)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'brain') returning id`,
         [workspaceId, item.name, domain, ...values],
@@ -397,20 +397,20 @@ export async function upsertCall(db: Queryable, workspaceId: string, item: z.inf
   const contact = await upsertContact(db, workspaceId, item.contact);
   const call = (
     await db.query<{ id: string; inserted: boolean }>(
-      `insert into crm.calls
+      `insert into crm_calls
         (workspace_id, contact_id, source, connected, direction, occurred_at, duration_seconds, ai_outcome,
          summary, sentiment, transcript, recording_url, external_source, external_id)
        values ($1, $2, 'ai', $3, $4, coalesce($5::timestamptz, now()), $6, $7, $8, $9, $10, $11, 'quickhowl', $12)
        on conflict (workspace_id, external_source, external_id) where external_id is not null
        do update set connected = excluded.connected,
-                     direction = coalesce(excluded.direction, calls.direction),
-                     occurred_at = case when $5::timestamptz is null then calls.occurred_at else excluded.occurred_at end,
-                     duration_seconds = coalesce(excluded.duration_seconds, calls.duration_seconds),
-                     ai_outcome = coalesce(excluded.ai_outcome, calls.ai_outcome),
-                     summary = coalesce(excluded.summary, calls.summary),
-                     sentiment = coalesce(excluded.sentiment, calls.sentiment),
-                     transcript = coalesce(excluded.transcript, calls.transcript),
-                     recording_url = coalesce(excluded.recording_url, calls.recording_url)
+                     direction = coalesce(excluded.direction, crm_calls.direction),
+                     occurred_at = case when $5::timestamptz is null then crm_calls.occurred_at else excluded.occurred_at end,
+                     duration_seconds = coalesce(excluded.duration_seconds, crm_calls.duration_seconds),
+                     ai_outcome = coalesce(excluded.ai_outcome, crm_calls.ai_outcome),
+                     summary = coalesce(excluded.summary, crm_calls.summary),
+                     sentiment = coalesce(excluded.sentiment, crm_calls.sentiment),
+                     transcript = coalesce(excluded.transcript, crm_calls.transcript),
+                     recording_url = coalesce(excluded.recording_url, crm_calls.recording_url)
        returning id, (xmax = 0) as inserted`,
       [
         workspaceId,
@@ -454,24 +454,24 @@ export async function upsertEmailEvent(db: Queryable, workspaceId: string, item:
   const at = `${item.event}_at`; // from the EMAIL_EVENTS whitelist
   const before = (
     await db.query<{ seen: boolean }>(
-      `select ${at} is not null as seen from crm.email_activities where workspace_id = $1 and external_source = 'email_tool' and external_id = $2`,
+      `select ${at} is not null as seen from crm_email_activities where workspace_id = $1 and external_source = 'email_tool' and external_id = $2`,
       [workspaceId, item.messageId],
     )
   ).rows[0];
 
   const row = (
     await db.query<{ id: string }>(
-      `insert into crm.email_activities
+      `insert into crm_email_activities
         (workspace_id, contact_id, external_source, external_id, campaign_ref, campaign_name, step, subject, status, reply_text, ${at})
        values ($1, $2, 'email_tool', $3, $4, $5, $6, $7, $8, $9, $10)
        on conflict (workspace_id, external_source, external_id) where external_id is not null
-       do update set status = greatest(email_activities.status, excluded.status),
-                     ${at} = coalesce(email_activities.${at}, excluded.${at}),
-                     reply_text = coalesce(email_activities.reply_text, excluded.reply_text),
-                     campaign_ref = coalesce(email_activities.campaign_ref, excluded.campaign_ref),
-                     campaign_name = coalesce(email_activities.campaign_name, excluded.campaign_name),
-                     step = coalesce(email_activities.step, excluded.step),
-                     subject = coalesce(email_activities.subject, excluded.subject)
+       do update set status = greatest(crm_email_activities.status, excluded.status),
+                     ${at} = coalesce(crm_email_activities.${at}, excluded.${at}),
+                     reply_text = coalesce(crm_email_activities.reply_text, excluded.reply_text),
+                     campaign_ref = coalesce(crm_email_activities.campaign_ref, excluded.campaign_ref),
+                     campaign_name = coalesce(crm_email_activities.campaign_name, excluded.campaign_name),
+                     step = coalesce(crm_email_activities.step, excluded.step),
+                     subject = coalesce(crm_email_activities.subject, excluded.subject)
        returning id`,
       [
         workspaceId,
@@ -510,9 +510,9 @@ export async function upsertEmailEvent(db: Queryable, workspaceId: string, item:
 /** Never downgrades an unsubscribe to a bounce. */
 async function setEmailChannel(db: Queryable, contactId: string, status: "unsubscribed" | "permanent_bounce", reason: string) {
   await db.query(
-    `insert into crm.contact_channels (contact_id, channel, status, reason) values ($1, 'email', $2, $3)
+    `insert into crm_contact_channels (contact_id, channel, status, reason) values ($1, 'email', $2, $3)
      on conflict (contact_id, channel) do update set status = excluded.status, reason = excluded.reason
-       where contact_channels.status <> 'unsubscribed'`,
+       where crm_contact_channels.status <> 'unsubscribed'`,
     [contactId, status, reason],
   );
 }
@@ -521,16 +521,16 @@ async function setEmailChannel(db: Queryable, contactId: string, status: "unsubs
 async function handoverOwner(db: Queryable, workspaceId: string, ownerEmail: string | undefined): Promise<string | null> {
   if (ownerEmail) {
     const member = await db.query<{ id: string }>(
-      `select p.id from crm.profiles p
+      `select p.id from crm_profiles p
          join public.revenueos_profiles rp on rp.id = p.id
-         join crm.workspace_members m on m.user_id = p.id and m.workspace_id = $1
+         join crm_workspace_members m on m.user_id = p.id and m.workspace_id = $1
         where lower(rp.email) = lower($2) and p.is_active and p.role = 'salesperson'`,
       [workspaceId, ownerEmail],
     );
     if (member.rows[0]) return member.rows[0].id;
   }
   const fallback = await db.query<{ id: string }>(
-    `select p.id from crm.workspaces w join crm.profiles p on p.id = w.default_owner_id and p.is_active where w.id = $1`,
+    `select p.id from crm_workspaces w join crm_profiles p on p.id = w.default_owner_id and p.is_active where w.id = $1`,
     [workspaceId],
   );
   return fallback.rows[0]?.id ?? null;
@@ -542,7 +542,7 @@ async function handoverOwner(db: Queryable, workspaceId: string, ownerEmail: str
  */
 export async function applyHandover(db: Queryable, workspaceId: string, item: z.infer<typeof handoverItem>) {
   const done = await db.query<{ deal_id: string | null }>(
-    `select deal_id from crm.timeline_events where workspace_id = $1 and external_source = $2 and external_id = $3`,
+    `select deal_id from crm_timeline_events where workspace_id = $1 and external_source = $2 and external_id = $3`,
     [workspaceId, item.source, item.externalId],
   );
   if (done.rows[0]) return { status: "unchanged" as Status, id: done.rows[0].deal_id };
@@ -551,16 +551,16 @@ export async function applyHandover(db: Queryable, workspaceId: string, item: z.
   const ownerId = await handoverOwner(db, workspaceId, item.ownerEmail);
   let status: Status = "updated";
 
-  const open = (await db.query<{ id: string }>(`select id from crm.deals where contact_id = $1 and outcome = 'open'`, [contact.id])).rows[0];
+  const open = (await db.query<{ id: string }>(`select id from crm_deals where contact_id = $1 and outcome = 'open'`, [contact.id])).rows[0];
   const parked = open
     ? undefined
-    : (await db.query<{ id: string }>(`select id from crm.deals where contact_id = $1 and outcome = 'nurture' order by updated_at desc limit 1`, [contact.id])).rows[0];
+    : (await db.query<{ id: string }>(`select id from crm_deals where contact_id = $1 and outcome = 'nurture' order by updated_at desc limit 1`, [contact.id])).rows[0];
   let dealId: string;
   if (open) {
     dealId = open.id;
   } else if (parked) {
     dealId = parked.id;
-    await db.query(`update crm.deals set outcome = 'open', automation_mode = 'manual', last_activity_at = now() where id = $1`, [dealId]);
+    await db.query(`update crm_deals set outcome = 'open', automation_mode = 'manual', last_activity_at = now() where id = $1`, [dealId]);
     await addTimelineEvent(db, { dealId, kind: "system", title: "Reopened", detail: "Qualified handover from the brain", ...BRAIN_ACTOR });
   } else {
     dealId = (await createDeal(db, BRAIN_ACTOR, workspaceId, { contactId: contact.id, ownerId })).id;
@@ -569,7 +569,7 @@ export async function applyHandover(db: Queryable, workspaceId: string, item: z.
   // An existing owner is kept; an unowned deal gets the handover owner.
   const owner = (
     await db.query<{ owner_id: string | null }>(
-      `update crm.deals set owner_id = coalesce(owner_id, $2), amount = coalesce(amount, $3), last_activity_at = now()
+      `update crm_deals set owner_id = coalesce(owner_id, $2), amount = coalesce(amount, $3), last_activity_at = now()
         where id = $1 returning owner_id`,
       [dealId, ownerId, item.amount ?? null],
     )
@@ -577,7 +577,7 @@ export async function applyHandover(db: Queryable, workspaceId: string, item: z.
 
   await advanceLifecycle(db, contact.id, "qualified", BRAIN_ACTOR);
   if (item.notes) {
-    await db.query(`insert into crm.notes (workspace_id, contact_id, deal_id, body) values ($1, $2, $3, $4)`, [workspaceId, contact.id, dealId, item.notes]);
+    await db.query(`insert into crm_notes (workspace_id, contact_id, deal_id, body) values ($1, $2, $3, $4)`, [workspaceId, contact.id, dealId, item.notes]);
   }
   await addTimelineEvent(db, {
     dealId,
@@ -667,15 +667,15 @@ export async function listSuppressions(db: Queryable, workspaceId: string, q: { 
   }>(
     `with changes as (
        select ch.contact_id, ch.updated_at as changed_at, ${BLOCKED_CHANNEL} as blocks
-         from crm.contact_channels ch join crm.contacts c on c.id = ch.contact_id
+         from crm_contact_channels ch join crm_contacts c on c.id = ch.contact_id
         where c.workspace_id = $1 and ch.updated_at >= $2::timestamptz
        union all
        select c.id, coalesce(c.dnc_at, c.updated_at), true
-         from crm.contacts c
+         from crm_contacts c
         where c.workspace_id = $1 and c.status = 'do_not_contact' and coalesce(c.dnc_at, c.updated_at) >= $2::timestamptz
        union all
        select d.contact_id, d.created_at, false
-         from crm.dnc_events d join crm.contacts c on c.id = d.contact_id
+         from crm_dnc_events d join crm_contacts c on c.id = d.contact_id
         where c.workspace_id = $1 and d.action = 'reactivated' and d.created_at >= $2::timestamptz
      ),
      moved as (
@@ -688,14 +688,14 @@ export async function listSuppressions(db: Queryable, workspaceId: string, q: { 
                            when ch.channel = 'email' then 'email_bounced'
                            when ch.channel = 'phone' then 'phone_do_not_contact'
                            else 'whatsapp_' || ch.status end as reason
-                 from crm.contact_channels ch where ch.contact_id = c.id and ${BLOCKED_CHANNEL}
+                 from crm_contact_channels ch where ch.contact_id = c.id and ${BLOCKED_CHANNEL}
                union all
                select 'do_not_contact' where c.status = 'do_not_contact'
              ) z) as reasons,
             (select json_agg(json_build_object('source', r.source, 'externalId', r.external_id) order by r.source)
-               from crm.external_refs r where r.contact_id = c.id) as external_ids
+               from crm_external_refs r where r.contact_id = c.id) as external_ids
        from moved m
-       join crm.contacts c on c.id = m.contact_id and c.status <> 'merged'
+       join crm_contacts c on c.id = m.contact_id and c.status <> 'merged'
       where (m.changed_at, c.id) > ($2::timestamptz, $3::uuid)
       order by m.changed_at, c.id
       limit $5`,

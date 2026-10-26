@@ -36,22 +36,22 @@ export async function seedDemo() {
   for (const u of DEMO_USERS) {
     await pool.query(`insert into auth.users (id, email) values ($1, $2)`, [u.id, u.email]);
     await pool.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, $2, $3)`, [u.id, u.name, u.email]);
-    await pool.query(`insert into crm.profiles (id, role) values ($1, $2)`, [u.id, u.role]);
+    await pool.query(`insert into crm_profiles (id, role) values ($1, $2)`, [u.id, u.role]);
   }
   const ws = async (name: string, slug: string) =>
-    (await pool.query<{ id: string }>(`insert into crm.workspaces (name, slug) values ($1, $2) returning id`, [name, slug])).rows[0]!.id;
+    (await pool.query<{ id: string }>(`insert into crm_workspaces (name, slug) values ($1, $2) returning id`, [name, slug])).rows[0]!.id;
   const acme = await ws("Acme Client", "acme-client");
   const globex = await ws("Globex Client", "globex-client");
   // Sam works on both clients, Priya on Acme only; the admin needs no membership.
-  await pool.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3), ($1, $4)`, [acme, globex, sam.id, priya.id]);
-  await pool.query(`update crm.workspaces set default_owner_id = $2 where id = $1`, [acme, sam.id]);
+  await pool.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3), ($1, $4)`, [acme, globex, sam.id, priya.id]);
+  await pool.query(`update crm_workspaces set default_owner_id = $2 where id = $1`, [acme, sam.id]);
 
   // For the admin tabs: a deactivated salesperson (not on the login picker) and brain keys, one revoked.
   const ravi = "d0000000-0000-4000-8000-000000000004";
   await pool.query(`insert into auth.users (id, email) values ($1, 'ravi@demo.local')`, [ravi]);
   await pool.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, 'Ravi Former', 'ravi@demo.local')`, [ravi]);
-  await pool.query(`insert into crm.profiles (id, role, is_active) values ($1, 'salesperson', false)`, [ravi]);
-  await pool.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [globex, ravi]);
+  await pool.query(`insert into crm_profiles (id, role, is_active) values ($1, 'salesperson', false)`, [ravi]);
+  await pool.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2)`, [globex, ravi]);
   await createBrainKey(actorOf(admin), acme, "RevenueOS brain");
   await createBrainKey(actorOf(admin), globex, "RevenueOS brain");
   const old = await createBrainKey(actorOf(admin), globex, "Old brain key");
@@ -60,8 +60,8 @@ export async function seedDemo() {
   await seedAcme(acme, actorOf(sam), actorOf(priya));
   await seedGlobex(globex, actorOf(sam));
   const counts = await pool.query<{ contacts: number; companies: number; deals: number }>(
-    `select (select count(*)::int from crm.contacts) as contacts, (select count(*)::int from crm.companies) as companies,
-            (select count(*)::int from crm.deals) as deals`,
+    `select (select count(*)::int from crm_contacts) as contacts, (select count(*)::int from crm_companies) as companies,
+            (select count(*)::int from crm_deals) as deals`,
   );
   return counts.rows[0]!;
 }
@@ -141,12 +141,12 @@ async function seedAcme(ws: string, sam: Actor, priya: Actor) {
   await scheduleMeeting(pool, sam, ws, { dealId: pixelDeal, title: "Discovery call - Pixel Retail", at: laterTodayIst(), durationMin: 30, url: "https://meet.example.com/pixel" });
   await updateDeal(pool, priya, ws, orbitDeal, { stage: "proposal_sent", serviceInterest: "3-month outbound pilot" });
   const proposal = await createProposal(pool, priya, ws, { dealId: orbitDeal, title: "Orbit Logistics - 3-month pilot", amount: 450000, notes: "Pilot: 2 SDRs, LinkedIn + email + calling." });
-  await pool.query(`update crm.proposals set status = 'sent', sent_at = $2, follow_up_at = $3 where id = $1`, [proposal.id, daysAgo(2), hoursFromNow(24)]);
+  await pool.query(`update crm_proposals set status = 'sent', sent_at = $2, follow_up_at = $3 where id = $1`, [proposal.id, daysAgo(2), hoursFromNow(24)]);
   await updateDeal(pool, sam, ws, novaDeal, { stage: "connected_qualifying", serviceInterest: "Account-based marketing" });
 
   // --- Hand-made contacts, deals and human calls --------------------------------------------
   const company = async (name: string) =>
-    (await pool.query<{ id: string }>(`select id from crm.companies where workspace_id = $1 and name = $2`, [ws, name])).rows[0]!.id;
+    (await pool.query<{ id: string }>(`select id from crm_companies where workspace_id = $1 and name = $2`, [ws, name])).rows[0]!.id;
   const redwood = await company("Redwood Builders");
   const sierra = await company("Sierra Textiles");
   const hand = (actor: Actor, firstName: string, lastName: string, email: string, companyId: string, jobTitle: string) =>
@@ -185,25 +185,25 @@ async function seedAcme(ws: string, sam: Actor, priya: Actor) {
   await createTask(pool, priya, ws, { dealId: orbitDeal, ownerId: priya.id, type: "proposal_follow_up", title: "Follow up on pilot proposal", dueAt: daysAgo(1) });
   await createTask(pool, priya, ws, { dealId: quartzDeal, ownerId: priya.id, type: "call", title: "Discovery call", dueAt: hoursFromNow(26) });
   // Spread "first call" tasks: some overdue, so the queue and overdue counts are not all "now".
-  await pool.query(`update crm.tasks set due_at = now() - interval '3 days' where workspace_id = $1 and title = 'First call' and deal_id = $2`, [ws, quartzDeal]);
+  await pool.query(`update crm_tasks set due_at = now() - interval '3 days' where workspace_id = $1 and title = 'First call' and deal_id = $2`, [ws, quartzDeal]);
 
   // Older activity on untouched prospects, so "last activity" varies.
-  await pool.query(`update crm.contacts set last_activity_at = now() - (interval '1 day' * (random() * 20)) where workspace_id = $1 and source = 'brain'`, [ws]);
+  await pool.query(`update crm_contacts set last_activity_at = now() - (interval '1 day' * (random() * 20)) where workspace_id = $1 and source = 'brain'`, [ws]);
   await markDnc(pool, priya, ws, (await upsertContact(pool, ws, person(20))).id, { reason: "Asked by email to stop all contact." });
 
   // Deal values (INR) so the board shows stage totals; one open deal is left without an amount.
   await pool.query(
-    `update crm.deals d set amount = v.amount
+    `update crm_deals d set amount = v.amount
        from (select id, (array[450000, 1200000, 85000, 300000, 2500000, 640000, 175000, 90000])[row_number() over (order by created_at, id)] as amount
-               from crm.deals where workspace_id = $1) v
+               from crm_deals where workspace_id = $1) v
       where d.id = v.id and v.amount is not null
-        and d.id <> (select id from crm.deals where workspace_id = $1 and outcome = 'open' order by created_at, id limit 1)`,
+        and d.id <> (select id from crm_deals where workspace_id = $1 and outcome = 'open' order by created_at, id limit 1)`,
     [ws],
   );
 
   // A notification for the admin path would be wrong (admins get none); Sam gets one more.
   await pool.query(
-    `insert into crm.notifications (workspace_id, recipient_id, deal_id, title, detail, kind, href) values ($1, $2, $3, 'Meeting today', 'Discovery call - Pixel Retail later today.', 'info', $4)`,
+    `insert into crm_notifications (workspace_id, recipient_id, deal_id, title, detail, kind, href) values ($1, $2, $3, 'Meeting today', 'Discovery call - Pixel Retail later today.', 'info', $4)`,
     [ws, sam.id, pixelDeal, `/deals/${pixelDeal}`],
   );
 }
@@ -221,7 +221,7 @@ async function seedGlobex(ws: string, sam: Actor) {
   const deal = await createDeal(pool, sam, ws, { contactId: ravi.id, serviceInterest: "Dealer network outreach" });
   await updateDeal(pool, sam, ws, deal.id, { stage: "negotiation", amount: 900000 });
   await pool.query(
-    `insert into crm.notifications (workspace_id, recipient_id, deal_id, title, detail, kind, href) values ($1, $2, $3, 'Negotiation stalled', 'No reply from Titan Motors for 5 days.', 'warning', $4)`,
+    `insert into crm_notifications (workspace_id, recipient_id, deal_id, title, detail, kind, href) values ($1, $2, $3, 'Negotiation stalled', 'No reply from Titan Motors for 5 days.', 'warning', $4)`,
     [ws, sam.id, deal.id, `/deals/${deal.id}`],
   );
 }

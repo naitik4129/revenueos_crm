@@ -162,7 +162,7 @@ describe("AppShell with no workspace", () => {
   it("tells a salesperson to ask an admin instead of rendering the page", async () => {
     workspaceState.list = [];
     await renderShell();
-    expect(screen.getByText(/not a member of any workspace/)).toBeInTheDocument();
+    expect(screen.getByText(/Ask an admin to give you access/)).toBeInTheDocument();
     expect(screen.queryByText("home")).not.toBeInTheDocument();
     expect(screen.queryByText("Admin")).not.toBeInTheDocument();
   });

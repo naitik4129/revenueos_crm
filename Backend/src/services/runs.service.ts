@@ -47,8 +47,8 @@ export function runToDto(row: RunRow & Partial<SubjectNames>, versionNumber: num
 
 const RUN_SELECT = `
   select r.*, wv.version_number, names.*
-    from crm.workflow_runs r
-    join crm.workflow_versions wv on wv.id = r.workflow_version_id
+    from crm_workflow_runs r
+    join crm_workflow_versions wv on wv.id = r.workflow_version_id
     ${subjectNamesJoin("r.deal_id", "r.contact_id")}
 `;
 
@@ -123,7 +123,7 @@ interface StepForScheduling {
 async function nextEnabledStep(db: Queryable, versionId: string, afterOrder = -1): Promise<StepForScheduling | undefined> {
   const result = await db.query<StepForScheduling>(
     `select id, step_order, delay_days, action, template_id, config
-       from crm.workflow_steps
+       from crm_workflow_steps
       where workflow_version_id = $1 and is_enabled = true and step_order > $2
       order by step_order asc
       limit 1`,
@@ -137,7 +137,7 @@ async function insertScheduledAction(db: Queryable, workspaceId: string, runId: 
   scheduledFor.setUTCDate(scheduledFor.getUTCDate() + step.delay_days);
 
   await db.query(
-    `insert into crm.scheduled_actions
+    `insert into crm_scheduled_actions
       (workspace_id, deal_id, workflow_run_id, workflow_step_id, action_type, scheduled_for, payload)
      values ($1,$2,$3,$4,$5,$6,$7)`,
     [
@@ -202,14 +202,14 @@ export async function scheduleStepAfter(db: Queryable, workspaceId: string, runI
 async function activateAutomationForEnrollment(db: Queryable, dealId: string, reason: string) {
   const result = await db.query<{ automation_mode: AutomationMode; outcome: DealOutcome; contact_status: ContactStatus }>(
     `select d.automation_mode, d.outcome, c.status as contact_status
-       from crm.deals d join crm.contacts c on c.id = d.contact_id
+       from crm_deals d join crm_contacts c on c.id = d.contact_id
       where d.id = $1`,
     [dealId],
   );
   const deal = result.rows[0];
   if (!deal || deal.automation_mode === "active" || !canRunAutomation(deal.outcome, deal.contact_status)) return;
 
-  await db.query(`update crm.deals set automation_mode = 'active', last_activity_at = now() where id = $1`, [dealId]);
+  await db.query(`update crm_deals set automation_mode = 'active', last_activity_at = now() where id = $1`, [dealId]);
   await addTimelineEvent(db, { dealId: dealId, kind: "automation", title: "Automation Resumed", detail: reason, ...AUTOMATION_ACTOR });
   await applyAutomationModeToRuns(db, dealId, "active", reason);
 }
@@ -232,15 +232,15 @@ async function enrollDealInVersion(
   reason: string,
 ): Promise<ReturnType<typeof runToDto> | null> {
   const existing = await db.query<{ id: string }>(
-    `select id from crm.workflow_runs
+    `select id from crm_workflow_runs
       where deal_id = $1 and workflow_id = $2 and status in ('running','waiting','paused')`,
     [dealId, workflowId],
   );
   if (existing.rows[0]) return null;
 
   const runResult = await db.query<RunRow>(
-    `insert into crm.workflow_runs (workspace_id, workflow_id, workflow_version_id, deal_id, contact_id, status)
-     select $1, $2, $3, d.id, d.contact_id, 'running' from crm.deals d where d.id = $4 and d.workspace_id = $1
+    `insert into crm_workflow_runs (workspace_id, workflow_id, workflow_version_id, deal_id, contact_id, status)
+     select $1, $2, $3, d.id, d.contact_id, 'running' from crm_deals d where d.id = $4 and d.workspace_id = $1
      returning *`,
     [workspaceId, workflowId, versionId, dealId],
   );
@@ -248,7 +248,7 @@ async function enrollDealInVersion(
   if (!run) throw new NotFoundError("Deal");
   const scheduled = await scheduleFirstStep(db, workspaceId, run.id, dealId, versionId);
   await db.query(
-    `update crm.workflow_runs set current_step_id = $2, status = $3, next_run_at = $4 where id = $1`,
+    `update crm_workflow_runs set current_step_id = $2, status = $3, next_run_at = $4 where id = $1`,
     [run.id, scheduled.currentStepId, scheduled.status, scheduled.nextRunAt],
   );
 
@@ -317,7 +317,7 @@ export async function enrollDealInWorkflow(
   }
 
   const versionResult = await db.query<{ id: string }>(
-    `select id from crm.workflow_versions where workflow_id = $1 and status = 'published'`,
+    `select id from crm_workflow_versions where workflow_id = $1 and status = 'published'`,
     [workflowId],
   );
   const versionId = versionResult.rows[0]?.id;
@@ -338,7 +338,7 @@ async function setRunStatus(
   extraSql?: string,
 ) {
   await db.query(
-    `update crm.workflow_runs
+    `update crm_workflow_runs
         set status = $2
             ${status === "cancelled" ? ", cancelled_at = now(), cancel_reason = $3" : ""}
             ${status === "completed" ? ", completed_at = now()" : ""}
@@ -350,7 +350,7 @@ async function setRunStatus(
   const scheduledActionStatus = status === "paused" ? "paused" : status === "cancelled" ? "cancelled" : "pending";
   if (status === "paused" || status === "cancelled") {
     await db.query(
-      `update crm.scheduled_actions
+      `update crm_scheduled_actions
           set status = $2 ${status === "cancelled" ? ", cancelled_at = now(), cancel_reason = $3" : ""}
         where workflow_run_id = $1 and status in ('pending','due','paused')`,
       status === "cancelled" ? [run.id, scheduledActionStatus, reason ?? null] : [run.id, scheduledActionStatus],
@@ -361,7 +361,7 @@ async function setRunStatus(
     // executor in this phase, and a future one re-checks eligibility right
     // before it acts (Rule 14), so nothing is "blasted" here (Rule 10).
     await db.query(
-      `update crm.scheduled_actions set status = 'pending' where workflow_run_id = $1 and status = 'paused'`,
+      `update crm_scheduled_actions set status = 'pending' where workflow_run_id = $1 and status = 'paused'`,
       [run.id],
     );
   }
@@ -412,9 +412,9 @@ export async function retryRun(db: Queryable, actor: Actor, workspaceId: string,
   const run = await getRunRowOr404(db, workspaceId, id);
   if (run.status !== "failed") throw new ConflictError(`Cannot retry a run with status "${run.status}".`);
 
-  await db.query(`update crm.workflow_runs set status = 'waiting', last_error = null where id = $1`, [id]);
+  await db.query(`update crm_workflow_runs set status = 'waiting', last_error = null where id = $1`, [id]);
   await db.query(
-    `update crm.scheduled_actions
+    `update crm_scheduled_actions
         set status = 'pending', attempt_count = 0, last_error = null
       where workflow_run_id = $1 and status = 'failed'`,
     [id],
@@ -511,7 +511,7 @@ export async function listScheduledActions(db: Queryable, workspaceId: string, f
   const where = `where ${clauses.join(" and ")}`;
   const result = await db.query<ScheduledActionRow & SubjectNames & { total: number }>(
     `select sa.*, names.*, count(*) over()::int as total
-       from crm.scheduled_actions sa ${subjectNamesJoin("sa.deal_id")}
+       from crm_scheduled_actions sa ${subjectNamesJoin("sa.deal_id")}
        ${where} order by sa.scheduled_for asc, sa.id ${pageSql(params, page)}`,
     params,
   );

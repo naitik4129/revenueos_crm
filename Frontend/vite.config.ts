@@ -7,6 +7,9 @@ import { defineConfig } from "vite";
 // plugin (owns file-based route codegen), then viteReact last so it
 // transforms everything the plugins above generate.
 export default defineConfig({
+  // The CRM is served under /crm on the RevenueOS platform's domain (one origin, one login).
+  // Asset and router URLs are prefixed so they resolve behind that path.
+  base: "/crm/",
   css: {
     // lightningcss handles the oklch() colour tokens in styles.css
     transformer: "lightningcss",

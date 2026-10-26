@@ -33,7 +33,7 @@ function encode(value: unknown, aad: string): EncryptedValue {
 /** One workspace's Baileys credentials/keys — every table here is now keyed by workspace_id (see 015_workspaces.sql), so each workspace's WhatsApp session is fully independent. */
 export async function loadBaileysAuthState(workspaceId: string): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }> {
   const result = await pool.query<EncryptedRow>(
-    `select ciphertext, iv, tag, key_version from crm.whatsapp_auth_credentials where workspace_id = $1`,
+    `select ciphertext, iv, tag, key_version from crm_whatsapp_auth_credentials where workspace_id = $1`,
     [workspaceId],
   );
   // AAD strings here are deliberately NOT workspace-namespaced (unlike the
@@ -52,7 +52,7 @@ export async function loadBaileysAuthState(workspaceId: string): Promise<{ state
       if (ids.length === 0) return {};
       const rows = await pool.query<EncryptedRow & { key_id: string }>(
         `select key_id, ciphertext, iv, tag, key_version
-           from crm.whatsapp_auth_keys
+           from crm_whatsapp_auth_keys
           where workspace_id = $1 and key_type = $2 and key_id = any($3::text[])`,
         [workspaceId, type, ids],
       );
@@ -71,12 +71,12 @@ export async function loadBaileysAuthState(workspaceId: string): Promise<{ state
         for (const [type, entries] of Object.entries(data)) {
           for (const [id, value] of Object.entries(entries ?? {})) {
             if (value == null) {
-              await db.query(`delete from crm.whatsapp_auth_keys where workspace_id = $1 and key_type = $2 and key_id = $3`, [workspaceId, type, id]);
+              await db.query(`delete from crm_whatsapp_auth_keys where workspace_id = $1 and key_type = $2 and key_id = $3`, [workspaceId, type, id]);
               continue;
             }
             const encrypted = encode(value, `whatsapp:auth:key:${type}:${id}`);
             await db.query(
-              `insert into crm.whatsapp_auth_keys
+              `insert into crm_whatsapp_auth_keys
                 (workspace_id, key_type, key_id, ciphertext, iv, tag, key_version)
                values ($1,$2,$3,$4,$5,$6,$7)
                on conflict (workspace_id, key_type, key_id) do update
@@ -89,7 +89,7 @@ export async function loadBaileysAuthState(workspaceId: string): Promise<{ state
       });
     },
     async clear() {
-      await pool.query(`delete from crm.whatsapp_auth_keys where workspace_id = $1`, [workspaceId]);
+      await pool.query(`delete from crm_whatsapp_auth_keys where workspace_id = $1`, [workspaceId]);
     },
   };
 
@@ -98,7 +98,7 @@ export async function loadBaileysAuthState(workspaceId: string): Promise<{ state
     saveCreds: async () => {
       const encrypted = encode(creds, "whatsapp:auth:creds");
       await pool.query(
-        `insert into crm.whatsapp_auth_credentials (workspace_id, ciphertext, iv, tag, key_version)
+        `insert into crm_whatsapp_auth_credentials (workspace_id, ciphertext, iv, tag, key_version)
          values ($1,$2,$3,$4,$5)
          on conflict (workspace_id) do update
            set ciphertext = excluded.ciphertext, iv = excluded.iv, tag = excluded.tag,
@@ -111,8 +111,8 @@ export async function loadBaileysAuthState(workspaceId: string): Promise<{ state
 
 export async function clearBaileysAuthState(workspaceId: string) {
   await withTransaction(async (db) => {
-    await db.query(`delete from crm.whatsapp_auth_keys where workspace_id = $1`, [workspaceId]);
-    await db.query(`delete from crm.whatsapp_auth_credentials where workspace_id = $1`, [workspaceId]);
+    await db.query(`delete from crm_whatsapp_auth_keys where workspace_id = $1`, [workspaceId]);
+    await db.query(`delete from crm_whatsapp_auth_credentials where workspace_id = $1`, [workspaceId]);
   });
 }
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { asyncHandler } from "../asyncHandler.js";
-import { requireAuth } from "../authMiddleware.js";
+import { requireAuth, requireCrmUser, requireWorkspace } from "../authMiddleware.js";
 import { pool } from "../db.js";
 import { listProfiles } from "../services/profiles.service.js";
 
@@ -19,12 +19,14 @@ meRouter.get(
   }),
 );
 
+// The owner picker: the people who can own a deal/task in the current workspace, derived from the
+// workspace's platform project (owner + members). Needs the workspace header.
 export const profilesRouter = Router();
-profilesRouter.use(requireAuth);
+profilesRouter.use(requireAuth, requireCrmUser, requireWorkspace);
 
 profilesRouter.get(
   "/",
-  asyncHandler(async (_req, res) => {
-    res.json({ data: await listProfiles(pool) });
+  asyncHandler(async (req, res) => {
+    res.json({ data: await listProfiles(pool, req.workspaceId!) });
   }),
 );

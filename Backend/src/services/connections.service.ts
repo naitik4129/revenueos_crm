@@ -40,15 +40,15 @@ function encryptedFromRow(row: EmailRow): EncryptedValue | null {
 
 /** Connection rows are created on first use (nothing is seeded): one per workspace and provider. */
 export async function ensureConnectionRows(workspaceId: string, db: Queryable = pool) {
-  await db.query(`insert into crm.integration_connections (workspace_id, id) values ($1, 'email') on conflict do nothing`, [workspaceId]);
-  await db.query(`insert into crm.whatsapp_connection (workspace_id) values ($1) on conflict do nothing`, [workspaceId]);
-  await db.query(`insert into crm.google_calendar_connection (workspace_id) values ($1) on conflict do nothing`, [workspaceId]);
+  await db.query(`insert into crm_integration_connections (workspace_id, id) values ($1, 'email') on conflict do nothing`, [workspaceId]);
+  await db.query(`insert into crm_whatsapp_connection (workspace_id) values ($1) on conflict do nothing`, [workspaceId]);
+  await db.query(`insert into crm_google_calendar_connection (workspace_id) values ($1) on conflict do nothing`, [workspaceId]);
 }
 
 export async function loadEmailConnection(workspaceId: string, db: Queryable = pool) {
   await ensureConnectionRows(workspaceId, db);
   const result = await db.query<EmailRow>(
-    `select * from crm.integration_connections where workspace_id = $1 and id = 'email'`,
+    `select * from crm_integration_connections where workspace_id = $1 and id = 'email'`,
     [workspaceId],
   );
   const row = result.rows[0]!;
@@ -108,7 +108,7 @@ export async function updateEmailConnection(actor: Actor, workspaceId: string, i
   const encrypted = encryptJson(secrets, "integration:email");
   await withTransaction(async (db) => {
     await db.query(
-      `update crm.integration_connections
+      `update crm_integration_connections
           set provider = $1, enabled = $2, settings = $3,
               secret_ciphertext = $4, secret_iv = $5, secret_tag = $6, key_version = $7, updated_by = $8
         where workspace_id = $9 and id = 'email'`,
@@ -162,7 +162,7 @@ interface WhatsAppRow {
 
 export async function getWhatsAppConnection(workspaceId: string) {
   await ensureConnectionRows(workspaceId);
-  const result = await pool.query<WhatsAppRow>(`select * from crm.whatsapp_connection where workspace_id = $1`, [workspaceId]);
+  const result = await pool.query<WhatsAppRow>(`select * from crm_whatsapp_connection where workspace_id = $1`, [workspaceId]);
   const row = result.rows[0]!;
   const qr =
     row.qr_ciphertext && row.qr_iv && row.qr_tag && row.qr_expires_at && row.qr_expires_at.getTime() > Date.now()
@@ -175,13 +175,13 @@ export async function getWhatsAppConnection(workspaceId: string) {
     pool.query<{ today: string; pending: string }>(
       `select
          count(*) filter (where sent_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata')::text as today,
-         (select count(*)::text from crm.scheduled_actions where workspace_id = $1 and action_type = 'send_whatsapp' and status in ('pending','due','executing','paused')) as pending
-       from crm.whatsapp_outbound_messages
+         (select count(*)::text from crm_scheduled_actions where workspace_id = $1 and action_type = 'send_whatsapp' and status in ('pending','due','executing','paused')) as pending
+       from crm_whatsapp_outbound_messages
       where workspace_id = $1 and status = 'sent'`,
       [workspaceId],
     ),
     pool.query<{ count: string }>(
-      `select count(*)::text as count from crm.contacts where workspace_id = $1 and status <> 'merged' and nullif(trim(phone), '') is not null and phone_e164 is null`,
+      `select count(*)::text as count from crm_contacts where workspace_id = $1 and status <> 'merged' and nullif(trim(phone), '') is not null and phone_e164 is null`,
       [workspaceId],
     ),
     pool.query<{
@@ -193,7 +193,7 @@ export async function getWhatsAppConnection(workspaceId: string) {
       disposition: "unmatched" | "ambiguous";
     }>(
       `select message_id, sender_phone_e164, message_type, received_at, match_count, disposition
-         from crm.whatsapp_inbound_events
+         from crm_whatsapp_inbound_events
         where workspace_id = $1 and disposition in ('unmatched', 'ambiguous')
         order by received_at desc
         limit 20`,
@@ -243,7 +243,7 @@ export async function updateWhatsAppSettings(
 ) {
   await withTransaction(async (db) => {
     await db.query(
-      `update crm.whatsapp_connection
+      `update crm_whatsapp_connection
           set enabled = $1, daily_cap = $2, updated_by = $3
         where workspace_id = $4`,
       [input.enabled, input.dailyCap, actor.id, workspaceId],
@@ -257,7 +257,7 @@ export async function commandWhatsApp(actor: Actor, workspaceId: string, command
   const desired = command === "logout" ? "disconnected" : command === "restart" ? "restart" : "connected";
   await withTransaction(async (db) => {
     await db.query(
-      `update crm.whatsapp_connection
+      `update crm_whatsapp_connection
           set desired_state = $1, command_version = command_version + 1, updated_by = $2,
               qr_ciphertext = null, qr_iv = null, qr_tag = null, qr_expires_at = null
         where workspace_id = $3`,
@@ -293,7 +293,7 @@ interface GoogleCalendarRow {
 
 async function loadGoogleCalendarRow(workspaceId: string, db: Queryable = pool): Promise<GoogleCalendarRow> {
   await ensureConnectionRows(workspaceId, db);
-  const result = await db.query<GoogleCalendarRow>(`select * from crm.google_calendar_connection where workspace_id = $1`, [workspaceId]);
+  const result = await db.query<GoogleCalendarRow>(`select * from crm_google_calendar_connection where workspace_id = $1`, [workspaceId]);
   return result.rows[0]!;
 }
 
@@ -391,7 +391,7 @@ export async function updateGoogleCalendarCredentials(actor: Actor, workspaceId:
     if (input.clientSecret) {
       const encrypted = encryptText(input.clientSecret, "integration:google_calendar:client_secret");
       await db.query(
-        `update crm.google_calendar_connection
+        `update crm_google_calendar_connection
             set client_id = $1, redirect_uri = $2,
                 client_secret_ciphertext = $3, client_secret_iv = $4, client_secret_tag = $5, client_secret_key_version = $6,
                 updated_by = $7
@@ -400,7 +400,7 @@ export async function updateGoogleCalendarCredentials(actor: Actor, workspaceId:
       );
     } else {
       await db.query(
-        `update crm.google_calendar_connection set client_id = $1, redirect_uri = $2, updated_by = $3 where workspace_id = $4`,
+        `update crm_google_calendar_connection set client_id = $1, redirect_uri = $2, updated_by = $3 where workspace_id = $4`,
         [input.clientId.trim(), input.redirectUri.trim(), actor.id, workspaceId],
       );
     }
@@ -421,7 +421,7 @@ export async function startGoogleCalendarOAuth(actor: Actor, workspaceId: string
   const state = randomBytes(24).toString("hex");
   const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL_MS);
   await pool.query(
-    `update crm.google_calendar_connection
+    `update crm_google_calendar_connection
         set pending_oauth_state = $1, pending_oauth_state_expires_at = $2, updated_by = $3
       where workspace_id = $4`,
     [state, expiresAt, actor.id, workspaceId],
@@ -440,7 +440,7 @@ export async function startGoogleCalendarOAuth(actor: Actor, workspaceId: string
  */
 export async function completeGoogleCalendarOAuth(code: string, state: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const matched = await pool.query<{ workspace_id: string }>(
-    `select workspace_id from crm.google_calendar_connection where pending_oauth_state = $1`,
+    `select workspace_id from crm_google_calendar_connection where pending_oauth_state = $1`,
     [state],
   );
   const workspaceId = matched.rows[0]?.workspace_id;
@@ -461,7 +461,7 @@ export async function completeGoogleCalendarOAuth(code: string, state: string): 
     const encrypted = encryptText(refreshToken, "integration:google_calendar:refresh_token");
     await withTransaction(async (db) => {
       await db.query(
-        `update crm.google_calendar_connection
+        `update crm_google_calendar_connection
             set status = 'connected', enabled = true, connected_email = $1,
                 refresh_token_ciphertext = $2, refresh_token_iv = $3, refresh_token_tag = $4, refresh_token_key_version = $5,
                 pending_oauth_state = null, pending_oauth_state_expires_at = null,
@@ -476,7 +476,7 @@ export async function completeGoogleCalendarOAuth(code: string, state: string): 
     const message = error instanceof Error ? error.message : "Failed to connect Google Calendar.";
     await withTransaction(async (db) => {
       await db.query(
-        `update crm.google_calendar_connection
+        `update crm_google_calendar_connection
             set status = 'error', last_error = $1, pending_oauth_state = null, pending_oauth_state_expires_at = null
           where workspace_id = $2`,
         [message, workspaceId],
@@ -495,7 +495,7 @@ export async function completeGoogleCalendarOAuth(code: string, state: string): 
  */
 export async function markGoogleCalendarReauthRequired(workspaceId: string, message: string) {
   await pool.query(
-    `update crm.google_calendar_connection
+    `update crm_google_calendar_connection
         set status = 'error', enabled = false, last_error = $1,
             refresh_token_ciphertext = null, refresh_token_iv = null, refresh_token_tag = null
       where workspace_id = $2 and status = 'connected'`,
@@ -507,7 +507,7 @@ export async function markGoogleCalendarReauthRequired(workspaceId: string, mess
 export async function disconnectGoogleCalendar(actor: Actor, workspaceId: string) {
   await withTransaction(async (db) => {
     await db.query(
-      `update crm.google_calendar_connection
+      `update crm_google_calendar_connection
           set status = 'disconnected', enabled = false, connected_email = null,
               refresh_token_ciphertext = null, refresh_token_iv = null, refresh_token_tag = null,
               pending_oauth_state = null, pending_oauth_state_expires_at = null, last_error = null,
@@ -528,7 +528,7 @@ async function recordGoogleCalendarAudit(db: Queryable, adminId: string | null, 
     actorEmail = result.rows[0]?.email ?? actorEmail;
   }
   await db.query(
-    `insert into crm.admin_audit_events (actor_id, actor_email, action, target_type, target_id, metadata)
+    `insert into crm_admin_audit_events (actor_id, actor_email, action, target_type, target_id, metadata)
      values ($1, $2, $3, 'google_calendar_connection', $4, $5)`,
     [adminId, actorEmail, action, workspaceId, metadata],
   );

@@ -12,7 +12,7 @@ contacts, calls and campaign emails, and the team nurtures the qualified contact
 WhatsApp through calls, meetings and proposals to won or lost.
 
 ```text
-Browser SPA ──> Backend API (Express) ──> Supabase Postgres, schema crm  (+ Auth, Storage)
+Browser SPA ──> Backend API (Express) ──> Supabase Postgres, public.crm_*  (+ Auth, Storage)
 RevenueOS brain ──> /api/v1/brain/v1 ──┘
 Worker ──> Email (Resend/SMTP), WhatsApp (Baileys), Google Calendar
 ```
@@ -31,12 +31,13 @@ The frontend uses Supabase JS only to sign in. Every CRM read and write goes thr
 
 ## Database
 
-- All CRM tables (35) and enums live in schema **`crm`** in the shared RevenueOSDatabase Supabase
-  project, next to the platform and the brain. The table list is in
-  [CLAUDE.md → Tables](CLAUDE.md#tables-35-all-in-crm).
-- Backend and worker log in as role **`crm_app`** (rights on `crm`, plus read-only access to
-  `public.revenueos_profiles` and `public.revenueos_projects`). RLS is on for every `crm` table
-  with no policies; `crm` is not exposed through the Data API.
+- All CRM tables (37), enums and functions live in schema `public` with the prefix **`crm_`** in
+  the shared RevenueOSDatabase Supabase project, next to the platform (`revenueos_*`) and the brain
+  (`brain_*`). The table list is in [CLAUDE.md → Tables](CLAUDE.md#tables-37-all-publiccrm_).
+- Backend and worker log in as role **`crm_app`** (DML on the `crm_*` tables, plus read-only access to
+  `public.revenueos_profiles` and `public.revenueos_projects`). RLS is on for every `crm_*` table
+  with no policies, and `anon`, `authenticated` and `service_role` have no rights on any `crm_*` object
+  (`crm_secure_objects()`, migration 001).
 - **Migrations `000`–`013` have not been run yet.** Order:
 
 | File | Contents |
@@ -78,7 +79,7 @@ The frontend uses Supabase JS only to sign in. Every CRM read and write goes thr
 
 ## Users and access
 
-- Shared Supabase Auth with the platform and brain. CRM access = an active `crm.profiles` row
+- Shared Supabase Auth with the platform and brain. CRM access = an active `crm_profiles` row
   (role `admin` or `salesperson`); otherwise 403. Names and emails come from
   `public.revenueos_profiles`.
 - **Admins** see every workspace, use the whole app plus `/admin`, manage users, workspaces,
@@ -196,7 +197,7 @@ Commands: [CLAUDE.md → Commands](CLAUDE.md#commands).
 3. Create the storage buckets `crm-template-attachments` and `crm-proposal-documents` by hand.
 4. Set the backend, worker and frontend env vars (one stable `INTEGRATION_ENCRYPTION_KEY`).
 5. Give the first admin CRM access (their account already exists on the platform):
-   `insert into crm.profiles (id, role) select id, 'admin' from public.revenueos_profiles where lower(email) = '<email>';`
+   `insert into crm_profiles (id, role) select id, 'admin' from public.revenueos_profiles where lower(email) = '<email>';`
 6. The admin creates the client workspaces (with platform project ids), adds salespeople
    (Users tab) and assigns them (Members tab), sets each default owner.
 7. Deploy with email and WhatsApp outbound off. Per workspace: configure and test email, connect

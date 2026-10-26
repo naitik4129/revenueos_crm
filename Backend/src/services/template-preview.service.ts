@@ -18,8 +18,8 @@ export async function previewTemplateFor(db: Queryable, workspaceId: string, tem
   let dealId = target.dealId ?? null;
   if (!dealId && target.contactId) {
     const contact = await db.query<{ open_deal_id: string | null }>(
-      `select (select d.id from crm.deals d where d.contact_id = c.id and d.outcome = 'open') as open_deal_id
-         from crm.contacts c where c.id = $1 and c.workspace_id = $2`,
+      `select (select d.id from crm_deals d where d.contact_id = c.id and d.outcome = 'open') as open_deal_id
+         from crm_contacts c where c.id = $1 and c.workspace_id = $2`,
       [target.contactId, workspaceId],
     );
     if (!contact.rows[0]) throw new NotFoundError("Contact");
@@ -48,7 +48,7 @@ export async function previewTemplateFor(db: Queryable, workspaceId: string, tem
       website: string | null;
     }>(
       `select c.first_name, c.last_name, c.email, c.phone, c.job_title, co.name as company_name, co.industry, co.website
-         from crm.contacts c left join crm.companies co on co.id = c.company_id
+         from crm_contacts c left join crm_companies co on co.id = c.company_id
         where c.id = $1 and c.workspace_id = $2`,
       [target.contactId, workspaceId],
     )

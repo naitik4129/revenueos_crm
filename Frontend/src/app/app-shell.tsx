@@ -73,8 +73,6 @@ const ADMIN_NAV: NavItem = { to: "/admin", label: "Admin", icon: ShieldCheck };
 export function AppShell({ children }: { children: ReactNode }) {
   const [addOpen, setAddOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
-  const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const navigate = useNavigate();
   const client = useQueryClient();
   const { notifications, markNotificationsRead } = useNotifications();
@@ -85,26 +83,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const isAdmin = currentUser?.role === "Admin";
   const noWorkspace = !workspacesLoading && workspaces.length === 0;
 
-  const createWorkspace = useMutation({
-    mutationFn: (name: string) => backend.workspaces.create(name),
-    onSuccess: (workspace) => {
-      void client.invalidateQueries({ queryKey: keys.workspaces });
-      setCurrentWorkspaceId(workspace.id);
-      setNewWorkspaceName("");
-      setCreateWorkspaceOpen(false);
-      toast.success(`Workspace "${workspace.name}" created.`);
-    },
-    onError: (error: unknown) => toast.error(messageFromError(error)),
-  });
-
   const unread = notifications.filter((n) => !n.read).length;
   const sidebar = (onNavigate?: () => void) => (
-    <SidebarContent
-      pathname={pathname}
-      isAdmin={isAdmin}
-      onNavigate={onNavigate}
-      onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
-    />
+    <SidebarContent pathname={pathname} isAdmin={isAdmin} onNavigate={onNavigate} />
   );
 
   return (
@@ -204,7 +185,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <main className="min-w-0 flex-1">
             {/* Every CRM page needs a workspace; admin pages do not. */}
             {noWorkspace && !pathname.startsWith("/admin") ? (
-              <NoWorkspace isAdmin={isAdmin} onCreate={() => setCreateWorkspaceOpen(true)} />
+              <NoWorkspace />
             ) : (
               children
             )}
@@ -223,38 +204,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       </Dialog>
 
       <ContactFormDialog open={addOpen} onOpenChange={setAddOpen} />
-
-      <Dialog open={createWorkspaceOpen} onOpenChange={setCreateWorkspaceOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Create workspace</DialogTitle>
-            <DialogDescription>
-              One workspace per client project: its own contacts, companies, deals, workflows,
-              templates and Email/WhatsApp/Calendar connections.
-            </DialogDescription>
-          </DialogHeader>
-          <div>
-            <Label className="mb-1.5 block text-xs">Name</Label>
-            <Input
-              autoFocus
-              value={newWorkspaceName}
-              onChange={(e) => setNewWorkspaceName(e.target.value)}
-              placeholder="e.g. Northbeam Labs"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setCreateWorkspaceOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!newWorkspaceName.trim() || createWorkspace.isPending}
-              onClick={() => createWorkspace.mutate(newWorkspaceName.trim())}
-            >
-              {createWorkspace.isPending ? "Creating…" : "Create workspace"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </AddContactContext.Provider>
   );
 }
@@ -264,12 +213,10 @@ function SidebarContent({
   pathname,
   isAdmin,
   onNavigate,
-  onCreateWorkspace,
 }: {
   pathname: string;
   isAdmin: boolean;
   onNavigate?: (() => void) | undefined;
-  onCreateWorkspace: () => void;
 }) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const { currentUser } = useSession();
@@ -355,22 +302,6 @@ function SidebarContent({
                 </button>
               ))}
             </div>
-            {/* Only admins create workspaces. */}
-            {isAdmin && (
-              <div className="mt-1 border-t pt-1">
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-primary hover:bg-accent"
-                  onClick={() => {
-                    setSwitcherOpen(false);
-                    onNavigate?.();
-                    onCreateWorkspace();
-                  }}
-                >
-                  <Plus className="size-3.5" /> Create workspace
-                </button>
-              </div>
-            )}
           </PopoverContent>
         </Popover>
       </div>
@@ -418,20 +349,14 @@ function SidebarContent({
   );
 }
 
-function NoWorkspace({ isAdmin, onCreate }: { isAdmin: boolean; onCreate: () => void }) {
+function NoWorkspace() {
   return (
     <div className="mx-auto max-w-md px-6 py-20 text-center">
       <h1 className="text-lg font-semibold">No workspace yet</h1>
       <p className="mt-2 text-sm text-muted-foreground">
-        {isAdmin
-          ? "Create a workspace for a client project to get started."
-          : "You are not a member of any workspace. Ask an admin to add you to one."}
+        Workspaces come from the RevenueOS platform. Ask an admin to give you access to a client
+        project there, and it will appear here automatically.
       </p>
-      {isAdmin && (
-        <Button className="mt-5" onClick={onCreate}>
-          <Plus className="size-4" /> Create workspace
-        </Button>
-      )}
     </div>
   );
 }

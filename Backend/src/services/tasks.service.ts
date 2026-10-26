@@ -27,7 +27,7 @@ export interface TaskRow extends SubjectNames {
   updated_at: Date;
 }
 
-const TASK_SELECT = `select t.*, ${userNameSql("t.owner_id")} as owner_name, names.* from crm.tasks t ${subjectNamesJoin("t.deal_id", "t.contact_id")}`;
+const TASK_SELECT = `select t.*, ${userNameSql("t.owner_id")} as owner_name, names.* from crm_tasks t ${subjectNamesJoin("t.deal_id", "t.contact_id")}`;
 
 export function taskToDto(row: TaskRow) {
   return {
@@ -79,11 +79,11 @@ export async function createTask(db: Queryable, actor: Actor | EventActor | null
 
   let contactId = input.contactId ?? null;
   if (input.dealId) {
-    const deal = await db.query<{ contact_id: string }>(`select contact_id from crm.deals where id = $1 and workspace_id = $2`, [input.dealId, workspaceId]);
+    const deal = await db.query<{ contact_id: string }>(`select contact_id from crm_deals where id = $1 and workspace_id = $2`, [input.dealId, workspaceId]);
     if (!deal.rows[0]) throw new NotFoundError("Deal");
     contactId = deal.rows[0].contact_id;
   } else if (contactId) {
-    const contact = await db.query(`select 1 from crm.contacts where id = $1 and workspace_id = $2`, [contactId, workspaceId]);
+    const contact = await db.query(`select 1 from crm_contacts where id = $1 and workspace_id = $2`, [contactId, workspaceId]);
     if (!contact.rows[0]) throw new NotFoundError("Contact");
   } else {
     throw new ValidationError("A task needs a deal or a contact.");
@@ -92,7 +92,7 @@ export async function createTask(db: Queryable, actor: Actor | EventActor | null
   const user = actor && "fullName" in actor ? actor : null;
   const id = (
     await db.query<{ id: string }>(
-      `insert into crm.tasks
+      `insert into crm_tasks
         (workspace_id, deal_id, contact_id, owner_id, task_type, title, due_at, origin,
          source_workflow_run_id, source_workflow_step_id, created_by)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
@@ -154,7 +154,7 @@ export async function updateTask(db: Queryable, actor: Actor, workspaceId: strin
   if (patch.dueAt !== undefined) set("due_at", patch.dueAt);
   if (sets.length === 0) return current;
 
-  await db.query(`update crm.tasks set ${sets.join(", ")} where id = $${params.push(id)}`, params);
+  await db.query(`update crm_tasks set ${sets.join(", ")} where id = $${params.push(id)}`, params);
   const task = await getTaskOr404(db, workspaceId, id);
   await addTimelineEvent(db, { ...subject(task), kind: "task", title: "Task Updated", detail: task.title, ...actorEvent(actor), relatedTaskId: id });
   return task;
@@ -163,7 +163,7 @@ export async function updateTask(db: Queryable, actor: Actor, workspaceId: strin
 export async function completeTask(db: Queryable, actor: Actor, workspaceId: string, id: string): Promise<TaskRow> {
   const existing = await getTaskOr404(db, workspaceId, id);
   if (existing.status !== "open") return existing;
-  await db.query(`update crm.tasks set status = 'completed', completed_at = now() where id = $1`, [id]);
+  await db.query(`update crm_tasks set status = 'completed', completed_at = now() where id = $1`, [id]);
   await addTimelineEvent(db, { ...subject(existing), kind: "task", title: "Task Completed", detail: existing.title, ...actorEvent(actor), relatedTaskId: id });
   return getTaskOr404(db, workspaceId, id);
 }
@@ -171,7 +171,7 @@ export async function completeTask(db: Queryable, actor: Actor, workspaceId: str
 export async function cancelTask(db: Queryable, actor: Actor | null, workspaceId: string, id: string, reason?: string): Promise<TaskRow> {
   const existing = await getTaskOr404(db, workspaceId, id);
   if (existing.status !== "open") return existing;
-  await db.query(`update crm.tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = $2 where id = $1`, [id, reason ?? null]);
+  await db.query(`update crm_tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = $2 where id = $1`, [id, reason ?? null]);
   await addTimelineEvent(db, { ...subject(existing), kind: "task", title: "Task Cancelled", detail: reason ?? existing.title, ...toEventActor(actor), relatedTaskId: id });
   return getTaskOr404(db, workspaceId, id);
 }
@@ -182,9 +182,9 @@ export async function cancelTask(db: Queryable, actor: Actor | null, workspaceId
  */
 export async function cancelOpenTasksForDeal(db: Queryable, actor: Actor | null, dealId: string, reason: string, types?: TaskType[]): Promise<number> {
   const params: unknown[] = [dealId, reason];
-  const typeFilter = types?.length ? `and task_type = any($${params.push(types)}::crm.task_type[])` : "";
+  const typeFilter = types?.length ? `and task_type = any($${params.push(types)}::crm_task_type[])` : "";
   const result = await db.query<{ id: string; title: string }>(
-    `update crm.tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = $2
+    `update crm_tasks set status = 'cancelled', cancelled_at = now(), cancel_reason = $2
       where deal_id = $1 and status = 'open' ${typeFilter}
       returning id, title`,
     params,
@@ -220,7 +220,7 @@ export async function listTasks(db: Queryable, workspaceId: string, f: ListTasks
   if (f.contactId) where.push(`t.contact_id = $${params.push(f.contactId)}`);
   if (f.companyId) {
     const p = `$${params.push(f.companyId)}`;
-    where.push(`(t.deal_id in (select id from crm.deals where company_id = ${p}) or t.contact_id in (select id from crm.contacts where company_id = ${p}))`);
+    where.push(`(t.deal_id in (select id from crm_deals where company_id = ${p}) or t.contact_id in (select id from crm_contacts where company_id = ${p}))`);
   }
   if (f.status) where.push(`t.status = $${params.push(f.status)}`);
   if (f.type) where.push(`t.task_type = $${params.push(f.type)}`);
@@ -238,7 +238,7 @@ export async function listTasks(db: Queryable, workspaceId: string, f: ListTasks
   const offset = f.offset ?? 0;
   const result = await db.query<TaskRow & { total: number }>(
     `select t.*, ${userNameSql("t.owner_id")} as owner_name, names.*, count(*) over()::int as total
-       from crm.tasks t ${subjectNamesJoin("t.deal_id", "t.contact_id")}
+       from crm_tasks t ${subjectNamesJoin("t.deal_id", "t.contact_id")}
       where ${where.join(" and ")}
       order by t.due_at asc
       limit $${params.push(limit)} offset $${params.push(offset)}`,

@@ -594,7 +594,7 @@ async function main() {
     log("Bulk contact actions (500 each)…");
     // Two sets of 500 active contacts: one for owner/lifecycle/DNC, one to delete (with open deals: force).
     const pick = async (offset: number) =>
-      (await direct.query<{ id: string }>(`select id from crm.contacts where workspace_id = $1 and status = 'active' order by id limit 500 offset $2`, [A, offset])).rows.map((r) => r.id);
+      (await direct.query<{ id: string }>(`select id from crm_contacts where workspace_id = $1 and status = 'active' order by id limit 500 offset $2`, [A, offset])).rows.map((r) => r.id);
     const [ids, toDelete] = [await pick(0), await pick(500)];
     const samId = USERS[1]!.id;
     const steps: [string, Who, object][] = [
@@ -692,10 +692,10 @@ async function main() {
       Number(
         (
           await direct.query<{ n: string }>(
-            `select count(*) as n from crm.contacts c
+            `select count(*) as n from crm_contacts c
               where c.workspace_id = $1 and c.status <> 'merged'
                 and (c.status = 'do_not_contact' or exists (
-                  select 1 from crm.contact_channels ch where ch.contact_id = c.id
+                  select 1 from crm_contact_channels ch where ch.contact_id = c.id
                      and ((ch.channel = 'email' and ch.status in ('unsubscribed', 'permanent_bounce'))
                        or (ch.channel = 'phone' and ch.status = 'do_not_contact')
                        or (ch.channel = 'whatsapp' and ch.status in ('do_not_contact', 'opted_out')))))`,
@@ -707,10 +707,10 @@ async function main() {
     const t0 = (await direct.query<{ t: Date }>(`select now() as t`)).rows[0]!.t.toISOString();
     await new Promise((r) => setTimeout(r, 50));
     const bulk = await direct.query(
-      `update crm.contact_channels ch set status = 'unsubscribed', updated_at = now()
-         from crm.contacts c
+      `update crm_contact_channels ch set status = 'unsubscribed', updated_at = now()
+         from crm_contacts c
         where c.id = ch.contact_id and c.workspace_id = $1 and c.status = 'active' and ch.channel = 'email' and ch.status = 'valid'
-          and ch.contact_id in (select id from crm.contacts where workspace_id = $1 and status = 'active' order by id limit 1200)`,
+          and ch.contact_id in (select id from crm_contacts where workspace_id = $1 and status = 'active' order by id limit 1200)`,
       [C],
     );
     checks.push(await followFeed(`Change feed after a bulk unsubscribe (since=…, limit=500)`, `/brain/v1/suppressions?since=${encodeURIComponent(t0)}&limit=500`, keyC, bulk.rowCount ?? 0));

@@ -4,7 +4,7 @@ import { sendBlockReason } from "./consent.service.js";
 import { notifyAdmins } from "./notifications.service.js";
 
 /**
- * Sending limits per workspace and channel (crm.send_policies, migration 015). The worker calls
+ * Sending limits per workspace and channel (crm_send_policies, migration 015). The worker calls
  * checkSendPolicy right before every workflow send, in this order: paused -> working hours (IST)
  * -> daily cap with warm-up ramp -> random gap -> consent. Over a limit the send is deferred to
  * the next allowed time (never dropped); a consent block is a skip. An allowed send reserves its
@@ -50,14 +50,14 @@ export interface SendPolicyRow {
 export async function getSendPolicy(db: Queryable, workspaceId: string, channel: SendChannel, forUpdate = false): Promise<SendPolicyRow> {
   const d = SEND_POLICY_DEFAULTS[channel];
   await db.query(
-    `insert into crm.send_policies (workspace_id, channel, daily_cap, ramp_start, ramp_step_per_day, min_gap_seconds, max_gap_seconds)
+    `insert into crm_send_policies (workspace_id, channel, daily_cap, ramp_start, ramp_step_per_day, min_gap_seconds, max_gap_seconds)
      values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing`,
     [workspaceId, channel, d.dailyCap, d.rampStart, d.rampStepPerDay, d.minGapSeconds, d.maxGapSeconds],
   );
   const row = (
     await db.query<SendPolicyRow>(
       `select *, counter_day::text as counter_day, to_char(window_start, 'HH24:MI') as window_start, to_char(window_end, 'HH24:MI') as window_end
-         from crm.send_policies where workspace_id = $1 and channel = $2 ${forUpdate ? "for update" : ""}`,
+         from crm_send_policies where workspace_id = $1 and channel = $2 ${forUpdate ? "for update" : ""}`,
       [workspaceId, channel],
     )
   ).rows[0]!;
@@ -144,7 +144,7 @@ export async function checkSendPolicy(
 
   const gapMs = Math.round((policy.min_gap_seconds + random() * (policy.max_gap_seconds - policy.min_gap_seconds)) * 1000);
   await db.query(
-    `update crm.send_policies
+    `update crm_send_policies
         set counter_day = $3, sent_today = $4, next_send_at = $5, ramp_started_at = coalesce(ramp_started_at, $6)
       where workspace_id = $1 and channel = $2`,
     [input.workspaceId, input.channel, today, sentToday + 1, new Date(now.getTime() + gapMs).toISOString(), now.toISOString()],
@@ -159,7 +159,7 @@ export async function checkSendPolicy(
 export async function autoPauseChannel(db: Queryable, workspaceId: string, channel: SendChannel, reason: string) {
   const policy = await getSendPolicy(db, workspaceId, channel, true);
   if (policy.paused) return false;
-  await db.query(`update crm.send_policies set paused = true, pause_reason = $3, paused_at = now() where workspace_id = $1 and channel = $2`, [workspaceId, channel, reason]);
+  await db.query(`update crm_send_policies set paused = true, pause_reason = $3, paused_at = now() where workspace_id = $1 and channel = $2`, [workspaceId, channel, reason]);
   await notifyAdmins(db, {
     workspaceId,
     title: `${label(channel)} sending paused automatically`,
@@ -241,7 +241,7 @@ export async function updateSendPolicy(db: Queryable, actorId: string, workspace
   const paused = patch.paused ?? row.paused;
   const pauseReason = !paused ? null : patch.paused && !row.paused ? patch.pauseReason!.trim() : (patch.pauseReason?.trim() || row.pause_reason);
   await db.query(
-    `update crm.send_policies
+    `update crm_send_policies
         set daily_cap = $3, ramp_start = $4, ramp_step_per_day = $5, min_gap_seconds = $6, max_gap_seconds = $7,
             window_start = $8, window_end = $9, window_days = $10, paused = $11, pause_reason = $12,
             paused_at = case when $11 and not paused then now() when not $11 then null else paused_at end,

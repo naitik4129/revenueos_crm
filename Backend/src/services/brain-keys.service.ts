@@ -30,7 +30,7 @@ const keyToDto = (r: KeyRow) => ({
 });
 
 async function assertWorkspace(workspaceId: string) {
-  const ws = await pool.query(`select 1 from crm.workspaces where id = $1`, [workspaceId]);
+  const ws = await pool.query(`select 1 from crm_workspaces where id = $1`, [workspaceId]);
   if (!ws.rows[0]) throw new NotFoundError("Workspace");
 }
 
@@ -42,7 +42,7 @@ export async function createBrainKey(actor: Actor, workspaceId: string, label: s
   return withTransaction(async (db) => {
     const row = (
       await db.query<KeyRow>(
-        `insert into crm.brain_api_keys (workspace_id, key_hash, key_prefix, label, created_by)
+        `insert into crm_brain_api_keys (workspace_id, key_hash, key_prefix, label, created_by)
          values ($1, $2, $3, $4, $5)
          returning id, label, key_prefix, created_at, last_used_at, revoked_at`,
         [workspaceId, hashBrainKey(key), key.slice(0, 12), label.trim(), actor.id],
@@ -57,7 +57,7 @@ export async function listBrainKeys(workspaceId: string) {
   await assertWorkspace(workspaceId);
   const result = await pool.query<KeyRow>(
     `select id, label, key_prefix, created_at, last_used_at, revoked_at
-       from crm.brain_api_keys where workspace_id = $1 order by created_at desc`,
+       from crm_brain_api_keys where workspace_id = $1 order by created_at desc`,
     [workspaceId],
   );
   return result.rows.map(keyToDto);
@@ -67,7 +67,7 @@ export async function revokeBrainKey(actor: Actor, workspaceId: string, keyId: s
   return withTransaction(async (db) => {
     const row = (
       await db.query<KeyRow>(
-        `update crm.brain_api_keys set revoked_at = coalesce(revoked_at, now())
+        `update crm_brain_api_keys set revoked_at = coalesce(revoked_at, now())
           where id = $1 and workspace_id = $2
           returning id, label, key_prefix, created_at, last_used_at, revoked_at`,
         [keyId, workspaceId],
@@ -83,15 +83,15 @@ export async function revokeBrainKey(actor: Actor, workspaceId: string, keyId: s
 export async function resolveBrainKey(key: string): Promise<{ keyId: string; workspaceId: string } | null> {
   const result = await pool.query<{ id: string; workspace_id: string }>(
     `select k.id, k.workspace_id
-       from crm.brain_api_keys k
-       join crm.workspaces w on w.id = k.workspace_id and w.is_active
+       from crm_brain_api_keys k
+       join crm_workspaces w on w.id = k.workspace_id and w.is_active
       where k.key_hash = $1 and k.revoked_at is null`,
     [hashBrainKey(key)],
   );
   const row = result.rows[0];
   if (!row) return null;
   await pool.query(
-    `update crm.brain_api_keys set last_used_at = now()
+    `update crm_brain_api_keys set last_used_at = now()
       where id = $1 and (last_used_at is null or last_used_at < now() - interval '1 minute')`,
     [row.id],
   );

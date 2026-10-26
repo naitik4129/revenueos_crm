@@ -126,7 +126,13 @@ export class BaileysManager {
       this.lockClient = null;
       throw new Error(`Another automation worker already owns this workspace's WhatsApp session (workspace ${this.workspaceId}).`);
     }
-    await this.syncControl();
+    try {
+      await this.syncControl();
+    } catch (error) {
+      // Never keep the lock (and its pool connection) for a session that did not start.
+      await this.stop();
+      throw error;
+    }
     this.heartbeatTimer = setInterval(() => {
       void this.syncControl().catch((error) => this.logger.error({ err: error }, "WhatsApp control sync failed"));
     }, 10_000);
@@ -148,9 +154,15 @@ export class BaileysManager {
   }
 
   async syncControl() {
-    const result = await pool.query<ConnectionControl>(`select * from crm.whatsapp_connection where workspace_id = $1`, [this.workspaceId]);
-    const control = result.rows[0]!;
-    await pool.query(`update crm.whatsapp_connection set worker_heartbeat_at = now() where workspace_id = $1`, [this.workspaceId]);
+    const result = await pool.query<ConnectionControl>(`select * from crm_whatsapp_connection where workspace_id = $1`, [this.workspaceId]);
+    const control = result.rows[0];
+    // The row is created when someone first opens the workspace's WhatsApp settings; until then
+    // WhatsApp is simply not connected.
+    if (!control) {
+      if (this.socket) await this.logout();
+      return;
+    }
+    await pool.query(`update crm_whatsapp_connection set worker_heartbeat_at = now() where workspace_id = $1`, [this.workspaceId]);
     const isNewCommand = control.command_version !== this.commandVersion;
     this.commandVersion = control.command_version;
     if (control.desired_state === "disconnected") {
@@ -158,7 +170,7 @@ export class BaileysManager {
       return;
     }
     if (control.desired_state === "restart" && isNewCommand) {
-      await pool.query(`update crm.whatsapp_connection set desired_state = 'connected', status = 'connecting' where workspace_id = $1`, [this.workspaceId]);
+      await pool.query(`update crm_whatsapp_connection set desired_state = 'connected', status = 'connecting' where workspace_id = $1`, [this.workspaceId]);
       await this.closeSocket("Administrator requested restart");
       await this.openSocket();
       return;
@@ -178,7 +190,7 @@ export class BaileysManager {
 
   private async openSocketUnguarded() {
     this.intentionalClose = false;
-    await pool.query(`update crm.whatsapp_connection set status = 'connecting', last_error = null where workspace_id = $1`, [this.workspaceId]);
+    await pool.query(`update crm_whatsapp_connection set status = 'connecting', last_error = null where workspace_id = $1`, [this.workspaceId]);
     const { state, saveCreds } = await loadBaileysAuthState(this.workspaceId);
     const socket = makeWASocket({
       auth: state,
@@ -200,7 +212,7 @@ export class BaileysManager {
           key_version: number;
         }>(
           `select payload_ciphertext, payload_iv, payload_tag, key_version
-             from crm.whatsapp_outbound_messages
+             from crm_whatsapp_outbound_messages
             where workspace_id = $1 and message_id = $2 and remote_jid = $3 and payload_ciphertext is not null`,
           [this.workspaceId, key.id, key.remoteJid],
         );
@@ -233,14 +245,14 @@ export class BaileysManager {
     if (this.socket !== source) return;
     if (update.qr) await this.storeQr(update.qr);
     if (update.reachoutTimeLock !== undefined) {
-      await pool.query(`update crm.whatsapp_connection set reachout_lock = $1 where workspace_id = $2`, [jsonSafe(update.reachoutTimeLock), this.workspaceId]);
+      await pool.query(`update crm_whatsapp_connection set reachout_lock = $1 where workspace_id = $2`, [jsonSafe(update.reachoutTimeLock), this.workspaceId]);
     }
     if (update.connection === "open") {
       this.connected = true;
       this.reconnectAttempt = 0;
       const user = this.socket?.user;
       await pool.query(
-        `update crm.whatsapp_connection
+        `update crm_whatsapp_connection
             set status = 'connected', connected_jid = $1, connected_phone = $2, display_name = $3,
                 last_connected_at = now(), last_error = null,
                 qr_ciphertext = null, qr_iv = null, qr_tag = null, qr_expires_at = null
@@ -248,7 +260,7 @@ export class BaileysManager {
         [user?.id ?? null, user?.id?.split("@", 1)[0]?.split(":", 1)[0] ?? null, user?.name ?? null, this.workspaceId],
       );
       const cap = await this.socket?.fetchNewChatMessageCap().catch(() => undefined);
-      if (cap) await pool.query(`update crm.whatsapp_connection set new_chat_cap = $1 where workspace_id = $2`, [jsonSafe(cap), this.workspaceId]);
+      if (cap) await pool.query(`update crm_whatsapp_connection set new_chat_cap = $1 where workspace_id = $2`, [jsonSafe(cap), this.workspaceId]);
       return;
     }
     if (update.connection !== "close") return;
@@ -261,7 +273,7 @@ export class BaileysManager {
       await withTransaction((db) => autoPauseChannel(db, this.workspaceId, "whatsapp", `WhatsApp session ended (${message}); pair the number again before resuming.`));
       await clearBaileysAuthState(this.workspaceId);
       await pool.query(
-        `update crm.whatsapp_connection
+        `update crm_whatsapp_connection
             set status = 'reauth_required', desired_state = 'disconnected', last_error = $1, last_disconnected_at = now(),
                 qr_ciphertext = null, qr_iv = null, qr_tag = null, qr_expires_at = null
           where workspace_id = $2`,
@@ -270,7 +282,7 @@ export class BaileysManager {
       return;
     }
     await pool.query(
-      `update crm.whatsapp_connection set status = 'reconnecting', last_error = $1, last_disconnected_at = now() where workspace_id = $2`,
+      `update crm_whatsapp_connection set status = 'reconnecting', last_error = $1, last_disconnected_at = now() where workspace_id = $2`,
       [message, this.workspaceId],
     );
     this.scheduleReconnect(code === DisconnectReason.restartRequired ? 0 : undefined);
@@ -295,7 +307,7 @@ export class BaileysManager {
     const encrypted = encryptBytes(Buffer.from(qr, "utf8"), "whatsapp:pairing-qr");
     const expiresAt = new Date(Date.now() + 90_000);
     await pool.query(
-      `update crm.whatsapp_connection
+      `update crm_whatsapp_connection
           set status = 'qr_ready', qr_ciphertext = $1, qr_iv = $2, qr_tag = $3, qr_key_version = $4, qr_expires_at = $5
         where workspace_id = $6`,
       [encrypted.ciphertext, encrypted.iv, encrypted.tag, encrypted.keyVersion, expiresAt.toISOString(), this.workspaceId],
@@ -303,7 +315,7 @@ export class BaileysManager {
     if (this.qrExpiryTimer) clearTimeout(this.qrExpiryTimer);
     this.qrExpiryTimer = setTimeout(() => {
       void pool.query(
-        `update crm.whatsapp_connection
+        `update crm_whatsapp_connection
             set qr_ciphertext = null, qr_iv = null, qr_tag = null, qr_expires_at = null,
                 status = case when status = 'qr_ready' then 'connecting' else status end
           where workspace_id = $1 and qr_expires_at <= now()`,
@@ -328,7 +340,7 @@ export class BaileysManager {
     this.connected = false;
     await clearBaileysAuthState(this.workspaceId);
     await pool.query(
-      `update crm.whatsapp_connection
+      `update crm_whatsapp_connection
           set status = 'disconnected', connected_jid = null, connected_phone = null, display_name = null,
               last_error = null, reachout_lock = null, new_chat_cap = null, last_disconnected_at = now(),
               qr_ciphertext = null, qr_iv = null, qr_tag = null, qr_expires_at = null
@@ -359,19 +371,19 @@ export class BaileysManager {
     const prepared = await withTransaction(async (db) => {
       // The outbound row records the contact the message is for (from the source's deal).
       await db.query(
-        `insert into crm.whatsapp_outbound_messages (workspace_id, contact_id, ${column}, message_id, remote_jid)
+        `insert into crm_whatsapp_outbound_messages (workspace_id, contact_id, ${column}, message_id, remote_jid)
          select $1, d.contact_id, s.id, $3, $4 ${sourceFrom(input.source)} where s.id = $2
          on conflict (${column}) do nothing`,
         [this.workspaceId, sourceId, proposedMessageId, jid],
       );
-      const row = (await db.query<OutboundRow>(`select message_id, remote_jid, status from crm.whatsapp_outbound_messages where ${column} = $1`, [sourceId])).rows[0];
+      const row = (await db.query<OutboundRow>(`select message_id, remote_jid, status from crm_whatsapp_outbound_messages where ${column} = $1`, [sourceId])).rows[0];
       if (!row) throw new PermanentProviderError("The WhatsApp send's source no longer exists.");
       // Text-only placeholder even when this send carries an attachment: a retry-receipt request in the
       // narrow window before the real send would be served this placeholder. Accepted minor edge case.
       const retryPayload = proto.Message.toObject(proto.Message.fromObject({ conversation: input.body }));
       const encrypted = encryptBytes(Buffer.from(JSON.stringify(retryPayload), "utf8"), `whatsapp:outbound:${row.message_id}`);
       await db.query(
-        `update crm.whatsapp_outbound_messages
+        `update crm_whatsapp_outbound_messages
             set payload_ciphertext = $2, payload_iv = $3, payload_tag = $4, key_version = $5, updated_at = now()
           where ${column} = $1 and payload_ciphertext is null`,
         [sourceId, encrypted.ciphertext, encrypted.iv, encrypted.tag, encrypted.keyVersion],
@@ -394,7 +406,7 @@ export class BaileysManager {
     if (claim.waitMs > 0) await sleep(claim.waitMs);
 
     // Re-check the emergency switch and connection after the sleep (the locks were released before it).
-    const recheck = await pool.query<{ enabled: boolean; status: string }>(`select enabled, status from crm.whatsapp_connection where workspace_id = $1`, [
+    const recheck = await pool.query<{ enabled: boolean; status: string }>(`select enabled, status from crm_whatsapp_connection where workspace_id = $1`, [
       this.workspaceId,
     ]);
     if (!recheck.rows[0]?.enabled) throw new ProviderDeferredError("WhatsApp outbound is disabled by the emergency switch.");
@@ -417,7 +429,7 @@ export class BaileysManager {
       // Counted per IST day; too many pause the channel (pauseWhatsAppOnFailures).
       const error = err instanceof Error ? err.message : String(err);
       await withTransaction(async (db) => {
-        await db.query(`update crm.whatsapp_outbound_messages set status = 'failed', last_error = $2, updated_at = now() where ${column} = $1`, [sourceId, error]);
+        await db.query(`update crm_whatsapp_outbound_messages set status = 'failed', last_error = $2, updated_at = now() where ${column} = $1`, [sourceId, error]);
         await pauseWhatsAppOnFailures(db, this.workspaceId);
       });
       throw err;
@@ -427,7 +439,7 @@ export class BaileysManager {
       const payload = proto.Message.toObject(proto.Message.fromObject(sent.message));
       const encrypted = encryptBytes(Buffer.from(JSON.stringify(payload), "utf8"), `whatsapp:outbound:${claim.messageId}`);
       await db.query(
-        `update crm.whatsapp_outbound_messages
+        `update crm_whatsapp_outbound_messages
             set status = 'sent', payload_ciphertext = $2, payload_iv = $3, payload_tag = $4,
                 key_version = $5, sent_at = now(), last_error = null, updated_at = now()
           where ${column} = $1`,
@@ -438,16 +450,16 @@ export class BaileysManager {
   }
 }
 
-/** `from crm.<source> s join crm.deals d` for a send source (every source row has a deal_id). */
+/** `from crm_<source> s join crm_deals d` for a send source (every source row has a deal_id). */
 function sourceFrom(source: WhatsAppSendSource) {
   const table = source.type === "scheduled_action" ? "scheduled_actions" : source.type === "proposal" ? "proposals" : "meetings";
-  return `from crm.${table} s join crm.deals d on d.id = s.deal_id`;
+  return `from crm_${table} s join crm_deals d on d.id = s.deal_id`;
 }
 
 /** Still sendable: a workflow action must be executing on an automatable deal; a human-triggered send must still be "sending". */
 const SOURCE_STILL_SENDABLE: Record<WhatsAppSendSource["type"], string> = {
   scheduled_action: `s.status = 'executing' and d.outcome in ('open', 'nurture') and d.automation_mode = 'active'
-    and exists (select 1 from crm.workflow_runs r where r.id = s.workflow_run_id and r.status in ('running', 'waiting'))`,
+    and exists (select 1 from crm_workflow_runs r where r.id = s.workflow_run_id and r.status in ('running', 'waiting'))`,
   proposal: `s.whatsapp_send_status = 'sending'`,
   meeting: `s.notify_whatsapp_status = 'sending'`,
 };
@@ -478,7 +490,7 @@ export async function claimOutboundSend(
   const column = sourceColumn(input.source);
   const sourceId = input.source.id;
   await db.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [input.phoneE164]);
-  const control = (await db.query<ConnectionControl>(`select * from crm.whatsapp_connection where workspace_id = $1 for update`, [workspaceId])).rows[0];
+  const control = (await db.query<ConnectionControl>(`select * from crm_whatsapp_connection where workspace_id = $1 for update`, [workspaceId])).rows[0];
   if (!control?.enabled) throw new ProviderDeferredError("WhatsApp outbound is disabled by the emergency switch.");
   if (control.status !== "connected" || !connected) throw new ProviderDeferredError("WhatsApp is not connected.");
 
@@ -486,16 +498,16 @@ export async function claimOutboundSend(
     socket.fetchAccountReachoutTimelock().catch(() => control.reachout_lock),
     socket.fetchNewChatMessageCap().catch(() => control.new_chat_cap),
   ]);
-  await db.query(`update crm.whatsapp_connection set reachout_lock = $1, new_chat_cap = $2 where workspace_id = $3`, [jsonSafe(liveReachout), jsonSafe(liveCap), workspaceId]);
+  await db.query(`update crm_whatsapp_connection set reachout_lock = $1, new_chat_cap = $2 where workspace_id = $3`, [jsonSafe(liveReachout), jsonSafe(liveCap), workspaceId]);
   if (isOutboundRestricted(liveReachout, liveCap)) throw new WhatsAppRestrictedError("WhatsApp has applied a reachout or new-chat restriction.", 300_000);
-  const pause = (await db.query<{ pause_reason: string }>(`select pause_reason from crm.send_policies where workspace_id = $1 and channel = 'whatsapp' and paused`, [workspaceId])).rows[0];
+  const pause = (await db.query<{ pause_reason: string }>(`select pause_reason from crm_send_policies where workspace_id = $1 and channel = 'whatsapp' and paused`, [workspaceId])).rows[0];
   if (pause) throw new ProviderDeferredError(`WhatsApp sending is paused: ${pause.pause_reason}`, 300_000);
 
   const target = (
     await db.query<{ contact_id: string; phone_e164: string | null }>(
       `select d.contact_id, c.phone_e164
          ${sourceFrom(input.source)}
-         join crm.contacts c on c.id = d.contact_id
+         join crm_contacts c on c.id = d.contact_id
         where s.id = $1 and s.workspace_id = $2 and ${SOURCE_STILL_SENDABLE[input.source.type]}
         for update of s`,
       [sourceId, workspaceId],
@@ -506,29 +518,29 @@ export async function claimOutboundSend(
   if (blocked) throw new PermanentProviderError(blocked);
 
   const daily = await db.query<{ count: string }>(
-    `select count(*)::text as count from crm.whatsapp_outbound_messages
+    `select count(*)::text as count from crm_whatsapp_outbound_messages
       where workspace_id = $1 and status = 'sent'
         and sent_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'`,
     [workspaceId],
   );
   if (Number(daily.rows[0]?.count ?? 0) >= control.daily_cap) throw new ProviderDeferredError("The Asia/Kolkata WhatsApp daily cap has been reached.", 300_000);
 
-  const existing = (await db.query<OutboundRow>(`select message_id, remote_jid, status from crm.whatsapp_outbound_messages where ${column} = $1`, [sourceId])).rows[0];
+  const existing = (await db.query<OutboundRow>(`select message_id, remote_jid, status from crm_whatsapp_outbound_messages where ${column} = $1`, [sourceId])).rows[0];
   if (existing?.status === "sent") return { kind: "already_sent", messageId: existing.message_id };
   const messageId = existing?.message_id ?? input.preparedMessageId;
 
   const registered = await socket.onWhatsApp(input.phoneE164.slice(1));
   if (!registered?.some((entry) => entry.exists)) {
-    await db.query(`update crm.whatsapp_outbound_messages set status = 'failed', last_error = 'Recipient is not on WhatsApp' where ${column} = $1`, [sourceId]);
+    await db.query(`update crm_whatsapp_outbound_messages set status = 'failed', last_error = 'Recipient is not on WhatsApp' where ${column} = $1`, [sourceId]);
     await db.query(
-      `insert into crm.contact_channels (contact_id, channel, status, reason) values ($1, 'whatsapp', 'invalid', 'Number is not registered on WhatsApp')
+      `insert into crm_contact_channels (contact_id, channel, status, reason) values ($1, 'whatsapp', 'invalid', 'Number is not registered on WhatsApp')
        on conflict (contact_id, channel) do update set status = 'invalid', reason = excluded.reason, updated_by = null`,
       [target.contact_id],
     );
     return { kind: "not_registered" };
   }
 
-  const latest = await db.query<{ sent_at: Date | null }>(`select max(sent_at) as sent_at from crm.whatsapp_outbound_messages where workspace_id = $1 and status = 'sent'`, [workspaceId]);
+  const latest = await db.query<{ sent_at: Date | null }>(`select max(sent_at) as sent_at from crm_whatsapp_outbound_messages where workspace_id = $1 and status = 'sent'`, [workspaceId]);
   const spacing = randomSpacingMs(control.min_delay_seconds, control.max_delay_seconds);
   const elapsed = latest.rows[0]?.sent_at ? Date.now() - latest.rows[0].sent_at.getTime() : spacing;
   return { kind: "send", messageId, waitMs: elapsed < spacing ? spacing - elapsed : 0 };

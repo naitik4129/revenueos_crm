@@ -10,7 +10,7 @@ begin;
 
 -- 1. updated_at ------------------------------------------------------------
 
-create function crm.set_updated_at()
+create function public.crm_set_updated_at()
 returns trigger
 language plpgsql
 set search_path = ''
@@ -27,11 +27,11 @@ declare
 begin
   for t in
     select table_name from information_schema.columns
-    where table_schema = 'crm' and column_name = 'updated_at'
+    where table_schema = 'public' and table_name like 'crm\_%' and column_name = 'updated_at'
     order by table_name
   loop
     execute format(
-      'create trigger %I before update on crm.%I for each row execute function crm.set_updated_at()',
+      'create trigger %I before update on public.%I for each row execute function public.crm_set_updated_at()',
       t || '_set_updated_at', t
     );
   end loop;
@@ -41,7 +41,7 @@ end $$;
 -- BEFORE UPDATE only: contacts are created 'active'. DNC and reactivation both carry their
 -- reason/actor in dnc_reason/dnc_by/dnc_by_name on the same update.
 
-create function crm.contacts_status_change()
+create function public.crm_contacts_status_change()
 returns trigger
 language plpgsql
 set search_path = ''
@@ -55,14 +55,14 @@ begin
 
   if new.status = 'do_not_contact' then
     new.dnc_at := coalesce(new.dnc_at, now());
-    insert into crm.dnc_events (contact_id, action, reason, actor_id, actor_name)
+    insert into public.crm_dnc_events (contact_id, action, reason, actor_id, actor_name)
     values (new.id, 'suppressed', new.dnc_reason, new.dnc_by, new.dnc_by_name);
   elsif old.status = 'do_not_contact' and new.status = 'active' then
     if new.dnc_reason is null then
       raise exception 'Reactivating a Do Not Contact contact requires dnc_reason to explain why.'
         using errcode = '23514';
     end if;
-    insert into crm.dnc_events (contact_id, action, reason, actor_id, actor_name)
+    insert into public.crm_dnc_events (contact_id, action, reason, actor_id, actor_name)
     values (new.id, 'reactivated', new.dnc_reason, new.dnc_by, new.dnc_by_name);
     new.dnc_reason := null;
     new.dnc_by := null;
@@ -75,33 +75,33 @@ begin
   if new.status in ('do_not_contact', 'merged') then
     v_reason := 'Contact status changed to ' || new.status;
 
-    update crm.deals
+    update public.crm_deals
     set automation_mode = 'stopped'
     where contact_id = new.id and automation_mode <> 'stopped';
 
-    update crm.workflow_runs
+    update public.crm_workflow_runs
     set status = 'cancelled', cancelled_at = now(), cancel_reason = v_reason
     where contact_id = new.id and status in ('running', 'waiting', 'paused');
 
-    update crm.scheduled_actions
+    update public.crm_scheduled_actions
     set status = 'cancelled', cancelled_at = now(), cancel_reason = v_reason
     where status in ('pending', 'due', 'paused')
-      and workflow_run_id in (select id from crm.workflow_runs where contact_id = new.id);
+      and workflow_run_id in (select id from public.crm_workflow_runs where contact_id = new.id);
   end if;
 
   return new;
 end;
 $$;
 
-create trigger contacts_status_change
-  before update of status on crm.contacts
-  for each row execute function crm.contacts_status_change();
+create trigger crm_contacts_status_change
+  before update of status on public.crm_contacts
+  for each row execute function public.crm_contacts_status_change();
 
 -- 3. Deal automation guard -------------------------------------------------
 -- 'nurture' is allowed: meeting_not_a_fit moves the deal to nurture, then enrolls a nurture
 -- workflow. Anything else not open, or a contact that is not active, forces 'stopped'.
 
-create function crm.deals_enforce_automation()
+create function public.crm_deals_enforce_automation()
 returns trigger
 language plpgsql
 set search_path = ''
@@ -110,7 +110,7 @@ begin
   if new.automation_mode <> 'stopped'
      and (
        new.outcome not in ('open', 'nurture')
-       or exists (select 1 from crm.contacts c where c.id = new.contact_id and c.status <> 'active')
+       or exists (select 1 from public.crm_contacts c where c.id = new.contact_id and c.status <> 'active')
      ) then
     new.automation_mode := 'stopped';
   end if;
@@ -118,16 +118,16 @@ begin
 end;
 $$;
 
-create trigger deals_enforce_automation
-  before insert or update on crm.deals
-  for each row execute function crm.deals_enforce_automation();
+create trigger crm_deals_enforce_automation
+  before insert or update on public.crm_deals
+  for each row execute function public.crm_deals_enforce_automation();
 
 -- 4. Deal outcome cascade --------------------------------------------------
 -- Any outcome change cancels the deal's in-flight runs/actions (e.g. open -> nurture cancels
 -- the old runs; the backend enrolls the nurture workflow afterwards). Closing the deal also
 -- cancels its open tasks.
 
-create function crm.deals_outcome_cascade()
+create function public.crm_deals_outcome_cascade()
 returns trigger
 language plpgsql
 set search_path = ''
@@ -141,16 +141,16 @@ begin
 
   v_reason := 'Deal outcome changed to ' || new.outcome;
 
-  update crm.workflow_runs
+  update public.crm_workflow_runs
   set status = 'cancelled', cancelled_at = now(), cancel_reason = v_reason
   where deal_id = new.id and status in ('running', 'waiting', 'paused');
 
-  update crm.scheduled_actions
+  update public.crm_scheduled_actions
   set status = 'cancelled', cancelled_at = now(), cancel_reason = v_reason
   where deal_id = new.id and status in ('pending', 'due', 'paused');
 
   if new.outcome in ('won', 'lost', 'discarded') then
-    update crm.tasks
+    update public.crm_tasks
     set status = 'cancelled', cancelled_at = now(), cancel_reason = v_reason
     where deal_id = new.id and status = 'open';
   end if;
@@ -159,20 +159,20 @@ begin
 end;
 $$;
 
-create trigger deals_outcome_cascade
-  after update of outcome on crm.deals
-  for each row execute function crm.deals_outcome_cascade();
+create trigger crm_deals_outcome_cascade
+  after update of outcome on public.crm_deals
+  for each row execute function public.crm_deals_outcome_cascade();
 
 -- 5. Task contact = deal contact --------------------------------------------
 
-create function crm.tasks_contact_matches_deal()
+create function public.crm_tasks_contact_matches_deal()
 returns trigger
 language plpgsql
 set search_path = ''
 as $$
 begin
   if new.deal_id is not null and new.contact_id is not null
-     and not exists (select 1 from crm.deals d where d.id = new.deal_id and d.contact_id = new.contact_id) then
+     and not exists (select 1 from public.crm_deals d where d.id = new.deal_id and d.contact_id = new.contact_id) then
     raise exception 'Task contact_id must equal its deal''s contact_id.'
       using errcode = '23514';
   end if;
@@ -180,8 +180,11 @@ begin
 end;
 $$;
 
-create trigger tasks_contact_matches_deal
-  before insert or update of deal_id, contact_id on crm.tasks
-  for each row execute function crm.tasks_contact_matches_deal();
+create trigger crm_tasks_contact_matches_deal
+  before insert or update of deal_id, contact_id on public.crm_tasks
+  for each row execute function public.crm_tasks_contact_matches_deal();
+
+-- Locks down the new crm_* objects (see 001).
+select public.crm_secure_objects();
 
 commit;

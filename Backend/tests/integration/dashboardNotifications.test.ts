@@ -29,7 +29,7 @@ describe("dashboard and notifications (PGlite)", () => {
   async function mkUser(email: string, role: "admin" | "salesperson") {
     const id = (await seed.query(`insert into auth.users (email) values ($1) returning id`, [email])).rows[0].id as string;
     await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, $2, $3)`, [id, email.split("@")[0], email]);
-    await seed.query(`insert into crm.profiles (id, role) values ($1, $2)`, [id, role]);
+    await seed.query(`insert into crm_profiles (id, role) values ($1, $2)`, [id, role]);
     return id;
   }
   const api = (method: "get" | "post", path: string, body?: object, ws = w1, as = sam) => {
@@ -62,10 +62,10 @@ describe("dashboard and notifications (PGlite)", () => {
 
     admin = await mkUser("admin@x.com", "admin");
     sam = await mkUser("sam@x.com", "salesperson");
-    w1 = (await seed.query(`insert into crm.workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
-    w2 = (await seed.query(`insert into crm.workspaces (name, slug) values ('Two', 'two') returning id`)).rows[0].id;
+    w1 = (await seed.query(`insert into crm_workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
+    w2 = (await seed.query(`insert into crm_workspaces (name, slug) values ('Two', 'two') returning id`)).rows[0].id;
     // The admin is a member of w1 too, so "notify all members" would reach them if admins were not excluded.
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3), ($1, $4)`, [w1, w2, sam, admin]);
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3), ($1, $4)`, [w1, w2, sam, admin]);
     key = (await request(app).post(`/api/v1/workspaces/${w1}/brain-keys`).set("Authorization", `Bearer ${admin}`).send({ label: "brain" })).body.key;
   }, 60_000);
 
@@ -92,13 +92,13 @@ describe("dashboard and notifications (PGlite)", () => {
       await api("post", `/deals/${d3.dealId}/lost`, { lossReason: "price_budget" });
       const old = await newDeal();
       await api("post", `/deals/${old.dealId}/won`, {});
-      await seed.query(`update crm.deals set closed_at = now() - interval '40 days' where id = $1`, [old.dealId]);
+      await seed.query(`update crm_deals set closed_at = now() - interval '40 days' where id = $1`, [old.dealId]);
       await newDeal(); // open, its task is cancelled below -> missing next action
 
       // Replace the auto-created tasks with known ones on d1.
-      await seed.query(`update crm.tasks set status = 'cancelled', cancelled_at = now() where workspace_id = $1 and status = 'open'`, [w1]);
+      await seed.query(`update crm_tasks set status = 'cancelled', cancelled_at = now() where workspace_id = $1 and status = 'open'`, [w1]);
       await seed.query(
-        `insert into crm.tasks (workspace_id, deal_id, owner_id, task_type, title, due_at) values
+        `insert into crm_tasks (workspace_id, deal_id, owner_id, task_type, title, due_at) values
            ($1, $2, $3, 'follow_up', 'later today', ${TODAY} + interval '2 seconds'),
            ($1, $2, $3, 'call', 'earlier today', ${TODAY} + interval '1 second'),
            ($1, $2, $4, 'call', 'admin today', ${TODAY} + interval '3 seconds'),
@@ -107,14 +107,14 @@ describe("dashboard and notifications (PGlite)", () => {
         [w1, d1.dealId, sam, admin],
       );
       await seed.query(
-        `insert into crm.meetings (workspace_id, deal_id, title, scheduled_at, status) values
+        `insert into crm_meetings (workspace_id, deal_id, title, scheduled_at, status) values
            ($1, $2, 'today', ${TODAY} + interval '1 second', 'scheduled'),
            ($1, $2, 'cancelled today', ${TODAY} + interval '2 seconds', 'cancelled'),
            ($1, $2, 'tomorrow', ${TODAY} + interval '25 hours', 'scheduled')`,
         [w1, d1.dealId],
       );
       await seed.query(
-        `insert into crm.proposals (workspace_id, deal_id, title, status, sent_at) values ($1, $2, 'sent', 'sent', now()), ($1, $2, 'draft', 'draft', null)`,
+        `insert into crm_proposals (workspace_id, deal_id, title, status, sent_at) values ($1, $2, 'sent', 'sent', now()), ($1, $2, 'draft', 'draft', null)`,
         [w1, d1.dealId],
       );
 
@@ -140,9 +140,9 @@ describe("dashboard and notifications (PGlite)", () => {
       const other = await newDeal(w2);
       await api("post", `/deals/${other.dealId}/won`, {}, w2);
       const w2Open = await newDeal(w2);
-      await seed.query(`insert into crm.tasks (workspace_id, deal_id, owner_id, task_type, title, due_at) values ($1, $2, $3, 'call', 'w2 today', ${TODAY} + interval '1 second')`, [w2, w2Open.dealId, sam]);
-      await seed.query(`insert into crm.calls (workspace_id, contact_id, connected, source) values ($1, $2, true, 'ai')`, [w2, other.contactId]);
-      await seed.query(`insert into crm.email_activities (workspace_id, contact_id, sent_at, replied_at, status) values ($1, $2, now(), now(), 'replied')`, [w2, other.contactId]);
+      await seed.query(`insert into crm_tasks (workspace_id, deal_id, owner_id, task_type, title, due_at) values ($1, $2, $3, 'call', 'w2 today', ${TODAY} + interval '1 second')`, [w2, w2Open.dealId, sam]);
+      await seed.query(`insert into crm_calls (workspace_id, contact_id, connected, source) values ($1, $2, true, 'ai')`, [w2, other.contactId]);
+      await seed.query(`insert into crm_email_activities (workspace_id, contact_id, sent_at, replied_at, status) values ($1, $2, now(), now(), 'replied')`, [w2, other.contactId]);
 
       expect(await summary()).toEqual(before);
       const s2 = await summary(w2);
@@ -158,7 +158,7 @@ describe("dashboard and notifications (PGlite)", () => {
     await api("post", `/deals/${dealId}/nurture`, {});
     const parked = await closedAt();
     expect(parked).not.toBeNull();
-    await seed.query(`update crm.deals set closed_at = closed_at - interval '1 day' where id = $1`, [dealId]);
+    await seed.query(`update crm_deals set closed_at = closed_at - interval '1 day' where id = $1`, [dealId]);
     await api("post", `/deals/${dealId}/won`, {});
     expect(new Date((await closedAt())!).getTime()).toBeGreaterThanOrEqual(new Date(parked!).getTime());
     await api("post", `/deals/${dealId}/reopen`, {});
@@ -176,11 +176,11 @@ describe("dashboard and notifications (PGlite)", () => {
       const res = await api("get", "/notifications", undefined, w1, admin);
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual([]);
-      expect((await seed.query(`select count(*)::int n from crm.notifications where recipient_id = $1`, [admin])).rows[0].n).toBe(0);
+      expect((await seed.query(`select count(*)::int n from crm_notifications where recipient_id = $1`, [admin])).rows[0].n).toBe(0);
     });
 
     it("from another workspace are not visible or markable", async () => {
-      w2Note = (await seed.query(`insert into crm.notifications (workspace_id, recipient_id, title) values ($1, $2, 'w2 news') returning id`, [w2, sam])).rows[0].id;
+      w2Note = (await seed.query(`insert into crm_notifications (workspace_id, recipient_id, title) values ($1, $2, 'w2 news') returning id`, [w2, sam])).rows[0].id;
       expect((await api("get", "/notifications")).body.data.map((x: { title: string }) => x.title)).not.toContain("w2 news");
       expect((await api("post", `/notifications/${w2Note}/read`)).status).toBe(404);
       expect((await api("post", "/notifications/not-a-uuid/read")).status).toBe(404);

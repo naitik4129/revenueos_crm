@@ -25,7 +25,7 @@ describe("companies, contacts, deals (PGlite)", () => {
   async function mkUser(email: string, role: "admin" | "salesperson") {
     const id = (await seed.query(`insert into auth.users (email) values ($1) returning id`, [email])).rows[0].id as string;
     await seed.query(`insert into public.revenueos_profiles (id, full_name, email) values ($1, $2, $3)`, [id, email.split("@")[0], email]);
-    await seed.query(`insert into crm.profiles (id, role) values ($1, $2)`, [id, role]);
+    await seed.query(`insert into crm_profiles (id, role) values ($1, $2)`, [id, role]);
     return id;
   }
 
@@ -46,7 +46,7 @@ describe("companies, contacts, deals (PGlite)", () => {
   const seedTask = async (dealId: string | null, contactId: string | null, ws = w1) =>
     (
       await seed.query(
-        `insert into crm.tasks (workspace_id, deal_id, contact_id, task_type, title, due_at) values ($1, $2, $3, 'call', 'Call', now()) returning id`,
+        `insert into crm_tasks (workspace_id, deal_id, contact_id, task_type, title, due_at) values ($1, $2, $3, 'call', 'Call', now()) returning id`,
         [ws, dealId, contactId],
       )
     ).rows[0].id as string;
@@ -61,9 +61,9 @@ describe("companies, contacts, deals (PGlite)", () => {
 
     admin = await mkUser("admin@x.com", "admin");
     sales = await mkUser("sam@x.com", "salesperson");
-    w1 = (await seed.query(`insert into crm.workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
-    w2 = (await seed.query(`insert into crm.workspaces (name, slug) values ('Two', 'two') returning id`)).rows[0].id;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3)`, [w1, w2, sales]);
+    w1 = (await seed.query(`insert into crm_workspaces (name, slug) values ('One', 'one') returning id`)).rows[0].id;
+    w2 = (await seed.query(`insert into crm_workspaces (name, slug) values ('Two', 'two') returning id`)).rows[0].id;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $3), ($2, $3)`, [w1, w2, sales]);
   }, 60_000);
 
   afterAll(async () => {
@@ -89,7 +89,7 @@ describe("companies, contacts, deals (PGlite)", () => {
 
   it("deal amount (INR): set, cleared and refused when negative; setting it is not activity", async () => {
     const deal = await newDeal((await newContact({ email: "amount@x.com" })).id);
-    await seed.query(`update crm.deals set last_activity_at = '2026-01-01T00:00:00Z' where id = $1`, [deal.id]);
+    await seed.query(`update crm_deals set last_activity_at = '2026-01-01T00:00:00Z' where id = $1`, [deal.id]);
 
     const set = await api("patch", `/deals/${deal.id}`, { body: { amount: 450000.5 } });
     expect(set.status).toBe(200);
@@ -99,7 +99,7 @@ describe("companies, contacts, deals (PGlite)", () => {
     expect((await api("patch", `/deals/${deal.id}`, { body: { amount: -1 } })).status).toBe(400);
     expect((await api("patch", `/deals/${deal.id}`, { body: { amount: "1000" } })).status).toBe(400);
     expect((await api("patch", `/deals/${deal.id}`, { body: { amount: null } })).body.amount).toBeNull();
-    await expect(seed.query(`update crm.deals set currency = 'USD' where id = $1`, [deal.id])).rejects.toThrow(/deals_currency_inr/);
+    await expect(seed.query(`update crm_deals set currency = 'USD' where id = $1`, [deal.id])).rejects.toThrow(/crm_deals_currency_inr/);
   });
 
   it("assigning an owner is not activity (contacts and deals); other field edits still are", async () => {
@@ -108,8 +108,8 @@ describe("companies, contacts, deals (PGlite)", () => {
     const deal = await newDeal(contact.id);
     const reset = () =>
       Promise.all([
-        seed.query(`update crm.contacts set last_activity_at = $2 where id = $1`, [contact.id, OLD]),
-        seed.query(`update crm.deals set last_activity_at = $2 where id = $1`, [deal.id, OLD]),
+        seed.query(`update crm_contacts set last_activity_at = $2 where id = $1`, [contact.id, OLD]),
+        seed.query(`update crm_deals set last_activity_at = $2 where id = $1`, [deal.id, OLD]),
       ]);
     const contactActivity = async () => (await api("get", `/contacts/${contact.id}`)).body.lastActivityAt;
     const dealActivity = async () => (await api("get", `/deals/${deal.id}`)).body.lastActivityAt;
@@ -123,7 +123,7 @@ describe("companies, contacts, deals (PGlite)", () => {
     const form = { firstName: "Test", lastName: "Owner", email: "owner-test@x.com", jobTitle: "CEO", source };
     expect((await api("patch", `/contacts/${contact.id}`, { body: { ...form, ownerId: sales } })).status).toBe(200);
     expect(await contactActivity()).toBe(OLD);
-    expect(await row(`select count(*)::int n from crm.timeline_events where contact_id = $1 and title = 'Contact Assigned'`, [contact.id])).toEqual({ n: 2 });
+    expect(await row(`select count(*)::int n from crm_timeline_events where contact_id = $1 and title = 'Contact Assigned'`, [contact.id])).toEqual({ n: 2 });
     // A real field change is activity.
     expect((await api("patch", `/contacts/${contact.id}`, { body: { jobTitle: "CTO" } })).status).toBe(200);
     expect(await contactActivity()).not.toBe(OLD);
@@ -138,17 +138,17 @@ describe("companies, contacts, deals (PGlite)", () => {
   });
 
   it("ownerId=none lists only unowned contacts, companies and deals; a bad owner id is a 400", async () => {
-    const ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('Unassigned test', 'unassigned-test') returning id`)).rows[0].id as string;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sales]);
+    const ws = (await seed.query(`insert into crm_workspaces (name, slug) values ('Unassigned test', 'unassigned-test') returning id`)).rows[0].id as string;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sales]);
     const owned = await newContact({ email: "owned@x.com" }, ws);
     const free = await newContact({ email: "free@x.com" }, ws);
     const ownedDeal = await newDeal(owned.id, ws);
     const freeDeal = await newDeal(free.id, ws);
     const ownedCo = (await api("post", "/companies", { body: { name: "Owned Co" }, ws })).body.id as string;
     const freeCo = (await api("post", "/companies", { body: { name: "Free Co" }, ws })).body.id as string;
-    await seed.query(`update crm.contacts set owner_id = case when id = $1 then $3::uuid else null end where id in ($1, $2)`, [owned.id, free.id, sales]);
-    await seed.query(`update crm.deals set owner_id = case when id = $1 then $3::uuid else null end where id in ($1, $2)`, [ownedDeal.id, freeDeal.id, sales]);
-    await seed.query(`update crm.companies set owner_id = case when id = $1 then $3::uuid else null end where id in ($1, $2)`, [ownedCo, freeCo, sales]);
+    await seed.query(`update crm_contacts set owner_id = case when id = $1 then $3::uuid else null end where id in ($1, $2)`, [owned.id, free.id, sales]);
+    await seed.query(`update crm_deals set owner_id = case when id = $1 then $3::uuid else null end where id in ($1, $2)`, [ownedDeal.id, freeDeal.id, sales]);
+    await seed.query(`update crm_companies set owner_id = case when id = $1 then $3::uuid else null end where id in ($1, $2)`, [ownedCo, freeCo, sales]);
 
     const ids = async (path: string) => (await api("get", path, { ws })).body.data.map((r: { id: string }) => r.id);
     expect(await ids("/contacts?ownerId=none")).toEqual([free.id]);
@@ -164,8 +164,8 @@ describe("companies, contacts, deals (PGlite)", () => {
   });
 
   it("sorts contacts, companies and deals by fixed keys ('-' = descending), stable across pages; unknown keys are 400", async () => {
-    const ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('Sort test', 'sort-test') returning id`)).rows[0].id as string;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sales]);
+    const ws = (await seed.query(`insert into crm_workspaces (name, slug) values ('Sort test', 'sort-test') returning id`)).rows[0].id as string;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sales]);
     const company = async (name: string) => (await api("post", "/companies", { body: { name }, ws })).body.id as string;
     const beta = await company("beta Labs");
     const alpha = await company("Alpha Co");
@@ -214,8 +214,8 @@ describe("companies, contacts, deals (PGlite)", () => {
   });
 
   it("hasOpenDeal=true/false splits contacts by an open deal; a nurture (parked) deal is not open; a bad value is 400", async () => {
-    const ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('Open deal test', 'open-deal-test') returning id`)).rows[0].id as string;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sales]);
+    const ws = (await seed.query(`insert into crm_workspaces (name, slug) values ('Open deal test', 'open-deal-test') returning id`)).rows[0].id as string;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2)`, [ws, sales]);
     const withDeal = await newContact({ email: "with-deal@x.com" }, ws);
     const parked = await newContact({ email: "parked@x.com" }, ws);
     const none = await newContact({ email: "no-deal@x.com" }, ws);
@@ -255,12 +255,12 @@ describe("companies, contacts, deals (PGlite)", () => {
     const res = await api("post", `/contacts/${c.id}/dnc`, { body: { reason: "Asked us to stop" } });
     expect(res.body).toMatchObject({ status: "do_not_contact", doNotContact: true, dncReason: "Asked us to stop" });
     expect((await api("get", `/deals/${d.id}`)).body).toMatchObject({ outcome: "open", automationMode: "stopped" });
-    expect(await row(`select status from crm.tasks where id = $1`, [task])).toEqual({ status: "cancelled" });
+    expect(await row(`select status from crm_tasks where id = $1`, [task])).toEqual({ status: "cancelled" });
     expect((await api("post", `/deals/${d.id}/automation`, { body: { mode: "active" } })).status).toBe(409);
 
     const lifted = await api("post", `/contacts/${c.id}/dnc/reactivate`, { body: { reason: "Opted back in" } });
     expect(lifted.body).toMatchObject({ status: "active", doNotContact: false });
-    expect(await row(`select count(*)::int n from crm.dnc_events where contact_id = $1`, [c.id])).toEqual({ n: 2 });
+    expect(await row(`select count(*)::int n from crm_dnc_events where contact_id = $1`, [c.id])).toEqual({ n: 2 });
   });
 
   it("merge moves deals and their tasks to the target and copies DNC", async () => {
@@ -277,9 +277,9 @@ describe("companies, contacts, deals (PGlite)", () => {
     expect(res.body).toMatchObject({ id: target.id, status: "do_not_contact", openDealId: deal.id, lifecycleStage: "qualified" });
     expect(res.body.dncReason).toMatch(/Merged from a Do Not Contact contact: Unsubscribed/);
 
-    expect(await row(`select contact_id from crm.deals where id = $1`, [deal.id])).toEqual({ contact_id: target.id });
-    expect(await row(`select contact_id from crm.tasks where id = $1`, [task])).toEqual({ contact_id: target.id });
-    expect(await row(`select contact_id from crm.tasks where id = $1`, [contactTask])).toEqual({ contact_id: target.id });
+    expect(await row(`select contact_id from crm_deals where id = $1`, [deal.id])).toEqual({ contact_id: target.id });
+    expect(await row(`select contact_id from crm_tasks where id = $1`, [task])).toEqual({ contact_id: target.id });
+    expect(await row(`select contact_id from crm_tasks where id = $1`, [contactTask])).toEqual({ contact_id: target.id });
     expect((await api("get", `/contacts/${target.id}/notes`)).body.data.map((n: { body: string }) => n.body)).toEqual(["Met at the expo"]);
     expect((await api("get", `/contacts/${source.id}`)).body).toMatchObject({ status: "merged", mergedIntoContactId: target.id });
   });
@@ -323,12 +323,12 @@ describe("companies, contacts, deals (PGlite)", () => {
     ]);
     expect(failed.map((f: { rowNumber: number }) => f.rowNumber)).toEqual([6, 7]);
 
-    const companies = await seed.query(`select id from crm.companies where workspace_id = $1 and lower(name) = 'acme'`, [w1]);
+    const companies = await seed.query(`select id from crm_companies where workspace_id = $1 and lower(name) = 'acme'`, [w1]);
     expect(companies.rows).toHaveLength(1);
     const imported = await seed.query(
       `select c.first_name, c.company_id, c.lifecycle_stage, d.service_interest,
-              (select count(*)::int from crm.deals x where x.contact_id = c.id) deals
-         from crm.contacts c left join crm.deals d on d.contact_id = c.id
+              (select count(*)::int from crm_deals x where x.contact_id = c.id) deals
+         from crm_contacts c left join crm_deals d on d.contact_id = c.id
         where c.id = any($1::uuid[]) order by c.first_name`,
       [created],
     );
@@ -343,14 +343,14 @@ describe("companies, contacts, deals (PGlite)", () => {
 
   it("CSV import takes at most 500 rows per request and matches companies by domain, then name", async () => {
     // Its own workspace, so these rows stay out of the other tests' lists.
-    const w3 = (await seed.query(`insert into crm.workspaces (name, slug) values ('Three', 'three') returning id`)).rows[0].id;
-    await seed.query(`insert into crm.workspace_members (workspace_id, user_id) values ($1, $2)`, [w3, sales]);
+    const w3 = (await seed.query(`insert into crm_workspaces (name, slug) values ('Three', 'three') returning id`)).rows[0].id;
+    await seed.query(`insert into crm_workspace_members (workspace_id, user_id) values ($1, $2)`, [w3, sales]);
     const big = Array.from({ length: 501 }, (_, i) => ({ rowNumber: i + 2, firstName: "Big", email: `big${i}@x.com` }));
     const tooMany = await api("post", "/contacts/import", { ws: w3, body: { rows: big } });
     expect(tooMany.status).toBe(400);
     expect(JSON.stringify(tooMany.body)).toContain("At most 500 rows per request");
 
-    const stored = await seed.query(`insert into crm.companies (workspace_id, name, domain) values ($1, 'Stored', 'stored.com') returning id`, [w3]);
+    const stored = await seed.query(`insert into crm_companies (workspace_id, name, domain) values ($1, 'Stored', 'stored.com') returning id`, [w3]);
     const res = await api("post", "/contacts/import", {
       ws: w3,
       body: {
@@ -364,7 +364,7 @@ describe("companies, contacts, deals (PGlite)", () => {
     });
     expect(res.status).toBe(201);
     const made = await seed.query(
-      `select c.first_name, co.name, co.domain, co.industry from crm.contacts c join crm.companies co on co.id = c.company_id
+      `select c.first_name, co.name, co.domain, co.industry from crm_contacts c join crm_companies co on co.id = c.company_id
         where c.id = any($1::uuid[]) order by c.first_name`,
       [res.body.data.created],
     );
@@ -376,7 +376,7 @@ describe("companies, contacts, deals (PGlite)", () => {
     ]);
     expect(stored.rows).toHaveLength(1);
     const events = await seed.query(
-      `select title, actor_source, actor_id from crm.timeline_events where contact_id = any($1::uuid[]) or company_id in (select id from crm.companies where domain = 'new.com')`,
+      `select title, actor_source, actor_id from crm_timeline_events where contact_id = any($1::uuid[]) or company_id in (select id from crm_companies where domain = 'new.com')`,
       [res.body.data.created],
     );
     expect(events.rows.filter((e) => e.title === "Contact Created")).toHaveLength(4);
@@ -422,7 +422,7 @@ describe("companies, contacts, deals (PGlite)", () => {
     expect(res.status).toBe(200);
     expect(res.body.stages.map((s: { stage: string }) => s.stage)[0]).toBe("new");
     expect(res.body.stages).toHaveLength(15);
-    const open = await row(`select count(*)::int n, coalesce(sum(amount), 0)::float8 a from crm.deals where workspace_id = $1 and outcome = 'open'`, [w1]);
+    const open = await row(`select count(*)::int n, coalesce(sum(amount), 0)::float8 a from crm_deals where workspace_id = $1 and outcome = 'open'`, [w1]);
     expect({ count: res.body.count, amount: res.body.amount }).toEqual({ count: open.n, amount: open.a });
     expect((await api("get", "/deals/board-summary?ownerId=nobody")).status).toBe(400);
   });
@@ -478,7 +478,7 @@ describe("companies, contacts, deals (PGlite)", () => {
     await newDeal(c.id);
     expect((await api("delete", `/contacts/${c.id}`)).status).toBe(204);
     expect((await api("get", `/contacts/${c.id}`)).status).toBe(404);
-    expect(await row(`select entity_type, snapshot->>'email' as email from crm.deleted_records_audit where entity_id = $1`, [c.id])).toEqual({
+    expect(await row(`select entity_type, snapshot->>'email' as email from crm_deleted_records_audit where entity_id = $1`, [c.id])).toEqual({
       entity_type: "contact",
       email: "gone@x.com",
     });

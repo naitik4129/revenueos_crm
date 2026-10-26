@@ -41,7 +41,7 @@ export async function processInboundUpsert(
       let newlyOptedOut = false;
       await db.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [phone]);
       const inserted = await db.query(
-        `insert into crm.whatsapp_inbound_events (workspace_id, message_id, sender_jid, sender_phone_e164, message_type, received_at, disposition)
+        `insert into crm_whatsapp_inbound_events (workspace_id, message_id, sender_jid, sender_phone_e164, message_type, received_at, disposition)
          values ($1, $2, $3, $4, $5, $6, 'unmatched')
          on conflict (workspace_id, message_id) do nothing
          returning message_id`,
@@ -50,51 +50,51 @@ export async function processInboundUpsert(
       if (inserted.rowCount === 0) return false;
 
       const matches = await db.query<{ id: string; owner_id: string | null }>(
-        `select id, owner_id from crm.contacts where workspace_id = $1 and phone_e164 = $2 and status = 'active' for update`,
+        `select id, owner_id from crm_contacts where workspace_id = $1 and phone_e164 = $2 and status = 'active' for update`,
         [workspaceId, phone],
       );
       const count = matches.rowCount ?? 0;
       const disposition = count === 0 ? "unmatched" : count === 1 ? "matched" : "ambiguous";
       await db.query(
-        `update crm.whatsapp_inbound_events set match_count = $3, disposition = $4, contact_id = $5 where workspace_id = $1 and message_id = $2`,
+        `update crm_whatsapp_inbound_events set match_count = $3, disposition = $4, contact_id = $5 where workspace_id = $1 and message_id = $2`,
         [workspaceId, id, count, disposition, count === 1 ? matches.rows[0]!.id : null],
       );
 
       for (const contact of matches.rows) {
         const deals = await db.query<{ id: string; owner_id: string | null }>(
-          `update crm.deals set response_state = 'responded', automation_mode = 'manual', last_activity_at = now()
+          `update crm_deals set response_state = 'responded', automation_mode = 'manual', last_activity_at = now()
             where contact_id = $1 and outcome in ('open', 'nurture')
             returning id, owner_id`,
           [contact.id],
         );
         await db.query(
-          `update crm.workflow_runs set status = 'cancelled', cancelled_at = now(), cancel_reason = $2, next_run_at = null
+          `update crm_workflow_runs set status = 'cancelled', cancelled_at = now(), cancel_reason = $2, next_run_at = null
             where contact_id = $1 and status in ('running', 'waiting', 'paused')`,
           [contact.id, REASON],
         );
         await db.query(
-          `update crm.scheduled_actions set status = 'cancelled', cancelled_at = now(), cancel_reason = $2
+          `update crm_scheduled_actions set status = 'cancelled', cancelled_at = now(), cancel_reason = $2
             where status in ('pending', 'due', 'paused', 'executing')
-              and workflow_run_id in (select id from crm.workflow_runs where contact_id = $1)`,
+              and workflow_run_id in (select id from crm_workflow_runs where contact_id = $1)`,
           [contact.id, REASON],
         );
         if (stop) {
           const optedOut = await db.query(
-            `insert into crm.contact_channels (contact_id, channel, status, reason) values ($1, 'whatsapp', 'opted_out', 'Replied STOP on WhatsApp')
+            `insert into crm_contact_channels (contact_id, channel, status, reason) values ($1, 'whatsapp', 'opted_out', 'Replied STOP on WhatsApp')
              on conflict (contact_id, channel) do update set status = 'opted_out', reason = excluded.reason, updated_by = null
-               where contact_channels.status <> 'opted_out'`,
+               where crm_contact_channels.status <> 'opted_out'`,
             [contact.id],
           );
           newlyOptedOut ||= (optedOut.rowCount ?? 0) > 0;
         } else {
           await db.query(
-            `insert into crm.contact_channels (contact_id, channel, status, reason) values ($1, 'whatsapp', 'reachable', 'Inbound reply received')
+            `insert into crm_contact_channels (contact_id, channel, status, reason) values ($1, 'whatsapp', 'reachable', 'Inbound reply received')
              on conflict (contact_id, channel) do update set status = 'reachable', reason = excluded.reason, updated_by = null
-               where contact_channels.status <> 'opted_out'`,
+               where crm_contact_channels.status <> 'opted_out'`,
             [contact.id],
           );
         }
-        await db.query(`update crm.contacts set last_activity_at = now() where id = $1`, [contact.id]);
+        await db.query(`update crm_contacts set last_activity_at = now() where id = $1`, [contact.id]);
         await advanceLifecycle(db, contact.id, "engaged", SYSTEM_ACTOR);
         await addTimelineEvent(db, {
           contactId: contact.id,
@@ -108,8 +108,8 @@ export async function processInboundUpsert(
         const owners = new Set([...deals.rows.map((d) => d.owner_id), contact.owner_id].filter((o): o is string => Boolean(o)));
         for (const owner of owners) {
           await db.query(
-            `insert into crm.notifications (workspace_id, recipient_id, contact_id, deal_id, title, detail, kind, href)
-             select $1, p.id, $3, $4, 'WhatsApp reply received', $5, $6, $7 from crm.profiles p where p.id = $2 and p.is_active and p.role = 'salesperson'`,
+            `insert into crm_notifications (workspace_id, recipient_id, contact_id, deal_id, title, detail, kind, href)
+             select $1, p.id, $3, $4, 'WhatsApp reply received', $5, $6, $7 from crm_profiles p where p.id = $2 and p.is_active and p.role = 'salesperson'`,
             [
               workspaceId,
               owner,
@@ -125,7 +125,7 @@ export async function processInboundUpsert(
 
       if (count > 1) {
         await db.query(
-          `insert into crm.admin_audit_events (actor_email, action, target_type, target_id, metadata)
+          `insert into crm_admin_audit_events (actor_email, action, target_type, target_id, metadata)
            values ('system@whatsapp.local', 'whatsapp.inbound_ambiguous', 'phone', $1, $2)`,
           [phone, { workspaceId, messageId: id, matchCount: count }],
         );

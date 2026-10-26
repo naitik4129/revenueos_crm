@@ -45,7 +45,7 @@ export interface ProposalRow extends SubjectNames {
   updated_at: Date;
 }
 
-const PROPOSAL_SELECT = `select p.*, ${userNameSql("p.owner_id")} as owner_name, names.* from crm.proposals p ${subjectNamesJoin("p.deal_id")}`;
+const PROPOSAL_SELECT = `select p.*, ${userNameSql("p.owner_id")} as owner_name, names.* from crm_proposals p ${subjectNamesJoin("p.deal_id")}`;
 
 function proposalToDto(row: ProposalRow) {
   return {
@@ -105,7 +105,7 @@ export async function createProposal(db: Queryable, actor: Actor, workspaceId: s
 
   const id = (
     await db.query<{ id: string }>(
-      `insert into crm.proposals
+      `insert into crm_proposals
         (workspace_id, deal_id, owner_id, title, document_storage_path, document_file_name, document_mime_type,
          document_size_bytes, amount, currency, status, notes, email_template_id, whatsapp_template_id,
          email_send_status, whatsapp_send_status, created_by)
@@ -177,7 +177,7 @@ export async function proposalStatusCounts(db: Queryable, workspaceId: string, f
   const { status: _ignored, ...others } = f;
   const params: unknown[] = [workspaceId];
   const result = await db.query<{ status: string; n: number }>(
-    `select p.status, count(*)::int as n from crm.proposals p where ${proposalWhere(params, others)} group by p.status`,
+    `select p.status, count(*)::int as n from crm_proposals p where ${proposalWhere(params, others)} group by p.status`,
     params,
   );
   return Object.fromEntries(result.rows.map((r) => [r.status, r.n])) as Record<string, number>;
@@ -193,7 +193,7 @@ export async function proposalsSummary(db: Queryable, workspaceId: string) {
       `select count(*) filter (where status not in ('accepted', 'rejected', 'withdrawn', 'expired'))::int as open,
               count(*) filter (where status = 'sent')::int as awaiting_decision,
               coalesce(sum(amount) filter (where status in ('sent', 'revision_requested', 'revised')), 0) as value_in_play
-         from crm.proposals where workspace_id = $1`,
+         from crm_proposals where workspace_id = $1`,
       [workspaceId],
     )
   ).rows[0]!;
@@ -218,7 +218,7 @@ export async function updateProposal(db: Queryable, workspaceId: string, id: str
   }
   if (patch.amount !== undefined) set("amount", patch.amount);
   if (patch.notes !== undefined) set("notes", patch.notes);
-  if (sets.length > 0) await db.query(`update crm.proposals set ${sets.join(", ")} where id = $${params.push(id)}`, params);
+  if (sets.length > 0) await db.query(`update crm_proposals set ${sets.join(", ")} where id = $${params.push(id)}`, params);
   return getProposalOr404(db, workspaceId, id);
 }
 
@@ -230,7 +230,7 @@ export async function updateProposal(db: Queryable, workspaceId: string, id: str
 const TERMINAL_PROPOSAL_STATUSES: ProposalStatus[] = ["accepted", "rejected", "withdrawn", "expired"];
 
 export interface UpdateProposalStatusOptions {
-  /** Required for rejected/expired (proposals_loss_has_reason enforces it too). */
+  /** Required for rejected/expired (crm_proposals_loss_has_reason enforces it too). */
   lossReason?: LeadLossReason;
   lossNotes?: string;
 }
@@ -259,7 +259,7 @@ export async function updateProposalStatus(
   if (status === "rejected" || status === "expired") {
     sets.push(`loss_reason = $${params.push(options.lossReason)}`, `loss_notes = $${params.push(options.lossNotes?.trim() || null)}`);
   }
-  await db.query(`update crm.proposals set ${sets.join(", ")} where id = $1`, params);
+  await db.query(`update crm_proposals set ${sets.join(", ")} where id = $1`, params);
   await addTimelineEvent(db, {
     dealId: proposal.deal_id,
     kind: "proposal",

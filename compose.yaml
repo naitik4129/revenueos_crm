@@ -42,6 +42,8 @@ services:
       WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-10000}
       WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-20}
       WORKER_DRY_RUN: ${WORKER_DRY_RUN:-false}
+      BRAIN_FEED_ENABLED: ${BRAIN_FEED_ENABLED:-false}
+      BRAIN_FEED_INTERVAL_MS: ${BRAIN_FEED_INTERVAL_MS:-300000}
     restart: unless-stopped
     depends_on:
       - backend

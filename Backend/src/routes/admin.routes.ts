@@ -3,41 +3,17 @@ import { z } from "zod";
 import { asyncHandler } from "../asyncHandler.js";
 import { requireAdmin, requireAuth } from "../authMiddleware.js";
 import { parseBody, parseParams } from "../validation/parse.js";
-import * as users from "../services/admin-users.service.js";
 import { pool, withTransaction } from "../db.js";
 import { NotFoundError } from "../errors.js";
 import { recordAdminAudit } from "../services/admin-audit.service.js";
 import { getSendPolicy, sendPolicyToDto, updateSendPolicy } from "../services/send-policy.service.js";
 
-/** CRM user management and sending policies (admins only). Workspaces and members live in workspaces.routes.ts. */
+/**
+ * Admin-only operational settings: sending policies (and brain keys, in workspaces.routes.ts). CRM
+ * users, workspaces and members are not managed here — the RevenueOS platform owns all of that.
+ */
 export const adminRouter = Router();
 adminRouter.use(requireAuth, requireAdmin);
-
-adminRouter.get("/users", asyncHandler(async (_req, res) => res.json({ data: await users.listUsers() })));
-
-const roleSchema = z.enum(["admin", "salesperson"]);
-
-// Email + role only: the CRM never creates auth accounts, so name/password are rejected.
-const createUserSchema = z.object({ email: z.string().email(), role: roleSchema.optional() }).strict();
-adminRouter.post(
-  "/users",
-  asyncHandler(async (req, res) => {
-    const user = await users.createUser(req.actor!, parseBody(createUserSchema, req.body));
-    res.status(201).json(user);
-  }),
-);
-
-const userIdParamsSchema = z.object({ id: z.string().uuid() });
-const updateUserSchema = z
-  .object({ role: roleSchema.optional(), active: z.boolean().optional() })
-  .refine((v) => v.role !== undefined || v.active !== undefined, { message: "Nothing to update." });
-adminRouter.patch(
-  "/users/:id",
-  asyncHandler(async (req, res) => {
-    const { id } = parseParams(userIdParamsSchema, req.params);
-    res.json(await users.updateUser(req.actor!, id, parseBody(updateUserSchema, req.body)));
-  }),
-);
 
 // --- Sending policies per workspace (scale step 12) ---
 
@@ -63,7 +39,7 @@ const sendingPatchSchema = z
   .refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
 
 async function assertWorkspace(id: string) {
-  if (!(await pool.query(`select 1 from crm.workspaces where id = $1`, [id])).rowCount) throw new NotFoundError("Workspace");
+  if (!(await pool.query(`select 1 from crm_workspaces where id = $1`, [id])).rowCount) throw new NotFoundError("Workspace");
 }
 
 adminRouter.get(

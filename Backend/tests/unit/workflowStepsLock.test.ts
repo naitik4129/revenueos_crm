@@ -2,7 +2,7 @@
  * Replaces the old real-Postgres concurrency test: two overlapping saves of the same draft must
  * not interleave. updateDraftSteps locks the version row (`for update`) before delete + insert.
  * This fake database models that row lock (held until the "transaction" ends) and the
- * workflow_steps_unique_order constraint, and yields between queries so that without the lock
+ * crm_workflow_steps_unique_order constraint, and yields between queries so that without the lock
  * the two saves would interleave and collide.
  */
 import { describe, expect, it } from "vitest";
@@ -34,29 +34,29 @@ function fakeDatabase() {
     const db = {
       async query(sql: string, params: unknown[] = []) {
         await new Promise((resolve) => setImmediate(resolve)); // let the other save run in between
-        if (sql.includes("from crm.workflow_versions") && sql.includes("for update")) {
+        if (sql.includes("from crm_workflow_versions") && sql.includes("for update")) {
           while (lockHolder && lockHolder !== self) await new Promise<void>((resolve) => waiters.push(resolve));
           lockHolder = self;
           return { rows: [version] };
         }
-        if (sql.startsWith("select * from crm.workflows")) return { rows: [workflow] };
-        if (sql.includes("from crm.workflow_versions")) return { rows: [version] };
-        if (sql.startsWith("delete from crm.workflow_steps")) {
+        if (sql.startsWith("select * from crm_workflows")) return { rows: [workflow] };
+        if (sql.includes("from crm_workflow_versions")) return { rows: [version] };
+        if (sql.startsWith("delete from crm_workflow_steps")) {
           log.push(`${name}:delete`);
           for (let i = steps.length - 1; i >= 0; i--) if (steps[i]!.workflow_version_id === params[0]) steps.splice(i, 1);
           return { rows: [], rowCount: 0 };
         }
-        if (sql.startsWith("insert into crm.workflow_steps")) {
+        if (sql.startsWith("insert into crm_workflow_steps")) {
           const [, versionId, order, , action] = params as [string, string, number, number, string];
           if (steps.some((s) => s.workflow_version_id === versionId && s.step_order === order)) {
-            throw new Error('duplicate key value violates unique constraint "workflow_steps_unique_order"');
+            throw new Error('duplicate key value violates unique constraint "crm_workflow_steps_unique_order"');
           }
           log.push(`${name}:insert`);
           steps.push({ workflow_version_id: versionId, step_order: order, action });
           return { rows: [] };
         }
-        if (sql.includes("from crm.workflow_steps")) return { rows: steps.map((s) => ({ ...s, id: `s-${s.step_order}`, delay_days: 0, template_id: null, config: null, is_enabled: true })) };
-        if (sql.includes("from crm.workflow_runs")) return { rows: [{ count: "0" }] };
+        if (sql.includes("from crm_workflow_steps")) return { rows: steps.map((s) => ({ ...s, id: `s-${s.step_order}`, delay_days: 0, template_id: null, config: null, is_enabled: true })) };
+        if (sql.includes("from crm_workflow_runs")) return { rows: [{ count: "0" }] };
         throw new Error(`Unexpected query: ${sql}`);
       },
     } as unknown as Queryable;

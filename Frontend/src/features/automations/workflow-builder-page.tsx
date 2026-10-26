@@ -146,7 +146,7 @@ function Builder({ workflow }: { workflow: Workflow }) {
   // save landing near an immediate one fired two overlapping requests. Each
   // does its own delete-all-then-insert-all, and the second would race the
   // first's commit and raise "duplicate key value violates unique constraint
-  // workflow_steps_unique_order". Routing every save through enqueueSave
+  // crm_workflow_steps_unique_order". Routing every save through enqueueSave
   // below means a save requested while one is in flight simply waits its
   // turn on the chain, and if a newer edit supersedes it before its turn
   // comes up, the stale one is skipped in favor of the latest — nothing

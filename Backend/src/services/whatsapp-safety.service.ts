@@ -12,9 +12,9 @@ export const NOT_ENGAGED = "Not engaged on WhatsApp: no inbound reply, connected
 export async function whatsappNotEngagedReason(db: Queryable, contactId: string): Promise<string | null> {
   const row = (
     await db.query<{ engaged: boolean }>(
-      `select exists (select 1 from crm.whatsapp_inbound_events where contact_id = $1 and disposition = 'matched')
-           or exists (select 1 from crm.calls where contact_id = $1 and connected)
-           or exists (select 1 from crm.contact_channels where contact_id = $1 and channel = 'whatsapp' and status = 'opted_in') as engaged`,
+      `select exists (select 1 from crm_whatsapp_inbound_events where contact_id = $1 and disposition = 'matched')
+           or exists (select 1 from crm_calls where contact_id = $1 and connected)
+           or exists (select 1 from crm_contact_channels where contact_id = $1 and channel = 'whatsapp' and status = 'opted_in') as engaged`,
       [contactId],
     )
   ).rows[0];
@@ -38,7 +38,7 @@ export const WHATSAPP_FAILURES_TO_PAUSE = 5;
 export async function pauseWhatsAppOnFailures(db: Queryable, workspaceId: string) {
   const failed = (
     await db.query<{ n: number }>(
-      `select count(*)::int as n from crm.whatsapp_outbound_messages
+      `select count(*)::int as n from crm_whatsapp_outbound_messages
         where workspace_id = $1 and status = 'failed' and last_error is distinct from 'Recipient is not on WhatsApp'
           and updated_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'`,
       [workspaceId],

@@ -37,10 +37,7 @@ vi.mock("@/store/workspace-context", () => ({
   useWorkspace: () => ({ workspaces: [WORKSPACE] }),
 }));
 
-import { UsersTab } from "./users-tab";
-import { MembersTab } from "./members-tab";
 import { BrainKeysTab } from "./brain-keys-tab";
-import { WorkspacesTab } from "./workspaces-tab";
 import { DefaultsPanel } from "@/features/settings/defaults-panel";
 import { AdminPage } from "./admin-page";
 import { SendingTab } from "./sending-tab";
@@ -151,64 +148,6 @@ const WHATSAPP_POLICY: SendPolicy = {
 
 afterEach(cleanup);
 
-describe("admin users tab", () => {
-  it("lists users with role and active controls, locked on the admin's own row", async () => {
-    renderWithClient(<UsersTab />);
-    expect(await screen.findByText("Ravi Former")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Active: Asha Admin" })).toBeDisabled();
-    expect(screen.getByRole("switch", { name: "Active: Ravi Former" })).not.toBeChecked();
-
-    api.admin.users.update.mockResolvedValue({ ...SAM, active: false });
-    fireEvent.click(screen.getByRole("switch", { name: "Active: Sam Sales" }));
-    await waitFor(() =>
-      expect(api.admin.users.update).toHaveBeenCalledWith("u-sam", { active: false }),
-    );
-  });
-
-  it("adds an existing account by email and role only", async () => {
-    api.admin.users.create.mockResolvedValue(SAM);
-    renderWithClient(<UsersTab />);
-    fireEvent.change(screen.getByLabelText("Email"), { target: { value: " pat@x.com " } });
-    fireEvent.click(screen.getByRole("button", { name: "Give CRM access" }));
-    await waitFor(() =>
-      expect(api.admin.users.create.mock.calls[0]?.[0]).toEqual({
-        email: "pat@x.com",
-        role: "salesperson",
-      }),
-    );
-    expect(screen.queryByLabelText(/password/i)).toBeNull();
-  });
-});
-
-describe("admin workspaces tab", () => {
-  it("shows each workspace with its default owner chosen from the members", async () => {
-    renderWithClient(<WorkspacesTab />);
-    expect(screen.getByDisplayValue("Acme Client")).toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Default owner" })).toHaveTextContent(
-        "Sam Sales",
-      ),
-    );
-  });
-});
-
-describe("admin members tab", () => {
-  it("ticks current members and saves the new list", async () => {
-    api.workspaces.setMembers.mockResolvedValue({ data: [SAM, RAVI] });
-    renderWithClient(<MembersTab />);
-    const ravi = (await screen.findByText("Ravi Former")).closest("label")!;
-    const sam = screen.getByText("Sam Sales").closest("label")!;
-    expect(within(sam).getByRole("checkbox")).toBeChecked();
-    expect(screen.queryByText("Asha Admin")).toBeNull(); // admins are never members
-
-    fireEvent.click(within(ravi).getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Save members" }));
-    await waitFor(() =>
-      expect(api.workspaces.setMembers).toHaveBeenCalledWith("ws-1", ["u-sam", "u-ravi"]),
-    );
-  });
-});
-
 describe("admin brain keys tab", () => {
   it("shows a new key once, then only its prefix", async () => {
     api.workspaces.brainKeys.create.mockResolvedValue({
@@ -245,36 +184,24 @@ describe("admin brain keys tab", () => {
 });
 
 describe("settings defaults", () => {
-  it("lets admins pick the default owner", async () => {
+  it("sets the meeting-scheduled templates (no default-owner control any more)", async () => {
     renderWithClient(<DefaultsPanel workspace={WORKSPACE} />);
-    await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Default owner" })).toHaveTextContent(
-        "Sam Sales",
-      ),
-    );
-  });
-
-  it("shows salespeople the default owner read-only", async () => {
-    session.role = "Salesperson";
-    renderWithClient(<DefaultsPanel workspace={WORKSPACE} />);
-    expect(screen.getByText("Sam Sales")).toBeInTheDocument();
-    expect(screen.getByText("Set by an admin.")).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Default owner" })).toBeNull();
-    expect(api.workspaces.members).not.toHaveBeenCalled(); // admin-only endpoint
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Meeting scheduled: email" })).toBeEnabled(),
     );
+    expect(screen.queryByRole("combobox", { name: "Default owner" })).toBeNull();
   });
 });
 
 describe("admin page tabs", () => {
-  it("shows one tab at a time, starting on Users", async () => {
+  it("starts on Brain API keys, with Sending but no user-management tabs", async () => {
     renderWithClient(<AdminPage />);
-    expect(screen.getByRole("tab", { name: "Users" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByText("Ravi Former")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Brain API keys" }));
+    expect(screen.getByRole("tab", { name: "Brain API keys" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("nbk_abcdefgh…")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Give CRM access" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Sending" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Users" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Members" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Workspaces" })).toBeNull();
   });
 });
 

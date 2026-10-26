@@ -9,7 +9,7 @@ const WEEK = istStart("week");
 const MONTH = istStart("month");
 
 const closedThisMonth = (outcome: "won" | "lost") =>
-  `(select count(*)::int from crm.deals where workspace_id = $1 and outcome = '${outcome}' and closed_at >= ${MONTH})`;
+  `(select count(*)::int from crm_deals where workspace_id = $1 and outcome = '${outcome}' and closed_at >= ${MONTH})`;
 
 /** One workspace's dashboard numbers. Every query filters on workspace_id. */
 export async function getDashboardSummary(db: Queryable, workspaceId: string) {
@@ -17,26 +17,26 @@ export async function getDashboardSummary(db: Queryable, workspaceId: string) {
     `select
        ${closedThisMonth("won")} as won,
        ${closedThisMonth("lost")} as lost,
-       (select count(*)::int from crm.calls where workspace_id = $1 and source = 'ai' and occurred_at >= ${WEEK}) as ai_calls,
-       (select count(*)::int from crm.calls where workspace_id = $1 and source = 'human' and occurred_at >= ${WEEK}) as human_calls,
-       (select count(*)::int from crm.email_activities where workspace_id = $1 and sent_at >= ${WEEK}) as emails_sent,
-       (select count(*)::int from crm.email_activities where workspace_id = $1 and replied_at >= ${WEEK}) as emails_replied,
-       (select count(*)::int from crm.tasks where workspace_id = $1 and status = 'open' and due_at >= ${TODAY} and due_at < ${TOMORROW}) as due_today,
-       (select count(*)::int from crm.tasks where workspace_id = $1 and status = 'open' and due_at < ${TODAY}) as overdue,
-       (select count(*)::int from crm.deals d where d.workspace_id = $1 and d.outcome = 'open'
-           and not exists (select 1 from crm.tasks t where t.deal_id = d.id and t.status = 'open')) as missing_next_action,
-       (select count(*)::int from crm.meetings where workspace_id = $1 and status not in ('cancelled', 'failed')
+       (select count(*)::int from crm_calls where workspace_id = $1 and source = 'ai' and occurred_at >= ${WEEK}) as ai_calls,
+       (select count(*)::int from crm_calls where workspace_id = $1 and source = 'human' and occurred_at >= ${WEEK}) as human_calls,
+       (select count(*)::int from crm_email_activities where workspace_id = $1 and sent_at >= ${WEEK}) as emails_sent,
+       (select count(*)::int from crm_email_activities where workspace_id = $1 and replied_at >= ${WEEK}) as emails_replied,
+       (select count(*)::int from crm_tasks where workspace_id = $1 and status = 'open' and due_at >= ${TODAY} and due_at < ${TOMORROW}) as due_today,
+       (select count(*)::int from crm_tasks where workspace_id = $1 and status = 'open' and due_at < ${TODAY}) as overdue,
+       (select count(*)::int from crm_deals d where d.workspace_id = $1 and d.outcome = 'open'
+           and not exists (select 1 from crm_tasks t where t.deal_id = d.id and t.status = 'open')) as missing_next_action,
+       (select count(*)::int from crm_meetings where workspace_id = $1 and status not in ('cancelled', 'failed')
            and scheduled_at >= ${TODAY} and scheduled_at < ${TOMORROW}) as meetings_today,
-       (select count(*)::int from crm.proposals where workspace_id = $1 and status in ('sent', 'revision_requested', 'revised')) as proposals_awaiting`,
+       (select count(*)::int from crm_proposals where workspace_id = $1 and status in ('sent', 'revision_requested', 'revised')) as proposals_awaiting`,
     [workspaceId],
   );
   const lifecycle = await db.query<{ stage: string; count: number }>(
-    `select lifecycle_stage as stage, count(*)::int as count from crm.contacts
+    `select lifecycle_stage as stage, count(*)::int as count from crm_contacts
       where workspace_id = $1 and status <> 'merged' group by 1`,
     [workspaceId],
   );
   const stages = await db.query<{ stage: string; count: number }>(
-    `select stage, count(*)::int as count from crm.deals where workspace_id = $1 and outcome = 'open' group by 1`,
+    `select stage, count(*)::int as count from crm_deals where workspace_id = $1 and outcome = 'open' group by 1`,
     [workspaceId],
   );
   const c = counts.rows[0]!;
@@ -69,9 +69,9 @@ export async function listTodaysQueue(db: Queryable, workspaceId: string, userId
     `select t.id, t.deal_id, coalesce(t.contact_id, d.contact_id) as contact_id,
             nullif(trim(concat_ws(' ', c.first_name, c.last_name)), '') as contact_name,
             t.title, t.task_type, t.due_at
-       from crm.tasks t
-       left join crm.deals d on d.id = t.deal_id
-       left join crm.contacts c on c.id = coalesce(t.contact_id, d.contact_id)
+       from crm_tasks t
+       left join crm_deals d on d.id = t.deal_id
+       left join crm_contacts c on c.id = coalesce(t.contact_id, d.contact_id)
       where t.workspace_id = $1 and t.owner_id = $2 and t.status = 'open'
         and t.due_at >= ${TODAY} and t.due_at < ${TOMORROW}
       order by t.due_at

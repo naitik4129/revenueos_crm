@@ -52,8 +52,8 @@ export async function unsubscribeTarget(db: Queryable, token: string) {
   const row = (
     await db.query<{ workspace: string; status: string | null }>(
       `select w.name as workspace, ch.status
-         from crm.contacts c join crm.workspaces w on w.id = c.workspace_id
-         left join crm.contact_channels ch on ch.contact_id = c.id and ch.channel = 'email'
+         from crm_contacts c join crm_workspaces w on w.id = c.workspace_id
+         left join crm_contact_channels ch on ch.contact_id = c.id and ch.channel = 'email'
         where c.id = $1`,
       [contactId],
     )
@@ -64,9 +64,9 @@ export async function unsubscribeTarget(db: Queryable, token: string) {
 /** Sets the contact's email channel to unsubscribed (once) with a timeline note. */
 export async function unsubscribeContact(db: Queryable, contactId: string) {
   const changed = await db.query(
-    `insert into crm.contact_channels (contact_id, channel, status, reason) values ($1, 'email', 'unsubscribed', 'Unsubscribed by email link')
+    `insert into crm_contact_channels (contact_id, channel, status, reason) values ($1, 'email', 'unsubscribed', 'Unsubscribed by email link')
      on conflict (contact_id, channel) do update set status = excluded.status, reason = excluded.reason, updated_by = null
-       where contact_channels.status <> 'unsubscribed'`,
+       where crm_contact_channels.status <> 'unsubscribed'`,
     [contactId],
   );
   if (changed.rowCount) await addTimelineEvent(db, { contactId, kind: "system", title: "email contactability: unsubscribed", detail: "Unsubscribed by email link", ...SYSTEM_ACTOR });
@@ -79,7 +79,7 @@ export async function recordEmailSend(
   row: { workspaceId: string; contactId: string; scheduledActionId: string; providerMessageId: string; to: string },
 ) {
   await db.query(
-    `insert into crm.email_sends (workspace_id, contact_id, scheduled_action_id, provider_message_id, to_email) values ($1, $2, $3, $4, $5)
+    `insert into crm_email_sends (workspace_id, contact_id, scheduled_action_id, provider_message_id, to_email) values ($1, $2, $3, $4, $5)
      on conflict (provider_message_id) do nothing`,
     [row.workspaceId, row.contactId, row.scheduledActionId, row.providerMessageId, row.to],
   );
@@ -124,7 +124,7 @@ export async function handleResendEvent(db: Queryable, event: ResendEvent): Prom
   const column = kind === "bounced" ? "bounced_at" : "complained_at";
   const send = (
     await db.query<{ workspace_id: string; contact_id: string | null }>(
-      `update crm.email_sends set ${column} = now() where provider_message_id = $1 and ${column} is null returning workspace_id, contact_id`,
+      `update crm_email_sends set ${column} = now() where provider_message_id = $1 and ${column} is null returning workspace_id, contact_id`,
       [event.data.email_id],
     )
   ).rows[0];
@@ -133,9 +133,9 @@ export async function handleResendEvent(db: Queryable, event: ResendEvent): Prom
   if (send.contact_id) {
     const [status, reason] = kind === "bounced" ? ["permanent_bounce", `Hard bounce: ${event.data.bounce?.message ?? "address rejected"}`] : ["unsubscribed", "Marked a nurture email as spam"];
     await db.query(
-      `insert into crm.contact_channels (contact_id, channel, status, reason) values ($1, 'email', $2, $3)
+      `insert into crm_contact_channels (contact_id, channel, status, reason) values ($1, 'email', $2, $3)
        on conflict (contact_id, channel) do update set status = excluded.status, reason = excluded.reason, updated_by = null
-         where contact_channels.status <> 'unsubscribed'`,
+         where crm_contact_channels.status <> 'unsubscribed'`,
       [send.contact_id, status, reason],
     );
     await addTimelineEvent(db, { contactId: send.contact_id, kind: "system", title: `email contactability: ${status}`, detail: reason, ...SYSTEM_ACTOR });
@@ -149,7 +149,7 @@ export async function autoPauseEmailIfNeeded(db: Queryable, workspaceId: string)
   const stats = (
     await db.query<{ sends: number; bad: number }>(
       `select count(*)::int as sends, count(*) filter (where bounced_at is not null or complained_at is not null)::int as bad
-         from crm.email_sends where workspace_id = $1 and sent_at >= now() - interval '7 days'`,
+         from crm_email_sends where workspace_id = $1 and sent_at >= now() - interval '7 days'`,
       [workspaceId],
     )
   ).rows[0]!;
@@ -187,9 +187,9 @@ export async function domainHasMx(email: string, resolveMx: (domain: string) => 
 /** Marks the contact's email channel invalid (no MX for its domain). */
 export async function markEmailInvalid(db: Queryable, contactId: string, reason: string) {
   await db.query(
-    `insert into crm.contact_channels (contact_id, channel, status, reason) values ($1, 'email', 'invalid', $2)
+    `insert into crm_contact_channels (contact_id, channel, status, reason) values ($1, 'email', 'invalid', $2)
      on conflict (contact_id, channel) do update set status = 'invalid', reason = excluded.reason, updated_by = null
-       where contact_channels.status not in ('unsubscribed', 'permanent_bounce')`,
+       where crm_contact_channels.status not in ('unsubscribed', 'permanent_bounce')`,
     [contactId, reason],
   );
 }

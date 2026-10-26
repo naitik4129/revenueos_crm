@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   backend,
@@ -26,6 +26,24 @@ function writeStoredWorkspaceId(id: string | null) {
     else window.localStorage.removeItem(STORAGE_KEY);
   } catch {
     // Selection just won't survive a refresh — not worth surfacing.
+  }
+}
+
+/** "Open CRM" from a platform project links here with ?project=<platform_project_id>. */
+function readProjectParam(): string | null {
+  try {
+    return new URLSearchParams(window.location.search).get("project");
+  } catch {
+    return null;
+  }
+}
+function clearProjectParam() {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("project");
+    window.history.replaceState({}, "", url.toString());
+  } catch {
+    // Leaving the param in the URL is harmless.
   }
 }
 
@@ -79,6 +97,22 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     syncBackendWorkspaceId(currentWorkspaceId);
   }, [currentWorkspaceId]);
+
+  // Deep link from the platform: once the list has loaded, if ?project=<platform_project_id> names
+  // a workspace this user can see, select it, then drop the param. Applied once.
+  const appliedProjectParam = useRef(false);
+  useEffect(() => {
+    if (appliedProjectParam.current || !query.isSuccess) return;
+    appliedProjectParam.current = true;
+    const projectId = readProjectParam();
+    if (!projectId) return;
+    const match = workspaces.find((workspace) => workspace.platformProjectId === projectId);
+    if (match) {
+      setStoredId(match.id);
+      writeStoredWorkspaceId(match.id);
+    }
+    clearProjectParam();
+  }, [query.isSuccess, workspaces]);
 
   // A saved id the user may no longer use (membership removed, workspace deactivated) is
   // replaced once the list has loaded, so it does not come back on the next visit.

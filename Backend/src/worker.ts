@@ -3,11 +3,13 @@ import "./workerProcess.js";
 import { pool } from "./db.js";
 import { workerEnv as env } from "./workerEnv.js";
 import { runAutomationTick } from "./services/automation-runner.js";
+import { runBrainFeed } from "./services/brain-feed.service.js";
 import { baileysRegistry } from "./providers/baileys-registry.js";
 
 /**
  * The automation worker: polls for due scheduled actions and queued WhatsApp sends
- * (automation-runner.ts), and holds one Baileys session per active workspace.
+ * (automation-runner.ts), holds one Baileys session per active workspace, and (when
+ * BRAIN_FEED_ENABLED) copies the brain's data in from the brain_feed_* views (brain-feed.service.ts).
  */
 
 let stopped = false;
@@ -30,9 +32,28 @@ async function loop(): Promise<void> {
   }
 }
 
+/**
+ * The brain feed runs in its own loop so a long pass (a workspace's first copy) never delays due
+ * sends; one pass at a time, the next one interval after the last ended.
+ */
+async function feedLoop(): Promise<void> {
+  while (!stopped) {
+    const started = Date.now();
+    await runBrainFeed({ log })
+      .then(() => {
+        const seconds = (Date.now() - started) / 1000;
+        if (seconds > 60) log(`[brain-feed] Pass took ${seconds.toFixed(0)} s.`);
+      })
+      .catch((err) => console.error("[brain-feed] Pass failed:", err));
+    if (stopped) break;
+    await new Promise((resolve) => setTimeout(resolve, env.BRAIN_FEED_INTERVAL_MS));
+  }
+}
+
 console.log(
-  `Northbeam CRM automation worker starting (poll interval ${env.WORKER_POLL_INTERVAL_MS}ms, batch size ${env.WORKER_BATCH_SIZE}, dry run ${env.WORKER_DRY_RUN}).`,
+  `Northbeam CRM automation worker starting (poll interval ${env.WORKER_POLL_INTERVAL_MS}ms, batch size ${env.WORKER_BATCH_SIZE}, dry run ${env.WORKER_DRY_RUN}, brain feed ${env.BRAIN_FEED_ENABLED ? `every ${env.BRAIN_FEED_INTERVAL_MS / 1000}s` : "off"}).`,
 );
+if (env.BRAIN_FEED_ENABLED) void feedLoop();
 void baileysRegistry
   .ensureManagersForAllActiveWorkspaces()
   .then(() => loop())

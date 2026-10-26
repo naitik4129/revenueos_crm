@@ -39,7 +39,7 @@ interface TemplateRow {
 }
 
 async function getActiveTemplateOrThrow(db: Queryable, workspaceId: string, id: string, channel: "email" | "whatsapp"): Promise<TemplateRow> {
-  const template = (await db.query<TemplateRow>(`select * from crm.message_templates where id = $1 and workspace_id = $2`, [id, workspaceId])).rows[0];
+  const template = (await db.query<TemplateRow>(`select * from crm_message_templates where id = $1 and workspace_id = $2`, [id, workspaceId])).rows[0];
   if (!template) throw new NotFoundError("Template");
   if (template.channel !== channel) throw new ValidationError(`Template "${template.name}" is not a ${channel} template.`);
   if (!template.is_active) throw new ValidationError(`Template "${template.name}" is inactive.`);
@@ -64,7 +64,7 @@ export async function uploadProposalDocument(actor: Actor, workspaceId: string, 
 
   await withTransaction(async (db) => {
     await db.query(
-      `update crm.proposals set document_storage_path = $2, document_file_name = $3, document_mime_type = $4, document_size_bytes = $5 where id = $1`,
+      `update crm_proposals set document_storage_path = $2, document_file_name = $3, document_mime_type = $4, document_size_bytes = $5 where id = $1`,
       [proposalId, storagePath, file.originalName, file.mimeType, file.size],
     );
     await addTimelineEvent(db, { dealId: proposal.deal_id, kind: "proposal", title: "Proposal Document Uploaded", detail: file.originalName, ...actorEvent(actor), relatedProposalId: proposalId });
@@ -99,10 +99,10 @@ async function sendProposalEmailNow(proposal: ProposalRow, deal: DealRow, templa
       html: rendered.body,
       attachments: [{ filename: proposal.document_file_name ?? "proposal", content: buffer.toString("base64") }],
     });
-    await pool.query(`update crm.proposals set email_send_status = 'sent', email_sent_at = now(), email_send_error = null where id = $1`, [proposal.id]);
+    await pool.query(`update crm_proposals set email_send_status = 'sent', email_sent_at = now(), email_send_error = null where id = $1`, [proposal.id]);
     await tryAdvanceToSent(proposal.workspace_id, proposal.id);
   } catch (err) {
-    await pool.query(`update crm.proposals set email_send_status = 'failed', email_send_error = $2 where id = $1`, [proposal.id, err instanceof Error ? err.message : String(err)]);
+    await pool.query(`update crm_proposals set email_send_status = 'failed', email_send_error = $2 where id = $1`, [proposal.id, err instanceof Error ? err.message : String(err)]);
   }
 }
 
@@ -132,7 +132,7 @@ export async function sendProposal(actor: Actor, workspaceId: string, proposalId
   if (emailBlocked && whatsappBlocked) throw new ValidationError(`Nothing can be sent: ${emailBlocked} ${whatsappBlocked}`);
 
   await pool.query(
-    `update crm.proposals
+    `update crm_proposals
         set email_template_id = $2, whatsapp_template_id = $3,
             email_send_status = $4, email_send_error = $5,
             whatsapp_send_status = $6, whatsapp_send_error = $7, whatsapp_attempt_count = 0, whatsapp_next_attempt_at = null
@@ -146,10 +146,10 @@ export async function sendProposal(actor: Actor, workspaceId: string, proposalId
 /** SKIP LOCKED claim of queued proposal WhatsApp sends (worker). */
 export async function claimQueuedProposalWhatsappSends(db: Queryable, limit: number): Promise<ProposalRow[]> {
   const claimed = await db.query<ProposalRow>(
-    `update crm.proposals
+    `update crm_proposals
         set whatsapp_send_status = 'sending'
       where id in (
-        select id from crm.proposals
+        select id from crm_proposals
          where whatsapp_send_status = 'queued'
            and (whatsapp_next_attempt_at is null or whatsapp_next_attempt_at <= now())
          order by created_at asc
@@ -163,7 +163,7 @@ export async function claimQueuedProposalWhatsappSends(db: Queryable, limit: num
 }
 
 export async function processQueuedProposalWhatsappSend(row: ProposalRow): Promise<void> {
-  const fail = (message: string) => pool.query(`update crm.proposals set whatsapp_send_status = 'failed', whatsapp_send_error = $2 where id = $1`, [row.id, message]);
+  const fail = (message: string) => pool.query(`update crm_proposals set whatsapp_send_status = 'failed', whatsapp_send_error = $2 where id = $1`, [row.id, message]);
   try {
     const deal = await getDealOr404(pool, row.workspace_id, row.deal_id);
     const blocked = await sendBlockReason(pool, deal.contact_id, "whatsapp");
@@ -182,14 +182,14 @@ export async function processQueuedProposalWhatsappSend(row: ProposalRow): Promi
         bucket: PROPOSAL_DOCUMENTS_BUCKET,
       },
     });
-    await pool.query(`update crm.proposals set whatsapp_send_status = 'sent', whatsapp_sent_at = now(), whatsapp_send_error = null where id = $1`, [row.id]);
+    await pool.query(`update crm_proposals set whatsapp_send_status = 'sent', whatsapp_sent_at = now(), whatsapp_send_error = null where id = $1`, [row.id]);
     await tryAdvanceToSent(row.workspace_id, row.id);
   } catch (err) {
     if (err instanceof ProviderDeferredError) {
       const attempts = row.whatsapp_attempt_count + 1;
       if (attempts >= MAX_WHATSAPP_ATTEMPTS) return void (await fail(`Gave up after ${attempts} attempts: ${err.message}`));
       await pool.query(
-        `update crm.proposals
+        `update crm_proposals
             set whatsapp_send_status = 'queued', whatsapp_attempt_count = $2,
                 whatsapp_next_attempt_at = now() + ($3 || ' milliseconds')::interval, whatsapp_send_error = $4
           where id = $1`,

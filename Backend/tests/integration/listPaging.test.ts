@@ -34,14 +34,14 @@ describe("lists: page first, count separately (PGlite)", () => {
       dto: await import("../../src/dto.js"),
     };
     owner = (await seed.query(`insert into auth.users (email) values ('o@x.com') returning id`)).rows[0].id;
-    await seed.query(`insert into crm.profiles (id, role) values ($1, 'salesperson')`, [owner]);
-    ws = (await seed.query(`insert into crm.workspaces (name, slug) values ('W', 'w') returning id`)).rows[0].id;
-    const other = (await seed.query(`insert into crm.workspaces (name, slug) values ('Other', 'other') returning id`)).rows[0].id;
+    await seed.query(`insert into crm_profiles (id, role) values ($1, 'salesperson')`, [owner]);
+    ws = (await seed.query(`insert into crm_workspaces (name, slug) values ('W', 'w') returning id`)).rows[0].id;
+    const other = (await seed.query(`insert into crm_workspaces (name, slug) values ('Other', 'other') returning id`)).rows[0].id;
 
     const day = (n: string) => `'2026-01-01'::timestamptz + (${n}) * interval '1 day'`;
     // 12 companies, each name twice (two differ only in case), created on 4 days; some owned.
     await seed.query(
-      `insert into crm.companies (id, workspace_id, name, owner_id, created_at)
+      `insert into crm_companies (id, workspace_id, name, owner_id, created_at)
        select md5('co' || n)::uuid, $1, (array['acme', 'Acme', 'beta', 'Beta', 'Gamma', 'zeta'])[n % 6 + 1],
               case when n % 3 = 0 then $2::uuid end, ${day("n % 4")}
          from generate_series(1, 12) n`,
@@ -50,38 +50,38 @@ describe("lists: page first, count separately (PGlite)", () => {
     // 40 contacts: names with case-only differences and ties, a quarter without company, created and
     // active on few days (ties), some owned, some DNC, some merged (hidden from the default list).
     await seed.query(
-      `insert into crm.contacts (id, workspace_id, company_id, first_name, last_name, email, owner_id, created_at, last_activity_at)
+      `insert into crm_contacts (id, workspace_id, company_id, first_name, last_name, email, owner_id, created_at, last_activity_at)
        select md5('ct' || i)::uuid, $1, case when i % 4 = 0 then null else md5('co' || (i % 12 + 1))::uuid end,
               (array['ann', 'Ann', 'bob', 'Bob', 'cy'])[i % 5 + 1], (i % 3)::text, 'p' || i || '@x.com',
               case when i % 3 = 0 then $2::uuid end, ${day("i % 7")}, '2026-02-01'::timestamptz + (i % 5) * interval '1 day'
          from generate_series(1, 40) i`,
       [ws, owner],
     );
-    await seed.query(`update crm.contacts set status = 'do_not_contact', dnc_reason = 'x' where workspace_id = $1 and email ~ '^p[0-9]*6@'`, [ws]);
+    await seed.query(`update crm_contacts set status = 'do_not_contact', dnc_reason = 'x' where workspace_id = $1 and email ~ '^p[0-9]*6@'`, [ws]);
     await seed.query(
-      `update crm.contacts set status = 'merged', merged_into_contact_id = md5('ct1')::uuid where workspace_id = $1 and email ~ '^p[0-9]*3@' and id <> md5('ct1')::uuid`,
+      `update crm_contacts set status = 'merged', merged_into_contact_id = md5('ct1')::uuid where workspace_id = $1 and email ~ '^p[0-9]*3@' and id <> md5('ct1')::uuid`,
       [ws],
     );
     // Deals: an open one for even contacts (amount empty or tied), a won one for every 5th, a lost one for every 7th.
     await seed.query(
-      `insert into crm.deals (workspace_id, contact_id, company_id, outcome, loss_reason, amount, last_activity_at)
-       select $1, c.id, c.company_id, x.outcome::crm.deal_outcome, case when x.outcome = 'lost' then 'price_budget'::crm.loss_reason end,
+      `insert into crm_deals (workspace_id, contact_id, company_id, outcome, loss_reason, amount, last_activity_at)
+       select $1, c.id, c.company_id, x.outcome::crm_deal_outcome, case when x.outcome = 'lost' then 'price_budget'::crm_loss_reason end,
               case when i % 3 = 0 then null else (i % 4) * 1000 end, '2026-03-01'::timestamptz + (i % 4) * interval '1 day'
          from generate_series(1, 40) i
-         join crm.contacts c on c.id = md5('ct' || i)::uuid
+         join crm_contacts c on c.id = md5('ct' || i)::uuid
          cross join lateral (values ('open', i % 2 = 0), ('won', i % 5 = 0), ('lost', i % 7 = 0)) x(outcome, wanted)
         where x.wanted and c.status <> 'merged'`,
       [ws],
     );
     // Open tasks on some open deals (the "missing next action" filter).
     await seed.query(
-      `insert into crm.tasks (workspace_id, deal_id, contact_id, task_type, title, due_at)
-       select workspace_id, id, contact_id, 'call', 'Call', now() from crm.deals where workspace_id = $1 and outcome = 'open' and amount is null`,
+      `insert into crm_tasks (workspace_id, deal_id, contact_id, task_type, title, due_at)
+       select workspace_id, id, contact_id, 'call', 'Call', now() from crm_deals where workspace_id = $1 and outcome = 'open' and amount is null`,
       [ws],
     );
     // Noise in another workspace.
-    await seed.query(`insert into crm.companies (workspace_id, name) select $1, 'acme' from generate_series(1, 3)`, [other]);
-    await seed.query(`insert into crm.contacts (workspace_id, first_name, email) select $1, 'ann', 'o' || i || '@x.com' from generate_series(1, 3) i`, [other]);
+    await seed.query(`insert into crm_companies (workspace_id, name) select $1, 'acme' from generate_series(1, 3)`, [other]);
+    await seed.query(`insert into crm_contacts (workspace_id, first_name, email) select $1, 'ann', 'o' || i || '@x.com' from generate_series(1, 3) i`, [other]);
   }, 60_000);
 
   afterAll(async () => {
@@ -116,14 +116,14 @@ describe("lists: page first, count separately (PGlite)", () => {
       [{}, `c.status <> 'merged'`, []],
       [{ search: "ann" }, `c.status <> 'merged' and (concat_ws(' ', c.first_name, c.last_name) ilike $2 or c.email ilike $2 or c.phone ilike $2 or co.name ilike $2)`, ["%ann%"]],
       [{ ownerId: "none" }, `c.status <> 'merged' and c.owner_id is null`, []],
-      [{ hasOpenDeal: true }, `c.status <> 'merged' and exists (select 1 from crm.deals d where d.contact_id = c.id and d.outcome = 'open')`, []],
-      [{ hasOpenDeal: false }, `c.status <> 'merged' and not exists (select 1 from crm.deals d where d.contact_id = c.id and d.outcome = 'open')`, []],
+      [{ hasOpenDeal: true }, `c.status <> 'merged' and exists (select 1 from crm_deals d where d.contact_id = c.id and d.outcome = 'open')`, []],
+      [{ hasOpenDeal: false }, `c.status <> 'merged' and not exists (select 1 from crm_deals d where d.contact_id = c.id and d.outcome = 'open')`, []],
       [{ status: "do_not_contact" }, `c.status = 'do_not_contact'`, []],
     ];
     for (const sort of sorts(svc.contacts.CONTACT_SORTS)) {
       for (const [f, where, extra] of filters) {
         const order = svc.dto.orderBySql(sort, svc.contacts.CONTACT_SORTS, "c.created_at desc", "c.id");
-        const expected = await ids(`select c.id from crm.contacts c left join crm.companies co on co.id = c.company_id where c.workspace_id = $1 and ${where} ${order}`, [ws, ...extra]);
+        const expected = await ids(`select c.id from crm_contacts c left join crm_companies co on co.id = c.company_id where c.workspace_id = $1 and ${where} ${order}`, [ws, ...extra]);
         const got = await pageAll((p) => svc.contacts.listContacts(pool, ws, { ...f, sort, ...p }));
         expect({ sort, f, ids: got.rows.map((r) => r.id), total: got.total }).toEqual({ sort, f, ids: expected, total: expected.length });
       }
@@ -133,9 +133,9 @@ describe("lists: page first, count separately (PGlite)", () => {
   it("companies: same rows, order, total and counts for every sort and filter", async () => {
     const OLD_SORTS = { name: ["lower(co.name)"], contacts: ["co.contact_count"], openDeals: ["co.open_deal_count"], created: ["co.created_at"] };
     const old = `select co.id, co.contact_count, co.open_deal_count from (
-                   select co.*, (select count(*)::int from crm.contacts c where c.company_id = co.id and c.status <> 'merged') as contact_count,
-                          (select count(*)::int from crm.deals d where d.company_id = co.id and d.outcome = 'open') as open_deal_count
-                     from crm.companies co) co`;
+                   select co.*, (select count(*)::int from crm_contacts c where c.company_id = co.id and c.status <> 'merged') as contact_count,
+                          (select count(*)::int from crm_deals d where d.company_id = co.id and d.outcome = 'open') as open_deal_count
+                     from crm_companies co) co`;
     const filters: [object, string, unknown[]][] = [
       [{}, `true`, []],
       [{ search: "a" }, `(co.name ilike $2 or co.domain ilike $2 or co.industry ilike $2)`, ["%a%"]],
@@ -161,19 +161,19 @@ describe("lists: page first, count separately (PGlite)", () => {
   it("board summary: count + amount per stage over all open deals, with the board's filters", async () => {
     // Spread the open deals over a few stages (the list tests compare live, so order checks still hold).
     await seed.query(
-      `update crm.deals set stage = (array['new', 'contact_attempted', 'negotiation'])[(abs(hashtext(id::text)) % 3) + 1]::crm.pipeline_stage where workspace_id = $1`,
+      `update crm_deals set stage = (array['new', 'contact_attempted', 'negotiation'])[(abs(hashtext(id::text)) % 3) + 1]::crm_pipeline_stage where workspace_id = $1`,
       [ws],
     );
     const cases: [object, string, unknown[]][] = [
       [{}, `true`, []],
       [{ ownerId: "none" }, `d.owner_id is null`, []],
-      [{ missingNextAction: true }, `not exists (select 1 from crm.tasks t where t.deal_id = d.id and t.status = 'open')`, []],
+      [{ missingNextAction: true }, `not exists (select 1 from crm_tasks t where t.deal_id = d.id and t.status = 'open')`, []],
       [{ search: "bob" }, `(concat_ws(' ', c.first_name, c.last_name) ilike $2 or c.email ilike $2 or co.name ilike $2)`, ["%bob%"]],
     ];
     for (const [f, where, extra] of cases) {
       const ref = await seed.query<{ stage: string; count: number; amount: string }>(
         `select d.stage, count(*)::int as count, coalesce(sum(d.amount), 0)::text as amount
-           from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id
+           from crm_deals d join crm_contacts c on c.id = d.contact_id left join crm_companies co on co.id = d.company_id
           where d.workspace_id = $1 and d.outcome = 'open' and ${where} group by d.stage`,
         [ws, ...extra],
       );
@@ -198,8 +198,8 @@ describe("lists: page first, count separately (PGlite)", () => {
   });
 
   it("deals: same rows, order and total for every sort and filter", async () => {
-    const from = `from crm.deals d join crm.contacts c on c.id = d.contact_id left join crm.companies co on co.id = d.company_id
-                  left join lateral (select t.id from crm.tasks t where t.deal_id = d.id and t.status = 'open' order by t.due_at limit 1) na on true`;
+    const from = `from crm_deals d join crm_contacts c on c.id = d.contact_id left join crm_companies co on co.id = d.company_id
+                  left join lateral (select t.id from crm_tasks t where t.deal_id = d.id and t.status = 'open' order by t.due_at limit 1) na on true`;
     const filters: [object, string, unknown[]][] = [
       [{}, `true`, []],
       [{ outcome: "open" }, `d.outcome = 'open'`, []],

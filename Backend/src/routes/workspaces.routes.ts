@@ -7,9 +7,10 @@ import * as workspacesService from "../services/workspaces.service.js";
 import * as brainKeys from "../services/brain-keys.service.js";
 
 /**
- * Not gated by requireWorkspace: the list must load before a workspace is selected.
- * Any CRM user can list (admins get all, salespeople their memberships); only admins
- * create/edit workspaces and assign members.
+ * Workspaces are derived from the RevenueOS platform and created automatically; they are not managed
+ * here. Any CRM user lists them (admins: all; everyone else: their platform projects' workspaces).
+ * Brain API keys stay here, admin only. Not gated by requireWorkspace: the list loads before a
+ * workspace is selected.
  */
 export const workspacesRouter = Router();
 workspacesRouter.use(requireAuth, requireCrmUser);
@@ -21,60 +22,7 @@ workspacesRouter.get(
   }),
 );
 
-const createWorkspaceSchema = z.object({
-  name: z.string().trim().min(1),
-  platformProjectId: z.string().uuid().nullable().optional(),
-});
-
-workspacesRouter.post(
-  "/",
-  requireAdmin,
-  asyncHandler(async (req, res) => {
-    const input = parseBody(createWorkspaceSchema, req.body);
-    res.status(201).json(await workspacesService.createWorkspace(req.actor!, input));
-  }),
-);
-
 const workspaceIdParamsSchema = z.object({ id: z.string().uuid() });
-const updateWorkspaceSchema = z
-  .object({
-    name: z.string().trim().min(1).optional(),
-    isActive: z.boolean().optional(),
-    platformProjectId: z.string().uuid().nullable().optional(),
-    defaultOwnerId: z.string().uuid().nullable().optional(),
-  })
-  .refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
-
-workspacesRouter.patch(
-  "/:id",
-  requireAdmin,
-  asyncHandler(async (req, res) => {
-    const { id } = parseParams(workspaceIdParamsSchema, req.params);
-    const input = parseBody(updateWorkspaceSchema, req.body);
-    res.json(await workspacesService.updateWorkspace(req.actor!, id, input));
-  }),
-);
-
-workspacesRouter.get(
-  "/:id/members",
-  requireAdmin,
-  asyncHandler(async (req, res) => {
-    const { id } = parseParams(workspaceIdParamsSchema, req.params);
-    res.json({ data: await workspacesService.listMembers(id) });
-  }),
-);
-
-const setMembersSchema = z.object({ userIds: z.array(z.string().uuid()).max(500) });
-
-workspacesRouter.put(
-  "/:id/members",
-  requireAdmin,
-  asyncHandler(async (req, res) => {
-    const { id } = parseParams(workspaceIdParamsSchema, req.params);
-    const { userIds } = parseBody(setMembersSchema, req.body);
-    res.json({ data: await workspacesService.setMembers(req.actor!, id, userIds) });
-  }),
-);
 
 // --- Brain API keys (admin only); the plain key is returned once, on create ---
 

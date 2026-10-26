@@ -1,6 +1,6 @@
 import type { Queryable } from "../dto.js";
 
-/** Channel statuses that block a send (crm.contact_channels). */
+/** Channel statuses that block a send (crm_contact_channels). */
 export const BLOCKED_EMAIL_STATUSES = ["permanent_bounce", "unsubscribed", "invalid"];
 export const BLOCKED_WHATSAPP_STATUSES = ["invalid", "opted_out", "do_not_contact"];
 
@@ -14,9 +14,9 @@ export async function sendBlockReason(db: Queryable, contactId: string, channel:
   const row = (
     await db.query<{ status: string; email: string | null; phone_e164: string | null; channel_status: string | null; phone_status: string | null }>(
       `select c.status, c.email, c.phone_e164,
-              (select status from crm.contact_channels where contact_id = c.id and channel = $2::crm.contact_channel) as channel_status,
-              (select status from crm.contact_channels where contact_id = c.id and channel = 'phone') as phone_status
-         from crm.contacts c where c.id = $1`,
+              (select status from crm_contact_channels where contact_id = c.id and channel = $2::crm_contact_channel) as channel_status,
+              (select status from crm_contact_channels where contact_id = c.id and channel = 'phone') as phone_status
+         from crm_contacts c where c.id = $1`,
       [contactId, channel],
     )
   ).rows[0];

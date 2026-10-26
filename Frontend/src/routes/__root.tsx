@@ -186,7 +186,7 @@ function AuthGate({ children, queryClient }: { children: ReactNode; queryClient:
   if (me.isError && me.error instanceof BackendError && me.error.status === 401) {
     return <LoginPage adminMode={adminPath} />;
   }
-  // A valid shared account with no (or a deactivated) crm.profiles row.
+  // A valid shared account with no (or a deactivated) crm_profiles row.
   if (me.isError && me.error instanceof BackendError && me.error.status === 403) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
