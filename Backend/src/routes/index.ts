@@ -15,7 +15,7 @@ import { workspacesRouter } from "./workspaces.routes.js";
 import { connectionsRouter } from "./connections.routes.js";
 import { googleCalendarOAuthRouter } from "./googleCalendarOAuth.routes.js";
 import { brainRouter } from "./brain.routes.js";
-import { requireAuth, requireCrmUser, requireWorkspace } from "../authMiddleware.js";
+import { requireAuth, requireCrmUser, requireWorkspace, requireWritable } from "../authMiddleware.js";
 
 export const apiRouter = Router();
 
@@ -47,8 +47,9 @@ profilesAccessRouter.use("/profiles", profilesRouter);
 apiRouter.use(profilesAccessRouter);
 
 const crmRouter = Router();
-// Admins may use every workspace; salespeople only those they are members of.
-crmRouter.use(requireAuth, requireCrmUser, requireWorkspace);
+// Admins may use every workspace; salespeople only those they are members of; clients only their
+// client workspace and read-only (requireWritable blocks their writes across all of these routers).
+crmRouter.use(requireAuth, requireCrmUser, requireWorkspace, requireWritable);
 crmRouter.use("/companies", companiesRouter);
 crmRouter.use("/contacts", contactsRouter);
 crmRouter.use("/deals", dealsRouter);

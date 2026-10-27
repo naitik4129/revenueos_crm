@@ -54,12 +54,15 @@ export function useSession() {
         email: me.data.email,
         initials: initials(me.data.name),
         active: true,
-        role: me.data.role === "admin" ? "Admin" : "Salesperson",
+        role: me.data.role === "admin" ? "Admin" : me.data.role === "client" ? "Client" : "Salesperson",
       }
     : null;
   return {
     users,
     currentUser,
+    // A client is a read-only account: it may view the workspace but change nothing. The backend
+    // enforces this (requireWritable); the UI uses this flag to hide write controls.
+    readOnly: currentUser?.role === "Client",
     userName: (id?: string) => users.find((user) => user.id === id)?.name ?? "Unassigned",
     isLoading: me.isLoading || profiles.isLoading,
     error: me.error ?? profiles.error,

@@ -6,13 +6,13 @@ import { asyncHandler } from "./asyncHandler.js";
 import { resolveActor } from "./services/profiles.service.js";
 import { ownsOrMemberOfProjectSql } from "./services/platform-sync.service.js";
 
-/** The authenticated CRM user (admin or salesperson) for the lifetime of one request. */
+/** The authenticated CRM user (admin, salesperson, or read-only client) for one request. */
 export interface Actor {
   id: string;
   fullName: string;
   email: string;
   isActive: boolean;
-  role: "admin" | "salesperson";
+  role: "admin" | "salesperson" | "client";
 }
 
 declare module "express-serve-static-core" {
@@ -69,10 +69,27 @@ export function requireAdmin(req: Request, _res: Response, next: NextFunction) {
   next();
 }
 
-/** Any CRM user: admins see and edit everything, salespeople are limited by requireWorkspace. */
+/**
+ * Any CRM user: admins see and edit everything, salespeople are limited by requireWorkspace, and
+ * clients are additionally read-only (requireWritable). All three may reach read (GET) routes.
+ */
 export function requireCrmUser(req: Request, _res: Response, next: NextFunction) {
-  if (req.actor?.role !== "admin" && req.actor?.role !== "salesperson") {
+  const role = req.actor?.role;
+  if (role !== "admin" && role !== "salesperson" && role !== "client") {
     next(new ForbiddenError("CRM access is required."));
+    return;
+  }
+  next();
+}
+
+/**
+ * Blocks writes for a read-only client account: a client may only make safe (read) requests. Runs
+ * after requireAuth. This is the real read-only boundary — the frontend hiding controls is only UX.
+ */
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+export function requireWritable(req: Request, _res: Response, next: NextFunction) {
+  if (req.actor?.role === "client" && !READ_METHODS.has(req.method)) {
+    next(new ForbiddenError("This is a read-only (client) account."));
     return;
   }
   next();

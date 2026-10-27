@@ -1,5 +1,5 @@
 import type { Queryable } from "../dto.js";
-import { hasAnyProjectAccessSql } from "./platform-sync.service.js";
+import { hasClientAccessSql, hasFullProjectAccessSql } from "./platform-sync.service.js";
 
 /**
  * CRM access lives in crm_profiles; name/email come read-only from the platform's
@@ -49,8 +49,8 @@ export function profileToDto(row: ProfileRow) {
 
 /**
  * The people who can own a deal/task in a workspace: the workspace's platform project owner and its
- * members (revenueos_project_members), read from the platform. Empty when the workspace has no
- * linked project.
+ * salesperson members (revenueos_project_members), read from the platform. Clients are excluded —
+ * a read-only client never owns work. Empty when the workspace has no linked project.
  */
 export async function listProfiles(db: Queryable, workspaceId: string) {
   const result = await db.query<ProfileRow>(
@@ -65,7 +65,7 @@ export async function listProfiles(db: Queryable, workspaceId: string) {
       where ws.pid is not null
         and (
           rp.id = (select owner_id from public.revenueos_projects where id = ws.pid)
-          or rp.id in (select user_id from public.revenueos_project_members where project_id = ws.pid)
+          or rp.id in (select user_id from public.revenueos_project_members where project_id = ws.pid and role <> 'client')
         )
       order by full_name asc`,
     [workspaceId],
@@ -75,14 +75,21 @@ export async function listProfiles(db: Queryable, workspaceId: string) {
 
 /** The CRM user for a signed-in platform account, or why they have no access. */
 export type ResolvedActor =
-  | { status: "ok"; actor: { id: string; fullName: string; email: string; isActive: true; role: "admin" | "salesperson" } }
+  | {
+      status: "ok";
+      actor: { id: string; fullName: string; email: string; isActive: true; role: "admin" | "salesperson" | "client" };
+    }
   | { status: "deactivated" }
   | { status: "no_access" };
 
 /**
- * CRM access is derived from the platform: a `crm_profiles` row marks admins (and keeps any existing
- * salesperson rows working); everyone else gets salesperson access if they own or belong to any
- * platform project. name/email always come from revenueos_profiles.
+ * CRM access is derived from the platform, with a kept `crm_profiles` override. In order:
+ *  - admin: an active `crm_profiles` row with role 'admin'.
+ *  - salesperson (full read + write): an active `crm_profiles` salesperson row (kept so admins'
+ *    staff and existing rows keep working), OR owns / is a non-client member of any platform project.
+ *  - client (read-only): is a client member of any platform project, with no full access anywhere.
+ *  - otherwise no access. An explicitly deactivated crm_profiles row is blocked outright.
+ * name/email always come from revenueos_profiles.
  */
 export async function resolveActor(db: Queryable, userId: string): Promise<ResolvedActor> {
   const result = await db.query<{
@@ -90,14 +97,16 @@ export async function resolveActor(db: Queryable, userId: string): Promise<Resol
     full_name: string;
     role: "admin" | "salesperson" | null;
     is_active: boolean | null;
-    has_project_access: boolean;
+    has_full_access: boolean;
+    has_client_access: boolean;
   }>(
     `select
         coalesce(rp.email, '') as email,
         coalesce(nullif(trim(rp.full_name), ''), rp.email, '') as full_name,
         cp.role as role,
         cp.is_active as is_active,
-        ${hasAnyProjectAccessSql("$1")} as has_project_access
+        ${hasFullProjectAccessSql("$1")} as has_full_access,
+        ${hasClientAccessSql("$1")} as has_client_access
       from public.revenueos_profiles rp
       left join crm_profiles cp on cp.id = rp.id
       where rp.id = $1`,
@@ -106,8 +115,13 @@ export async function resolveActor(db: Queryable, userId: string): Promise<Resol
   const row = result.rows[0];
   if (!row) return { status: "no_access" };
   if (row.is_active === false) return { status: "deactivated" }; // an explicitly deactivated crm_profiles row
+  const isAdmin = row.role === "admin" && row.is_active === true;
+  // A kept crm_profiles row (admin or salesperson, active) grants full access on its own, so admins'
+  // staff and existing salesperson rows keep working even without a platform project.
   const hasCrmProfile = row.role != null && row.is_active === true;
-  if (!hasCrmProfile && !row.has_project_access) return { status: "no_access" };
-  const role = row.role === "admin" && row.is_active === true ? "admin" : "salesperson";
+  if (!hasCrmProfile && !row.has_full_access && !row.has_client_access) return { status: "no_access" };
+  // Admin, a kept crm_profiles row, and full project access all mean full (salesperson) access;
+  // a client-only membership is the sole read-only case.
+  const role = isAdmin ? "admin" : hasCrmProfile || row.has_full_access ? "salesperson" : "client";
   return { status: "ok", actor: { id: userId, fullName: row.full_name, email: row.email, isActive: true, role } };
 }

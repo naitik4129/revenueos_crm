@@ -42,6 +42,7 @@ export const SUPABASE_STANDINS = `
     project_id uuid not null references public.revenueos_projects (id) on delete cascade,
     user_id uuid not null references auth.users (id) on delete cascade,
     added_by uuid references auth.users (id) on delete set null,
+    role text not null default 'salesperson' check (role in ('salesperson', 'client')),
     added_at timestamptz not null default now(),
     primary key (project_id, user_id)
   );

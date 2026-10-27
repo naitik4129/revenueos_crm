@@ -50,7 +50,7 @@ export function WorkflowsPage() {
     error,
     isPending,
   } = useAutomations();
-  const { userName } = useSession();
+  const { userName, readOnly } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Workflow | null>(null);
   const [forceDeleteTarget, setForceDeleteTarget] = useState<Workflow | null>(null);
@@ -142,9 +142,11 @@ export function WorkflowsPage() {
         description="Workflows run on the backend worker. Publishing a version changes live behaviour."
         tabs={<AutomationTabs />}
         actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            Create workflow
-          </Button>
+          readOnly ? undefined : (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              Create workflow
+            </Button>
+          )
         }
       />
 
@@ -184,7 +186,7 @@ export function WorkflowsPage() {
               title={workflows.length === 0 ? "No workflows yet" : "No workflows match."}
               text="A workflow sends emails and WhatsApps, creates tasks and moves stages on a schedule, with no code."
             >
-              {workflows.length === 0 && (
+              {workflows.length === 0 && !readOnly && (
                 <Button size="sm" onClick={() => setCreateOpen(true)}>
                   Create your first workflow
                 </Button>
@@ -210,33 +212,37 @@ export function WorkflowsPage() {
                   )}
                 </div>
               )}
-              actions={(w) => (
-                <span className="flex justify-end gap-1">
-                  <Button asChild size="sm" variant="outline">
-                    <Link to="/automations/workflows/$workflowId" params={{ workflowId: w.id }}>
-                      Edit steps
-                    </Link>
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      void mutate(() => duplicateWorkflow(w.id), "Workflow duplicated");
-                    }}
-                    aria-label="Duplicate workflow"
-                  >
-                    <Copy className="size-4" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setDeleteTarget(w)}
-                    aria-label="Delete workflow"
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
-                </span>
-              )}
+              actions={
+                readOnly
+                  ? undefined
+                  : (w) => (
+                      <span className="flex justify-end gap-1">
+                        <Button asChild size="sm" variant="outline">
+                          <Link to="/automations/workflows/$workflowId" params={{ workflowId: w.id }}>
+                            Edit steps
+                          </Link>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            void mutate(() => duplicateWorkflow(w.id), "Workflow duplicated");
+                          }}
+                          aria-label="Duplicate workflow"
+                        >
+                          <Copy className="size-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setDeleteTarget(w)}
+                          aria-label="Delete workflow"
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </span>
+                    )
+              }
             />
           )}
         </Card>

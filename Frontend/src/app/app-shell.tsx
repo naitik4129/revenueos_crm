@@ -8,6 +8,7 @@ import {
   CalendarDays,
   Check,
   ChevronsUpDown,
+  Eye,
   FileText,
   Gauge,
   Handshake,
@@ -77,7 +78,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const client = useQueryClient();
   const { notifications, markNotificationsRead } = useNotifications();
   const [bellOpen, setBellOpen] = useState(false);
-  const { currentUser } = useSession();
+  const { currentUser, readOnly } = useSession();
   const { workspaces, setCurrentWorkspaceId, isLoading: workspacesLoading } = useWorkspace();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isAdmin = currentUser?.role === "Admin";
@@ -181,6 +182,16 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Popover>
             </div>
           </header>
+
+          {readOnly && (
+            <div
+              role="status"
+              className="flex items-center justify-center gap-1.5 border-b border-info/30 bg-info/10 px-4 py-1.5 text-center text-xs font-medium text-info"
+            >
+              <Eye className="size-3.5" aria-hidden />
+              Client view — read-only. You can browse this workspace but cannot make changes.
+            </div>
+          )}
 
           <main className="min-w-0 flex-1">
             {/* Every CRM page needs a workspace; admin pages do not. */}

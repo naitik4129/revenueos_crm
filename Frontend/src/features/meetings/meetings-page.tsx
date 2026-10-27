@@ -72,7 +72,7 @@ export function MeetingsPage({ initialView }: { initialView?: string | undefined
     limit: PAGE_SIZE,
     offset,
   });
-  const { users, userName } = useSession();
+  const { users, userName, readOnly } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Meeting | null>(null);
   const [outcomeFor, setOutcomeFor] = useState<string | null>(null);
@@ -153,9 +153,11 @@ export function MeetingsPage({ initialView }: { initialView?: string | undefined
           />
         }
         actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            Schedule meeting
-          </Button>
+          readOnly ? undefined : (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              Schedule meeting
+            </Button>
+          )
         }
       />
 
@@ -183,9 +185,11 @@ export function MeetingsPage({ initialView }: { initialView?: string | undefined
               title={EMPTY[view]}
               text="Meetings are booked on a deal: from the deal page, a call outcome, or here. Recording an outcome moves the deal on."
             >
-              <Button size="sm" onClick={() => setCreateOpen(true)}>
-                Schedule meeting
-              </Button>
+              {!readOnly && (
+                <Button size="sm" onClick={() => setCreateOpen(true)}>
+                  Schedule meeting
+                </Button>
+              )}
             </ListEmptyState>
           ) : (
             <RecordTable
@@ -216,26 +220,30 @@ export function MeetingsPage({ initialView }: { initialView?: string | undefined
                   )}
                 </div>
               )}
-              actions={(m) => (
-                <span className="flex justify-end gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={m.status === "completed"}
-                    onClick={() => setEditing(m)}
-                  >
-                    Reschedule
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={m.status === "completed" || m.status === "cancelled"}
-                    onClick={() => setOutcomeFor(m.id)}
-                  >
-                    Record outcome
-                  </Button>
-                </span>
-              )}
+              actions={
+                readOnly
+                  ? undefined
+                  : (m) => (
+                      <span className="flex justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={m.status === "completed"}
+                          onClick={() => setEditing(m)}
+                        >
+                          Reschedule
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={m.status === "completed" || m.status === "cancelled"}
+                          onClick={() => setOutcomeFor(m.id)}
+                        >
+                          Record outcome
+                        </Button>
+                      </span>
+                    )
+              }
             />
           )}
 

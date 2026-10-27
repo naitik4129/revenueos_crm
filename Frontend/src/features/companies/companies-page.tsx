@@ -67,7 +67,7 @@ const SORTS = ["name", "contacts", "openDeals", "created"];
 const DEFAULT_COLUMNS = ["domain", "industry", "location", "contacts", "openDeals", "owner"];
 
 export function CompaniesPage() {
-  const { users, currentUser } = useSession();
+  const { users, currentUser, readOnly } = useSession();
   const industries = useIndustries();
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
@@ -144,9 +144,11 @@ export function CompaniesPage() {
         title="Companies"
         count={isLoading ? undefined : countLabel(total, "company", "companies")}
         actions={
-          <Button size="sm" onClick={() => setAddOpen(true)}>
-            Create company
-          </Button>
+          readOnly ? undefined : (
+            <Button size="sm" onClick={() => setAddOpen(true)}>
+              Create company
+            </Button>
+          )
         }
         tabs={
           <ViewTabs
@@ -225,9 +227,11 @@ export function CompaniesPage() {
                 title="No companies yet"
                 text="Companies arrive from the RevenueOS brain and from contact imports, or add one by hand."
               >
-                <Button size="sm" onClick={() => setAddOpen(true)}>
-                  Create company
-                </Button>
+                {!readOnly && (
+                  <Button size="sm" onClick={() => setAddOpen(true)}>
+                    Create company
+                  </Button>
+                )}
               </ListEmptyState>
             )
           ) : (
@@ -239,7 +243,7 @@ export function CompaniesPage() {
               columns={COLUMNS.filter((c) => visible.includes(c.id))}
               rowLabel={(c) => c.name}
               selected={selected}
-              onSelect={setSelected}
+              onSelect={readOnly ? undefined : setSelected}
               dimmed={isFetching}
               name={(c) => (
                 <div className="flex items-center gap-2.5">

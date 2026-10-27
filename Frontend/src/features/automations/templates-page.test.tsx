@@ -24,6 +24,7 @@ vi.mock("sonner", () => ({
 vi.mock("@/store", () => ({
   messageFromError: (error: unknown) => (error instanceof Error ? error.message : "Request failed"),
   useAutomations: () => storeState.current,
+  useSession: () => ({ readOnly: false }),
   // A slice of GET /templates/variables, one per group.
   useTemplateVariables: () => [
     { token: "contact.firstName", label: "First name", group: "contact" },

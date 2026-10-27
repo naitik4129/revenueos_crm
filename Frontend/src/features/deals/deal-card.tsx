@@ -17,24 +17,28 @@ export function DealCard({
   stage,
   pending,
   onMove,
+  readOnly = false,
 }: {
   deal: Deal;
   /** The column it shows in (a pending move may differ from deal.stage). */
   stage: PipelineStage;
   pending: boolean;
   onMove: (stage: PipelineStage) => void;
+  /** A read-only (client) view: not draggable, and the stage picker becomes a static label. */
+  readOnly?: boolean;
 }) {
   const next = deal.nextAction;
   return (
     <article
-      draggable={!pending}
+      draggable={!pending && !readOnly}
       onDragStart={(e) => {
         e.dataTransfer.setData(DEAL_DRAG_TYPE, deal.id);
         e.dataTransfer.effectAllowed = "move";
       }}
       aria-label={`Deal: ${deal.contactName}`}
       className={cn(
-        "cursor-grab space-y-1.5 rounded-md border bg-card p-2.5 text-xs shadow-sm transition-shadow hover:shadow-md active:cursor-grabbing",
+        "space-y-1.5 rounded-md border bg-card p-2.5 text-xs shadow-sm transition-shadow hover:shadow-md",
+        !readOnly && "cursor-grab active:cursor-grabbing",
         pending && "opacity-60",
         deal.doNotContact && "border-destructive/50",
       )}
@@ -69,19 +73,25 @@ export function DealCard({
           <RelTime iso={deal.lastActivityAt} />
         </span>
       </div>
-      <select
-        aria-label={`Stage for ${deal.contactName}`}
-        value={stage}
-        disabled={pending}
-        onChange={(e) => onMove(e.target.value as PipelineStage)}
-        className={cn(NATIVE_SELECT, "h-7 w-full px-1.5 text-xs")}
-      >
-        {PIPELINE_STAGES.map((s) => (
-          <option key={s} value={s}>
-            {label(s)}
-          </option>
-        ))}
-      </select>
+      {readOnly ? (
+        <div className="rounded-md border bg-muted/40 px-1.5 py-1 text-xs text-muted-foreground">
+          {label(stage)}
+        </div>
+      ) : (
+        <select
+          aria-label={`Stage for ${deal.contactName}`}
+          value={stage}
+          disabled={pending}
+          onChange={(e) => onMove(e.target.value as PipelineStage)}
+          className={cn(NATIVE_SELECT, "h-7 w-full px-1.5 text-xs")}
+        >
+          {PIPELINE_STAGES.map((s) => (
+            <option key={s} value={s}>
+              {label(s)}
+            </option>
+          ))}
+        </select>
+      )}
     </article>
   );
 }

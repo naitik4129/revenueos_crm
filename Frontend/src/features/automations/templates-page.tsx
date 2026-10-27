@@ -32,7 +32,7 @@ import {
   ViewTabs,
   type ListColumn,
 } from "@/components/common/list-controls";
-import { messageFromError, useAutomations, useTemplateVariables } from "@/store";
+import { messageFromError, useAutomations, useSession, useTemplateVariables } from "@/store";
 import type { Template, TemplateAttachment, TemplateType } from "@/types";
 import { ErrorBlock, LoadingBlock } from "@/components/common/server-state";
 import { TemplateBodyEditor } from "@/features/automations/template-body-editor";
@@ -65,6 +65,7 @@ export function TemplatesPage() {
     error,
     isPending,
   } = useAutomations();
+  const { readOnly } = useSession();
   const [editing, setEditing] = useState<Template | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Template | null>(null);
@@ -140,9 +141,11 @@ export function TemplatesPage() {
         description="Templates are used by workflow steps. Editing one changes what the next send says."
         tabs={<AutomationTabs />}
         actions={
-          <Button size="sm" onClick={() => setCreating(true)}>
-            Create template
-          </Button>
+          readOnly ? undefined : (
+            <Button size="sm" onClick={() => setCreating(true)}>
+              Create template
+            </Button>
+          )
         }
       />
 
@@ -182,7 +185,7 @@ export function TemplatesPage() {
               title={templates.length === 0 ? "No templates yet" : "No templates match."}
               text="An email or WhatsApp template is what a workflow step sends, with {{contact.*}}, {{company.*}} and {{deal.*}} filled in."
             >
-              {templates.length === 0 && (
+              {templates.length === 0 && !readOnly && (
                 <Button size="sm" onClick={() => setCreating(true)}>
                   Create your first template
                 </Button>
@@ -213,21 +216,25 @@ export function TemplatesPage() {
                   )}
                 </div>
               )}
-              actions={(t) => (
-                <span className="flex justify-end gap-1">
-                  <Button size="sm" variant="outline" onClick={() => setEditing(t)}>
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setDeleteTarget(t)}
-                    aria-label="Delete template"
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
-                </span>
-              )}
+              actions={
+                readOnly
+                  ? undefined
+                  : (t) => (
+                      <span className="flex justify-end gap-1">
+                        <Button size="sm" variant="outline" onClick={() => setEditing(t)}>
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setDeleteTarget(t)}
+                          aria-label="Delete template"
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </span>
+                    )
+              }
             />
           )}
         </Card>

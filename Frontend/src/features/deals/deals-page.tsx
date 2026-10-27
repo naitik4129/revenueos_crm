@@ -68,7 +68,7 @@ const VIEWS: { id: string; label: string; filters: (me?: string) => Filters }[] 
 ];
 
 export function DealsPage({ initialView }: { initialView?: string | undefined } = {}) {
-  const { users, currentUser } = useSession();
+  const { users, currentUser, readOnly } = useSession();
   const [view, setView] = useState<"board" | "list">("board");
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<Filters>(
@@ -135,9 +135,11 @@ export function DealsPage({ initialView }: { initialView?: string | undefined } 
                 </Button>
               ))}
             </div>
-            <Button size="sm" onClick={() => setNewOpen(true)}>
-              Create deal
-            </Button>
+            {!readOnly && (
+              <Button size="sm" onClick={() => setNewOpen(true)}>
+                Create deal
+              </Button>
+            )}
           </>
         }
         tabs={
@@ -154,9 +156,9 @@ export function DealsPage({ initialView }: { initialView?: string | undefined } 
 
       <div className="px-6 py-4">
         {view === "board" ? (
-          <Board query={query} toolbar={sharedFilters} onTotal={setTotal} />
+          <Board query={query} toolbar={sharedFilters} onTotal={setTotal} readOnly={readOnly} />
         ) : (
-          <DealList query={query} toolbar={sharedFilters} onTotal={setTotal} />
+          <DealList query={query} toolbar={sharedFilters} onTotal={setTotal} readOnly={readOnly} />
         )}
       </div>
     </div>
@@ -175,10 +177,12 @@ function Board({
   query,
   toolbar,
   onTotal,
+  readOnly,
 }: {
   query: DealFilters;
   toolbar: ReactNode;
   onTotal: (total: number | undefined) => void;
+  readOnly: boolean;
 }) {
   const filters: BoardFilters = {
     search: query.search,
@@ -203,6 +207,7 @@ function Board({
   );
 
   const move = (deal: Deal, stage: PipelineStage) => {
+    if (readOnly) return;
     if ((pending[deal.id]?.stage ?? deal.stage) === stage) return;
     setPending((p) => ({ ...p, [deal.id]: { deal, stage, at: Date.now() } }));
     update.mutate(
@@ -220,9 +225,11 @@ function Board({
       <Card className="overflow-hidden p-0">
         <Toolbar>
           {toolbar}
-          <span className="ml-auto text-xs text-muted-foreground">
-            Drag a card, or use its stage menu, to move it.
-          </span>
+          {!readOnly && (
+            <span className="ml-auto text-xs text-muted-foreground">
+              Drag a card, or use its stage menu, to move it.
+            </span>
+          )}
         </Toolbar>
       </Card>
 
@@ -249,6 +256,7 @@ function Board({
                 if (dragged?.id === id) move(dragged, stage);
               }}
               onMove={move}
+              readOnly={readOnly}
             />
           ))}
         </div>
@@ -272,6 +280,7 @@ function BoardColumn({
   onDragLeave,
   onDrop,
   onMove,
+  readOnly,
 }: {
   stage: PipelineStage;
   filters: BoardFilters;
@@ -284,6 +293,7 @@ function BoardColumn({
   onDragLeave: () => void;
   onDrop: (dealId: string) => void;
   onMove: (deal: Deal, stage: PipelineStage) => void;
+  readOnly: boolean;
 }) {
   const [more, setMore] = useState(false);
   const column = useDealColumn(filters, stage, COLUMN_PAGE_SIZE, more);
@@ -343,6 +353,7 @@ function BoardColumn({
               stage={stage}
               pending={deal.id in pending}
               onMove={(next) => onMove(deal, next)}
+              readOnly={readOnly}
             />
           ))
         )}
@@ -433,10 +444,12 @@ function DealList({
   query,
   toolbar,
   onTotal,
+  readOnly,
 }: {
   query: DealFilters;
   toolbar: ReactNode;
   onTotal: (total: number | undefined) => void;
+  readOnly: boolean;
 }) {
   const { users } = useSession();
   const [outcome, setOutcome] = useState(ALL);
@@ -545,7 +558,7 @@ function DealList({
           columns={COLUMNS.filter((c) => visible.includes(c.id))}
           rowLabel={(d) => d.contactName}
           selected={selected}
-          onSelect={setSelected}
+          onSelect={readOnly ? undefined : setSelected}
           dimmed={isFetching}
           name={(d) => (
             <div className="flex items-center gap-2.5">

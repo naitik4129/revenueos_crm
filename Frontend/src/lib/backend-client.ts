@@ -536,7 +536,7 @@ export interface GoogleCalendarConnection {
 
 export const backend = {
   me: (signal?: AbortSignal) =>
-    get<{ id: string; name: string; email: string; role: "admin" | "salesperson" }>("/me", signal),
+    get<{ id: string; name: string; email: string; role: "admin" | "salesperson" | "client" }>("/me", signal),
   profiles: (signal?: AbortSignal) => get<{ data: Omit<User, "role">[] }>("/profiles", signal),
   admin: {
     users: {

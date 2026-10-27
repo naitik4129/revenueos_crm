@@ -3,17 +3,37 @@ import type { Queryable } from "../dto.js";
 // The CRM is driven by the RevenueOS platform: access and workspaces come from the platform's
 // public.revenueos_projects / revenueos_project_members (read-only; crm_app has select on them).
 // A person may use a workspace because they own or are a member of its platform project.
+//
+// A member row carries a role (revenueos_project_members.role, platform migration 0015):
+//   'salesperson' — full access to the project and its CRM workspace (like the owner).
+//   'client'      — the CRM workspace only, read-only (made read-only by resolveActor + requireWritable).
+// Both roles can OPEN the workspace, so ownsOrMemberOfProjectSql counts every member; the role is only
+// used to decide full vs read-only (hasFullProjectAccessSql / hasClientAccessSql).
 
-/** SQL fragment: the user at `userIdSql` owns or is a member of the project at `projectIdSql`. */
+/**
+ * SQL fragment: the user at `userIdSql` owns or is a member (any role, client included) of the
+ * project at `projectIdSql`. Used to decide who can open a workspace.
+ */
 export function ownsOrMemberOfProjectSql(projectIdSql: string, userIdSql: string): string {
   return `(exists (select 1 from public.revenueos_projects pp where pp.id = ${projectIdSql} and pp.owner_id = ${userIdSql})
            or exists (select 1 from public.revenueos_project_members pm where pm.project_id = ${projectIdSql} and pm.user_id = ${userIdSql}))`;
 }
 
-/** SQL fragment: the user at `userIdSql` owns or is a member of ANY platform project. */
-export function hasAnyProjectAccessSql(userIdSql: string): string {
+/**
+ * SQL fragment: the user at `userIdSql` has FULL access to ANY platform project — they own one, or
+ * are a non-client member of one. These users are CRM salespeople (read + write).
+ */
+export function hasFullProjectAccessSql(userIdSql: string): string {
   return `(exists (select 1 from public.revenueos_projects pp where pp.owner_id = ${userIdSql})
-           or exists (select 1 from public.revenueos_project_members pm where pm.user_id = ${userIdSql}))`;
+           or exists (select 1 from public.revenueos_project_members pm where pm.user_id = ${userIdSql} and pm.role <> 'client'))`;
+}
+
+/**
+ * SQL fragment: the user at `userIdSql` is a CLIENT member of ANY platform project. These users get
+ * read-only CRM access to the workspace(s) they are a client of.
+ */
+export function hasClientAccessSql(userIdSql: string): string {
+  return `exists (select 1 from public.revenueos_project_members pm where pm.user_id = ${userIdSql} and pm.role = 'client')`;
 }
 
 /** A workspace name not already taken (case-insensitive); the platform customer name, suffixed only on a clash. */

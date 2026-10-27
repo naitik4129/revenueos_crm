@@ -279,8 +279,8 @@ export function RecordTable<T extends { id: string }>({
   nameHeader?: string;
   rowLabel: (row: T) => string;
   selected?: string[];
-  onSelect?: (ids: string[]) => void;
-  actions?: (row: T) => ReactNode;
+  onSelect?: ((ids: string[]) => void) | undefined;
+  actions?: ((row: T) => ReactNode) | undefined;
   dimmed?: boolean;
   /** Sort key of the name column. */
   nameSort?: string;

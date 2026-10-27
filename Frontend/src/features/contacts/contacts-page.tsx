@@ -126,7 +126,7 @@ const SORTS = ["name", "company", "lastActivity", "created"];
 const contactName = (c: Contact) => `${c.firstName} ${c.lastName}`.trim() || c.email || "(no name)";
 
 export function ContactsPage({ initialView }: { initialView?: string | undefined } = {}) {
-  const { users, currentUser } = useSession();
+  const { users, currentUser, readOnly } = useSession();
   const addContact = useAddContact();
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<Filters>(() =>
@@ -210,14 +210,16 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
         title="Contacts"
         count={isLoading ? undefined : countLabel(total, "contact")}
         actions={
-          <>
-            <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
-              Import
-            </Button>
-            <Button size="sm" onClick={addContact.open}>
-              Create contact
-            </Button>
-          </>
+          readOnly ? undefined : (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+                Import
+              </Button>
+              <Button size="sm" onClick={addContact.open}>
+                Create contact
+              </Button>
+            </>
+          )
         }
         tabs={
           <ViewTabs
@@ -315,12 +317,16 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
                 title="No contacts yet"
                 text="Contacts arrive from the RevenueOS brain, or add your own one by one or from a CSV."
               >
-                <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
-                  Import
-                </Button>
-                <Button size="sm" onClick={addContact.open}>
-                  Create contact
-                </Button>
+                {!readOnly && (
+                  <>
+                    <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+                      Import
+                    </Button>
+                    <Button size="sm" onClick={addContact.open}>
+                      Create contact
+                    </Button>
+                  </>
+                )}
               </ListEmptyState>
             )
           ) : (
@@ -332,7 +338,7 @@ export function ContactsPage({ initialView }: { initialView?: string | undefined
               columns={COLUMNS.filter((c) => visible.includes(c.id))}
               rowLabel={contactName}
               selected={selected}
-              onSelect={setSelected}
+              onSelect={readOnly ? undefined : setSelected}
               dimmed={isFetching}
               name={(c) => (
                 <div className="flex items-center gap-2.5">

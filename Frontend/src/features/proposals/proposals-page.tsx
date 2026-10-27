@@ -64,7 +64,7 @@ export function ProposalsPage({ initialView }: { initialView?: string | undefine
   });
   // The stat cards cover the whole workspace, not just this page.
   const summary = useProposalSummary().data;
-  const { users, userName } = useSession();
+  const { users, userName, readOnly } = useSession();
   const [newOpen, setNewOpen] = useState(false);
   const [sending, setSending] = useState<Proposal | null>(null);
   // Rejected / expired need a loss reason first.
@@ -166,9 +166,11 @@ export function ProposalsPage({ initialView }: { initialView?: string | undefine
         title="Proposals"
         count={store.isLoading ? undefined : countLabel(store.total, "proposal")}
         actions={
-          <Button size="sm" onClick={() => setNewOpen(true)}>
-            Create proposal
-          </Button>
+          readOnly ? undefined : (
+            <Button size="sm" onClick={() => setNewOpen(true)}>
+              Create proposal
+            </Button>
+          )
         }
         tabs={
           <ViewTabs
@@ -225,9 +227,11 @@ export function ProposalsPage({ initialView }: { initialView?: string | undefine
               title={status === ALL && owner === ALL ? "No proposals yet" : "No proposals here."}
               text="A proposal belongs to a deal: create it, upload its document, then send it by email and/or WhatsApp."
             >
-              <Button size="sm" onClick={() => setNewOpen(true)}>
-                Create proposal
-              </Button>
+              {!readOnly && (
+                <Button size="sm" onClick={() => setNewOpen(true)}>
+                  Create proposal
+                </Button>
+              )}
             </ListEmptyState>
           ) : (
             <RecordTable
@@ -240,7 +244,7 @@ export function ProposalsPage({ initialView }: { initialView?: string | undefine
                   <div className="font-medium">{p.title}</div>
                   <div className="text-xs text-muted-foreground">
                     {p.fileName || "No document"}
-                    {p.fileName && (
+                    {p.fileName && !readOnly && (
                       <>
                         {" · "}
                         <button

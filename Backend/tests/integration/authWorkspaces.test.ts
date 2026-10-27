@@ -28,7 +28,7 @@ describe("auth and workspaces (PGlite)", () => {
   let app: Express;
   let appPool: Pool;
 
-  const ids = { admin: "", sales: "", sales2: "", inactive: "", noAccess: "", pA: "", pB: "", pC: "", w1: "", w2: "", wOff: "" };
+  const ids = { admin: "", sales: "", sales2: "", client: "", inactive: "", noAccess: "", pA: "", pB: "", pC: "", w1: "", w2: "", wOff: "" };
 
   /** An auth account + platform profile, plus a crm_profiles row only when a role is given. */
   async function mkUser(email: string, name: string | null, role: "admin" | "salesperson" | null, active = true) {
@@ -54,6 +54,7 @@ describe("auth and workspaces (PGlite)", () => {
     ids.admin = await mkUser("admin@x.com", "Ada Admin", "admin");
     ids.sales = await mkUser("sam@x.com", "Sam Seller", null); // derived: access via project membership
     ids.sales2 = await mkUser("sue@x.com", null, null); // derived; name falls back to email
+    ids.client = await mkUser("cleo@x.com", "Cleo Client", null); // derived: client membership → read-only CRM
     ids.inactive = await mkUser("ian@x.com", "Ian Inactive", "salesperson", false); // deactivated crm_profiles
     ids.noAccess = await mkUser("pat@x.com", "Pat Platform", null); // platform account, no CRM access
 
@@ -66,6 +67,8 @@ describe("auth and workspaces (PGlite)", () => {
 
     // sales works on One, sales2 on Two (assigned on the platform).
     await seed.query(`insert into public.revenueos_project_members (project_id, user_id, added_by) values ($1, $2, $4), ($3, $5, $4)`, [ids.pA, ids.sales, ids.pB, ids.admin, ids.sales2]);
+    // cleo is a read-only CLIENT of One (role = 'client'): CRM access to w1 only, no platform access.
+    await seed.query(`insert into public.revenueos_project_members (project_id, user_id, added_by, role) values ($1, $2, $3, 'client')`, [ids.pA, ids.client, ids.admin]);
 
     const ws = async (name: string, slug: string, projectId: string, active = true) =>
       (await seed.query(`insert into crm_workspaces (name, slug, platform_project_id, is_active) values ($1, $2, $3, $4) returning id`, [name, slug, projectId, active])).rows[0].id as string;
@@ -103,6 +106,14 @@ describe("auth and workspaces (PGlite)", () => {
       expect(res.status).toBe(403);
       expect(res.body.error.message).toMatch(/deactivated/);
     });
+
+    it("resolves a client-only membership as the read-only client role", async () => {
+      expect((await get("/api/v1/me", ids.client)).body).toMatchObject({
+        id: ids.client,
+        name: "Cleo Client",
+        role: "client",
+      });
+    });
   });
 
   describe("workspace access", () => {
@@ -114,6 +125,10 @@ describe("auth and workspaces (PGlite)", () => {
     it("a salesperson sees only the active workspaces for projects they own or are assigned to", async () => {
       expect((await get("/api/v1/workspaces", ids.sales)).body.data.map((w: { id: string }) => w.id)).toEqual([ids.w1]);
       expect((await get("/api/v1/workspaces", ids.sales2)).body.data.map((w: { id: string }) => w.id)).toEqual([ids.w2]);
+    });
+
+    it("a client sees only the workspace they are a client of", async () => {
+      expect((await get("/api/v1/workspaces", ids.client)).body.data.map((w: { id: string }) => w.id)).toEqual([ids.w1]);
     });
 
     // An unknown path inside the workspace-gated router: 404 "No route" means the gate passed.
@@ -128,6 +143,19 @@ describe("auth and workspaces (PGlite)", () => {
       const res = await get(probe, ids.sales, ids.w2);
       expect(res.status).toBe(403);
       expect(res.body.error.message).toMatch(/do not have access/);
+    });
+
+    it("lets a client read their workspace but blocks any write (read-only)", async () => {
+      // GET passes the workspace gate (membership) and reaches the no-route 404.
+      expect((await get(probe, ids.client, ids.w1)).body.error.message).toMatch(/No route/);
+      // A non-GET to the same workspace is refused by requireWritable, before any route runs.
+      const write = await request(app).post(probe).set(as(ids.client)).set("X-Workspace-Id", ids.w1);
+      expect(write.status).toBe(403);
+      expect(write.body.error.message).toMatch(/read-only/);
+    });
+
+    it("still refuses a client a workspace they are not a member of", async () => {
+      expect((await get(probe, ids.client, ids.w2)).status).toBe(403);
     });
 
     it("treats a missing, malformed or inactive workspace as 404", async () => {

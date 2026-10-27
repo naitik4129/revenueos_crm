@@ -54,7 +54,7 @@ const EMPTY: Record<View, string> = {
 const doneOnDeal = (t: Task) => (t.type === "call" || t.type === "schedule_meeting") && t.dealId;
 
 export function TasksPage({ initialView }: { initialView?: string | undefined } = {}) {
-  const { users, userName } = useSession();
+  const { users, userName, readOnly } = useSession();
   const [view, setView] = useState<View>(
     VIEW_NAMES.includes(initialView as View) ? (initialView as View) : "today",
   );
@@ -185,30 +185,33 @@ export function TasksPage({ initialView }: { initialView?: string | undefined } 
                   {t.title}
                 </span>
               )}
-              actions={(t) =>
-                t.status === "open" && (
-                  <span className="flex justify-end gap-1">
-                    {doneOnDeal(t) ? (
-                      <Button size="sm" variant="ghost" asChild>
-                        <Link to="/deals/$dealId" params={{ dealId: t.dealId! }}>
-                          {t.type === "call" ? "Log call" : "Book meeting"}
-                        </Link>
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={isPending}
-                        onClick={() => void complete(t)}
-                      >
-                        Complete
-                      </Button>
-                    )}
-                    <Button size="sm" variant="ghost" onClick={() => setRescheduling(t)}>
-                      Reschedule
-                    </Button>
-                  </span>
-                )
+              actions={
+                readOnly
+                  ? undefined
+                  : (t) =>
+                      t.status === "open" && (
+                        <span className="flex justify-end gap-1">
+                          {doneOnDeal(t) ? (
+                            <Button size="sm" variant="ghost" asChild>
+                              <Link to="/deals/$dealId" params={{ dealId: t.dealId! }}>
+                                {t.type === "call" ? "Log call" : "Book meeting"}
+                              </Link>
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={isPending}
+                              onClick={() => void complete(t)}
+                            >
+                              Complete
+                            </Button>
+                          )}
+                          <Button size="sm" variant="ghost" onClick={() => setRescheduling(t)}>
+                            Reschedule
+                          </Button>
+                        </span>
+                      )
               }
             />
           )}
