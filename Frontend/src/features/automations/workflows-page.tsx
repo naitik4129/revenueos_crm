@@ -218,7 +218,10 @@ export function WorkflowsPage() {
                   : (w) => (
                       <span className="flex justify-end gap-1">
                         <Button asChild size="sm" variant="outline">
-                          <Link to="/automations/workflows/$workflowId" params={{ workflowId: w.id }}>
+                          <Link
+                            to="/automations/workflows/$workflowId"
+                            params={{ workflowId: w.id }}
+                          >
                             Edit steps
                           </Link>
                         </Button>

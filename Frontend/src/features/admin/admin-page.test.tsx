@@ -196,7 +196,10 @@ describe("settings defaults", () => {
 describe("admin page tabs", () => {
   it("starts on Brain API keys, with Sending but no user-management tabs", async () => {
     renderWithClient(<AdminPage />);
-    expect(screen.getByRole("tab", { name: "Brain API keys" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Brain API keys" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(await screen.findByText("nbk_abcdefgh…")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Sending" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Users" })).toBeNull();

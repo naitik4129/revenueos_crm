@@ -195,11 +195,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <main className="min-w-0 flex-1">
             {/* Every CRM page needs a workspace; admin pages do not. */}
-            {noWorkspace && !pathname.startsWith("/admin") ? (
-              <NoWorkspace />
-            ) : (
-              children
-            )}
+            {noWorkspace && !pathname.startsWith("/admin") ? <NoWorkspace /> : children}
           </main>
         </div>
       </div>
