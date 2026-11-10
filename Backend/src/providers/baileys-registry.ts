@@ -41,16 +41,35 @@ class BaileysManagerRegistry {
   }
 
   /**
-   * Called periodically by the worker so every active workspace has a
-   * running manager — a manager's own heartbeat loop (started in start())
-   * is what actually reacts to an admin's connect/restart/logout command
-   * (see BaileysManager.syncControl), so a workspace that has never had a
-   * manager started for it would otherwise never notice a connect request.
-   * Errors for one workspace (e.g. another process still holding its
-   * advisory lock) are logged and skipped rather than failing the others.
+   * Called periodically by the worker so every workspace that WANTS a live
+   * WhatsApp session has a running manager — a manager's heartbeat loop
+   * (started in start()) is what reacts to an admin's connect/restart/logout
+   * command (see BaileysManager.syncControl).
+   *
+   * We deliberately start a manager ONLY for workspaces whose
+   * crm_whatsapp_connection asks to be connected (a row exists and
+   * desired_state is not 'disconnected'). This matters because start() takes
+   * a dedicated Postgres connection out of the pool and holds it for the
+   * manager's whole lifetime (the pg_try_advisory_lock that stops a second
+   * worker double-owning the session). Starting a manager for every active
+   * workspace — including ones that never set up WhatsApp or are
+   * disconnected — pins one pool connection each for sessions nobody wants,
+   * which starved the rest of the worker (brain-feed, queries) of
+   * connections. A workspace that later flips desired_state to
+   * 'connected'/'restart' is picked up on the very next scan, so there is no
+   * loss of responsiveness. Errors for one workspace (e.g. another process
+   * still holding its advisory lock) are logged and skipped.
    */
   async ensureManagersForAllActiveWorkspaces(): Promise<void> {
-    const result = await pool.query<{ id: string }>(`select id from crm_workspaces where is_active = true`);
+    const result = await pool.query<{ id: string }>(
+      `select w.id
+         from crm_workspaces w
+         join crm_whatsapp_connection c on c.workspace_id = w.id
+        where w.is_active = true
+          and c.desired_state is not null
+          and c.desired_state <> 'disconnected'`,
+    );
+    const wanted = new Set(result.rows.map((row) => row.id));
     await Promise.all(
       result.rows.map(async (row) => {
         if (this.managers.has(row.id) || this.starting.has(row.id)) return;
@@ -60,6 +79,23 @@ class BaileysManagerRegistry {
           console.error(`[baileys-registry] Failed to start WhatsApp session for workspace ${row.id}:`, error);
         }
       }),
+    );
+
+    // Release any manager whose workspace no longer wants a session (admin
+    // disconnected, workspace deactivated). stop() unlocks the advisory lock
+    // and returns its pool connection, so idle sessions never pin a
+    // connection between scans.
+    await Promise.all(
+      [...this.managers.keys()]
+        .filter((id) => !wanted.has(id))
+        .map(async (id) => {
+          const manager = this.managers.get(id);
+          if (!manager) return;
+          this.managers.delete(id);
+          await manager.stop().catch((error) =>
+            console.error(`[baileys-registry] Failed to stop WhatsApp session for workspace ${id}:`, error),
+          );
+        }),
     );
   }
 
